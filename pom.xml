@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.burp.extension</groupId>
+    <artifactId>ai-analyzer</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <name>AI Vulnerability Analyzer</name>
+    <description>Burp Suite extension for AI-powered vulnerability analysis using Tongyi Qianwen</description>
+
+    <properties>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+<dependencies>
+    <!-- Gson for JSON processing -->
+    <dependency>
+        <groupId>com.google.code.gson</groupId>
+        <artifactId>gson</artifactId>
+        <version>2.10.1</version>
+    </dependency>
+
+    <!-- CommonMark for Markdown parsing -->
+    <dependency>
+        <groupId>org.commonmark</groupId>
+        <artifactId>commonmark</artifactId>
+        <version>0.21.0</version>
+    </dependency>
+
+    <!-- LangChain4j 核心依赖 -->
+    <dependency>
+        <groupId>dev.langchain4j</groupId>
+        <artifactId>langchain4j-core</artifactId>
+        <version>1.8.0</version>
+    </dependency>
+
+    <!-- LangChain4j 主要功能 -->
+    <dependency>
+        <groupId>dev.langchain4j</groupId>
+        <artifactId>langchain4j</artifactId>
+        <version>1.8.0</version>
+    </dependency>
+
+    <!-- OpenAI 实现 -->
+    <dependency>
+        <groupId>dev.langchain4j</groupId>
+        <artifactId>langchain4j-open-ai</artifactId>
+        <version>1.8.0</version>
+    </dependency>
+
+    <dependency>
+        <groupId>dev.langchain4j</groupId>
+        <artifactId>langchain4j-http-client-jdk</artifactId>
+        <version>1.8.0</version>
+    </dependency>
+
+    <!-- 用于 JSON 处理（推荐使用）-->
+    <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-databind</artifactId>
+        <version>2.15.2</version>
+    </dependency>
+
+</dependencies>
+
+
+    <build>
+        <sourceDirectory>src</sourceDirectory>
+        <plugins>
+            <!-- Copy Burp API classes before compilation -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <version>3.3.1</version>
+                <executions>
+                    <execution>
+                        <id>copy-burp-api</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.outputDirectory}</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>out/production/firstExt</directory>
+                                    <includes>
+                                        <include>burp/**</include>
+                                    </includes>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <source>21</source>
+                    <target>21</target>
+                    <encoding>UTF-8</encoding>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <version>3.6.0</version>
+                <configuration>
+                    <descriptorRefs>
+                        <descriptorRef>jar-with-dependencies</descriptorRef>
+                    </descriptorRefs>
+                    <archive>
+                        <manifestEntries>
+                            <Multi-Release>true</Multi-Release>
+                        </manifestEntries>
+                    </archive>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>make-assembly</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+

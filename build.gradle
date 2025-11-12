@@ -1,0 +1,35 @@
+plugins {
+    id 'java'
+}
+
+group = 'com.burp.extension'
+version = '1.0.0'
+
+sourceCompatibility = '21'
+targetCompatibility = '21'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'com.google.code.gson:gson:2.10.1'
+    compileOnly fileTree(dir: 'lib', include: ['*.jar'])
+}
+
+jar {
+    archiveBaseName = 'ai-analyzer'
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest {
+        attributes 'Multi-Release': 'true'
+    }
+}
+
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+    options.compilerArgs << '-parameters'
+}
+
