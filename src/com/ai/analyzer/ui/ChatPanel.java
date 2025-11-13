@@ -24,6 +24,8 @@ public class ChatPanel extends JPanel {
     private JButton sendButton;
     private JButton clearContextButton;
     private JButton stopButton;
+    private JCheckBox enableThinkingCheckBox;
+    private JCheckBox enableSearchCheckBox;
     private List<ChatMessage> chatHistory;
     private HttpRequestResponse currentRequest;
     private boolean isStreaming = false;
@@ -61,6 +63,11 @@ public class ChatPanel extends JPanel {
      */
     public void setAnalyzerTab(AIAnalyzerTab analyzerTab) {
         this.analyzerTab = analyzerTab;
+        // 当设置analyzerTab时，同步复选框状态
+        if (analyzerTab != null && enableThinkingCheckBox != null && enableSearchCheckBox != null) {
+            enableThinkingCheckBox.setSelected(analyzerTab.isEnableThinking());
+            enableSearchCheckBox.setSelected(analyzerTab.isEnableSearch());
+        }
     }
     
     /**
@@ -71,6 +78,16 @@ public class ChatPanel extends JPanel {
             apiClient.setApiUrl(analyzerTab.getApiUrl());
             apiClient.setApiKey(analyzerTab.getApiKey());
             apiClient.setModel(analyzerTab.getModel());
+            apiClient.setEnableThinking(analyzerTab.isEnableThinking());
+            apiClient.setEnableSearch(analyzerTab.isEnableSearch());
+        } else {
+            // 如果没有analyzerTab，使用复选框的状态
+            if (enableThinkingCheckBox != null) {
+                apiClient.setEnableThinking(enableThinkingCheckBox.isSelected());
+            }
+            if (enableSearchCheckBox != null) {
+                apiClient.setEnableSearch(enableSearchCheckBox.isSelected());
+            }
         }
     }
 
@@ -109,6 +126,33 @@ public class ChatPanel extends JPanel {
         // 创建输入区域
         JPanel inputPanel = new JPanel(new BorderLayout(5, 5));
         
+        // 功能开关面板
+        JPanel featurePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 5));
+        enableThinkingCheckBox = new JCheckBox("启用深度思考", true);
+        enableSearchCheckBox = new JCheckBox("启用网络搜索", true);
+        
+        // 添加监听器，当复选框状态改变时更新API客户端配置
+        enableThinkingCheckBox.addActionListener(e -> {
+            if (analyzerTab == null) {
+                apiClient.setEnableThinking(enableThinkingCheckBox.isSelected());
+            } else {
+                // 如果analyzerTab存在，同步到analyzerTab
+                // 注意：这里不直接修改analyzerTab的复选框，因为ChatPanel应该从analyzerTab获取配置
+                // 但我们可以更新API客户端配置
+                apiClient.setEnableThinking(enableThinkingCheckBox.isSelected());
+            }
+        });
+        enableSearchCheckBox.addActionListener(e -> {
+            if (analyzerTab == null) {
+                apiClient.setEnableSearch(enableSearchCheckBox.isSelected());
+            } else {
+                apiClient.setEnableSearch(enableSearchCheckBox.isSelected());
+            }
+        });
+        
+        featurePanel.add(enableThinkingCheckBox);
+        featurePanel.add(enableSearchCheckBox);
+        
         // 顶部按钮面板
         JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 5));
         
@@ -132,7 +176,12 @@ public class ChatPanel extends JPanel {
         topPanel.add(clearContextButton);
         topPanel.add(stopButton);
         
-        inputPanel.add(topPanel, BorderLayout.NORTH);
+        // 将功能开关面板和按钮面板组合
+        JPanel topContainer = new JPanel(new BorderLayout());
+        topContainer.add(featurePanel, BorderLayout.WEST);
+        topContainer.add(topPanel, BorderLayout.EAST);
+        
+        inputPanel.add(topContainer, BorderLayout.NORTH);
 
         // 输入框
         inputField = new JTextField();

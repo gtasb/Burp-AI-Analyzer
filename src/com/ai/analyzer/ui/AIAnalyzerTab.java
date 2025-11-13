@@ -26,6 +26,8 @@ public class AIAnalyzerTab extends JPanel {
     private JTextField apiUrlField;
     private JTextField apiKeyField;
     private JTextField modelField;
+    private JCheckBox enableThinkingCheckBox;
+    private JCheckBox enableSearchCheckBox;
     private JTable requestListTable;
     private DefaultTableModel requestTableModel;
     private JTextPane requestTextPane;
@@ -134,6 +136,25 @@ public class AIAnalyzerTab extends JPanel {
 
         panel.add(apiConfigPanel, BorderLayout.CENTER);
         
+        // 底部面板：包含功能开关和设置按钮
+        JPanel bottomPanel = new JPanel(new BorderLayout(5, 5));
+        
+        // 功能开关面板
+        JPanel featurePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 5));
+        enableThinkingCheckBox = new JCheckBox("启用深度思考", true);
+        enableSearchCheckBox = new JCheckBox("启用网络搜索", true);
+        
+        // 添加监听器，当复选框状态改变时更新API客户端配置
+        enableThinkingCheckBox.addActionListener(e -> {
+            apiClient.setEnableThinking(enableThinkingCheckBox.isSelected());
+        });
+        enableSearchCheckBox.addActionListener(e -> {
+            apiClient.setEnableSearch(enableSearchCheckBox.isSelected());
+        });
+        
+        featurePanel.add(enableThinkingCheckBox);
+        featurePanel.add(enableSearchCheckBox);
+        
         // 设置按钮
         JPanel settingsPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 5));
         saveSettingsButton = new JButton("保存设置");
@@ -145,7 +166,10 @@ public class AIAnalyzerTab extends JPanel {
         settingsPanel.add(saveSettingsButton);
         settingsPanel.add(loadSettingsButton);
         
-        panel.add(settingsPanel, BorderLayout.SOUTH);
+        bottomPanel.add(featurePanel, BorderLayout.WEST);
+        bottomPanel.add(settingsPanel, BorderLayout.EAST);
+        
+        panel.add(bottomPanel, BorderLayout.SOUTH);
 
         return panel;
     }
@@ -330,6 +354,8 @@ public class AIAnalyzerTab extends JPanel {
         apiClient.setApiUrl(apiUrlField.getText().trim());
         apiClient.setApiKey(apiKeyField.getText().trim());
         apiClient.setModel(modelField.getText().trim());
+        apiClient.setEnableThinking(enableThinkingCheckBox.isSelected());
+        apiClient.setEnableSearch(enableSearchCheckBox.isSelected());
         
         // 如果没有选择请求，提示用户
         if (requestData == null) {
@@ -556,7 +582,9 @@ public class AIAnalyzerTab extends JPanel {
                 apiUrlField.getText().trim(),
                 apiKeyField.getText().trim(),
                 modelField.getText().trim(),
-                userPromptArea.getText().trim()
+                userPromptArea.getText().trim(),
+                enableThinkingCheckBox.isSelected(),
+                enableSearchCheckBox.isSelected()
             );
 
             java.io.ObjectOutputStream oos = new java.io.ObjectOutputStream(new java.io.FileOutputStream("ai_analyzer_settings.dat"));
@@ -581,6 +609,12 @@ public class AIAnalyzerTab extends JPanel {
             apiKeyField.setText(settings.getApiKey());
             modelField.setText(settings.getModel());
             userPromptArea.setText(settings.getUserPrompt());
+            enableThinkingCheckBox.setSelected(settings.isEnableThinking());
+            enableSearchCheckBox.setSelected(settings.isEnableSearch());
+            
+            // 更新API客户端配置
+            apiClient.setEnableThinking(settings.isEnableThinking());
+            apiClient.setEnableSearch(settings.isEnableSearch());
 
             //JOptionPane.showMessageDialog(this, "设置已加载", "成功", JOptionPane.INFORMATION_MESSAGE);
             api.logging().logToOutput("设置已加载");
@@ -634,6 +668,14 @@ public class AIAnalyzerTab extends JPanel {
     
     public String getModel() {
         return modelField.getText().trim();
+    }
+    
+    public boolean isEnableThinking() {
+        return enableThinkingCheckBox.isSelected();
+    }
+    
+    public boolean isEnableSearch() {
+        return enableSearchCheckBox.isSelected();
     }
     
     /**

@@ -26,15 +26,19 @@ import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.tool.BeforeToolExecution;
 import dev.langchain4j.service.tool.ToolExecution;
 //import dev.langchain4j.http.client.jdk.JdkHttpClientBuilder;
+import dev.langchain4j.community.model.dashscope.QwenStreamingChatModel;
+
 
 public class QianwenApiClient {
     private String apiKey;
     private String apiUrl;
     private String model;
-    private OpenAiStreamingChatModel chatModel;
+    private QwenStreamingChatModel chatModel;
     // private JsonArray tools; // 工具定义列表
     // private Consumer<ToolCall> toolCallHandler; // 工具调用处理器
     private MontoyaApi api; // Burp API 引用，用于日志输出
+    private boolean enableThinking = false; // 是否启用思考过程
+    private boolean enableSearch = false; // 是否启用搜索
 
     /**
      * 无参构造函数，自动从配置文件加载设置
@@ -96,21 +100,46 @@ public class QianwenApiClient {
         try {
             // 从 apiUrl 中提取 baseUrl（去除 /chat/completions 等路径）
             String baseUrl = apiUrl;
-            if (baseUrl != null && baseUrl.contains("/chat/completions")) {
-                baseUrl = baseUrl.substring(0, baseUrl.indexOf("/chat/completions"));
+            if (baseUrl != null && !baseUrl.trim().isEmpty()) {
+                // 去除末尾的斜杠
+                baseUrl = baseUrl.trim();
+                if (baseUrl.endsWith("/")) {
+                    baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
+                }
+                // 如果包含 /chat/completions，去除这部分
+                if (baseUrl.contains("/chat/completions")) {
+                    baseUrl = baseUrl.substring(0, baseUrl.indexOf("/chat/completions"));
+                }
+                // 确保 baseUrl 以 /v1 结尾（QwenStreamingChatModel 可能需要）
+                if (!baseUrl.endsWith("/v1")) {
+                    // 如果以 /compatible-mode 结尾，添加 /v1
+                    if (baseUrl.endsWith("/compatible-mode")) {
+                        baseUrl = baseUrl + "/v1";
+                    } else if (baseUrl.contains("dashscope") && !baseUrl.contains("/v1")) {
+                        // 如果是 dashscope URL 但没有 /v1，尝试添加
+                        if (baseUrl.contains("/compatible-mode")) {
+                            baseUrl = baseUrl + "/v1";
+                        } else {
+                            baseUrl = baseUrl + "/api/v1";
+                        }
+                    }
+                }
             }
             if (baseUrl == null || baseUrl.trim().isEmpty()) {
-                baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+                baseUrl = "https://dashscope.aliyuncs.com/api/v1";
             }
             
             String modelName = model != null && !model.trim().isEmpty() ? model : "qwen-max";
             
             if (api != null) {
                 api.logging().logToOutput("[QianwenApiClient] 初始化LangChain4j ChatModel");
-                api.logging().logToOutput("[QianwenApiClient] BaseURL: " + baseUrl);
+                api.logging().logToOutput("[QianwenApiClient] 原始API URL: " + apiUrl);
+                api.logging().logToOutput("[QianwenApiClient] 处理后的BaseURL: " + baseUrl);
                 api.logging().logToOutput("[QianwenApiClient] Model: " + modelName);
+                api.logging().logToOutput("[QianwenApiClient] EnableThinking: " + enableThinking);
+                api.logging().logToOutput("[QianwenApiClient] EnableSearch: " + enableSearch);
             }
-
+            /* 
             //构建HTTP客户端
             //HttpClient.Builder httpClientBuilder = HttpClient.newBuilder()
             //            .version(HttpClient.Version.HTTP_1_1);
@@ -144,10 +173,20 @@ public class QianwenApiClient {
                     .baseUrl(baseUrl)
                     .apiKey(apiKey)
                     .modelName(modelName)
-                    .temperature(0.7)
+                    .temperature(0.3)
                     .timeout(java.time.Duration.ofSeconds(60))
                     //.httpClientBuilder(jdkHttpClientBuilder)
                     .defaultRequestParameters(parameters)
+                    .build(); */
+
+            this.chatModel = QwenStreamingChatModel.builder()
+                    .apiKey(apiKey)
+                    .baseUrl(baseUrl)
+                    .modelName(modelName)
+                    //.enableThinking(enableThinking)
+                    .enableSearch(enableSearch)
+                    .temperature(0.1f) // 温度，越小越确定，越大越随机，如果效果不好就切换为0.3
+                    //.timeout(java.time.Duration.ofSeconds(60))
                     .build();
                     
             if (api != null) {
@@ -176,7 +215,7 @@ public class QianwenApiClient {
      */
     private void loadSettingsFromFile() {
         // 默认值
-        String defaultApiUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
+        String defaultApiUrl = "https://dashscope.aliyuncs.com/api/v1";
         String defaultApiKey = "";
         String defaultModel = "qwen3-max";
         
@@ -191,6 +230,8 @@ public class QianwenApiClient {
                     ? settings.getApiKey() : defaultApiKey;
                 this.model = settings.getModel() != null && !settings.getModel().isEmpty() 
                     ? settings.getModel() : defaultModel;
+                this.enableThinking = settings.isEnableThinking();
+                this.enableSearch = settings.isEnableSearch();
                 return;
             }
         }
@@ -206,6 +247,8 @@ public class QianwenApiClient {
                     ? settings.getApiKey() : defaultApiKey;
                 this.model = settings.getModel() != null && !settings.getModel().isEmpty() 
                     ? settings.getModel() : defaultModel;
+                this.enableThinking = settings.isEnableThinking();
+                this.enableSearch = settings.isEnableSearch();
                 return;
             }
         }
@@ -214,6 +257,8 @@ public class QianwenApiClient {
         this.apiUrl = defaultApiUrl;
         this.apiKey = defaultApiKey;
         this.model = defaultModel;
+        this.enableThinking = true;
+        this.enableSearch = true;
     }
     
     /**
@@ -243,6 +288,24 @@ public class QianwenApiClient {
     public void setModel(String model) {
         this.model = model;
         reinitializeChatModel();
+    }
+    
+    public void setEnableThinking(boolean enableThinking) {
+        this.enableThinking = enableThinking;
+        reinitializeChatModel();
+    }
+    
+    public void setEnableSearch(boolean enableSearch) {
+        this.enableSearch = enableSearch;
+        reinitializeChatModel();
+    }
+    
+    public boolean isEnableThinking() {
+        return enableThinking;
+    }
+    
+    public boolean isEnableSearch() {
+        return enableSearch;
     }
     
     /**
@@ -337,7 +400,28 @@ public class QianwenApiClient {
                     })
                     // 错误处理
                     .onError((Throwable error) -> {
-                        logError("TokenStream错误: " + error.getMessage());
+                        String errorMsg = error.getMessage();
+                        String fullErrorMsg = errorMsg;
+                        
+                        // 获取完整的错误堆栈信息
+                        if (error.getCause() != null) {
+                            fullErrorMsg = errorMsg + " | Cause: " + error.getCause().getMessage();
+                            // 打印堆栈跟踪
+                            if (api != null) {
+                                api.logging().logToError("[QianwenApiClient] TokenStream错误堆栈:");
+                                error.printStackTrace();
+                            }
+                        }
+                        
+                        if (errorMsg != null && errorMsg.contains("404")) {
+                            logError("TokenStream错误 (404 Not Found): " + fullErrorMsg);
+                            logError("请检查：1) API URL是否正确 2) API Key是否有效 3) 模型名称是否正确");
+                            logError("当前配置 - API URL: " + apiUrl + ", Model: " + model);
+                        } else {
+                            logError("TokenStream错误: " + fullErrorMsg);
+                            logError("错误类型: " + error.getClass().getName());
+                        }
+                        
                         futureResponse.completeExceptionally(error);
                     })
                     .start();
@@ -363,13 +447,40 @@ public class QianwenApiClient {
             } catch (java.util.concurrent.ExecutionException e) {
                 // 直接使用原始异常，避免过度包装
                 Throwable cause = e.getCause();
+                String errorMsg = cause != null ? cause.getMessage() : e.getMessage();
+                
+                // 打印完整的错误信息
+                logError("ExecutionException捕获: " + errorMsg);
+                if (cause != null) {
+                    logError("异常类型: " + cause.getClass().getName());
+                    logError("异常消息: " + cause.getMessage());
+                    // 打印堆栈跟踪
+                    if (api != null) {
+                        api.logging().logToError("[QianwenApiClient] ExecutionException堆栈:");
+                        cause.printStackTrace();
+                    }
+                }
+                
+                // 检查是否是404错误
+                if (errorMsg != null && (errorMsg.contains("404") || errorMsg.contains("Not Found"))) {
+                    logError("API请求失败 (404 Not Found): " + errorMsg);
+                    logError("可能的原因：");
+                    logError("1. API URL配置不正确，当前BaseURL: " + (apiUrl != null ? apiUrl : "未设置"));
+                    logError("2. API Key无效或已过期");
+                    logError("3. 模型名称不正确，当前模型: " + (model != null ? model : "未设置"));
+                    logError("4. 端点路径不正确，请确认使用兼容模式URL: https://dashscope.aliyuncs.com/compatible-mode/v1");
+                } else {
+                    // 对于其他错误，也输出详细信息
+                    logError("API请求失败，错误详情: " + errorMsg);
+                }
+                
                 if (cause instanceof Exception) {
                     lastException = (Exception) cause;
                 } else {
-                    lastException = new Exception("流式输出失败: " + e.getMessage(), cause);
+                    lastException = new Exception("流式输出失败: " + errorMsg, cause);
                 }
                 retryCount++;
-                logError("流式输出失败: " + (cause != null ? cause.getMessage() : e.getMessage()));
+                logError("流式输出失败，将重试 (第 " + retryCount + " 次): " + errorMsg);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new Exception("等待流式输出被中断", e);
@@ -377,6 +488,11 @@ public class QianwenApiClient {
                 lastException = e;
                 retryCount++;
                 logError("请求异常: " + e.getClass().getSimpleName() + " - " + e.getMessage());
+                // 打印堆栈跟踪
+                if (api != null) {
+                    api.logging().logToError("[QianwenApiClient] 异常堆栈:");
+                    e.printStackTrace();
+                }
             }
 
             // 如果还有重试机会，等待后重试（指数退避）

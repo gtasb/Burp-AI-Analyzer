@@ -9,6 +9,8 @@ public class PluginSettings implements Serializable {
     private String model;
     
     private String userPrompt;
+    private boolean enableThinking = true; // 默认启用思考过程
+    private boolean enableSearch = true; // 默认启用搜索
     
     public PluginSettings() {
         // 默认设置
@@ -16,12 +18,24 @@ public class PluginSettings implements Serializable {
         this.apiKey = "";
         this.model = "qwen3-max";
         this.userPrompt = "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议，在给我的回答中不要有*号";
+        this.enableThinking = true;
+        this.enableSearch = true;
     }
     public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt) {
         this.apiUrl = apiUrl;
         this.apiKey = apiKey;
         this.model = model;
         this.userPrompt = userPrompt;
+        this.enableThinking = true;
+        this.enableSearch = true;
+    }
+    public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt, boolean enableThinking, boolean enableSearch) {
+        this.apiUrl = apiUrl;
+        this.apiKey = apiKey;
+        this.model = model;
+        this.userPrompt = userPrompt;
+        this.enableThinking = enableThinking;
+        this.enableSearch = enableSearch;
     }
     
     // Getters and Setters
@@ -55,5 +69,21 @@ public class PluginSettings implements Serializable {
     
     public void setUserPrompt(String userPrompt) {
         this.userPrompt = userPrompt;
+    }
+    
+    public boolean isEnableThinking() {
+        return enableThinking;
+    }
+    
+    public void setEnableThinking(boolean enableThinking) {
+        this.enableThinking = enableThinking;
+    }
+    
+    public boolean isEnableSearch() {
+        return enableSearch;
+    }
+    
+    public void setEnableSearch(boolean enableSearch) {
+        this.enableSearch = enableSearch;
     }
 }
