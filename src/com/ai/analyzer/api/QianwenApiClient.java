@@ -27,6 +27,8 @@ import dev.langchain4j.service.tool.BeforeToolExecution;
 import dev.langchain4j.service.tool.ToolExecution;
 //import dev.langchain4j.http.client.jdk.JdkHttpClientBuilder;
 import dev.langchain4j.community.model.dashscope.QwenStreamingChatModel;
+import dev.langchain4j.model.chat.listener.ChatModelListener;
+import com.ai.analyzer.listener.DebugChatModelListener;
 
 
 public class QianwenApiClient {
@@ -179,6 +181,9 @@ public class QianwenApiClient {
                     .defaultRequestParameters(parameters)
                     .build(); */
 
+            // 创建 DebugChatModelListener 用于监听请求和响应
+            ChatModelListener debugListener = new DebugChatModelListener(api);
+            
             this.chatModel = QwenStreamingChatModel.builder()
                     .apiKey(apiKey)
                     .baseUrl(baseUrl)
@@ -187,6 +192,7 @@ public class QianwenApiClient {
                     .enableSearch(enableSearch)
                     .temperature(0.1f) // 温度，越小越确定，越大越随机，如果效果不好就切换为0.3
                     //.timeout(java.time.Duration.ofSeconds(60))
+                    .listeners(List.of(debugListener))
                     .build();
                     
             if (api != null) {
@@ -352,10 +358,6 @@ public class QianwenApiClient {
 
         while (retryCount < maxRetries) {
             try {
-                if (retryCount > 0) {
-                    logInfo("第 " + (retryCount + 1) + " 次尝试发送请求...");
-                }
-
                 // 调用流式生成方法（使用 AI Service 和 StreamingResponseHandler）
                 List<ChatMessage> messages = List.of(systemMessage, userMessage);
 
@@ -435,9 +437,6 @@ public class QianwenApiClient {
                 }
 
                 // 成功，跳出重试循环
-                if (retryCount > 0) {
-                    logInfo("重试成功！");
-                }
                 break;
 
             } catch (java.util.concurrent.TimeoutException e) {
@@ -480,7 +479,6 @@ public class QianwenApiClient {
                     lastException = new Exception("流式输出失败: " + errorMsg, cause);
                 }
                 retryCount++;
-                logError("流式输出失败，将重试 (第 " + retryCount + " 次): " + errorMsg);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new Exception("等待流式输出被中断", e);
@@ -498,7 +496,6 @@ public class QianwenApiClient {
             // 如果还有重试机会，等待后重试（指数退避）
             if (retryCount < maxRetries && lastException != null) {
                 long waitTime = (long) Math.pow(2, retryCount - 1) * 1000;
-                logInfo(waitTime + "ms 后重试...");
                 try {
                     Thread.sleep(waitTime);
                 } catch (InterruptedException ie) {
