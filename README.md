@@ -22,7 +22,7 @@
 - **通义千问API** - 阿里云大语言模型
 - **Gson** - JSON处理
 - **Swing** - GUI框架
-- **langchain** - AI开发框架
+- **Langchain4j** - 基于Java的AI开发框架
 
 ## 📦 构建方式
 
