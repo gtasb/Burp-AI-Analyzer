@@ -13,6 +13,7 @@ import java.util.List;
 import com.ai.analyzer.model.PluginSettings;
 import burp.api.montoya.MontoyaApi;
 
+import dev.langchain4j.community.model.dashscope.QwenChatRequestParameters;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.response.PartialThinking;
 import dev.langchain4j.model.openai.OpenAiChatRequestParameters;
@@ -29,6 +30,7 @@ import dev.langchain4j.service.tool.ToolExecution;
 import dev.langchain4j.community.model.dashscope.QwenStreamingChatModel;
 import dev.langchain4j.model.chat.listener.ChatModelListener;
 import com.ai.analyzer.listener.DebugChatModelListener;
+import lombok.Setter;
 
 
 public class QianwenApiClient {
@@ -36,11 +38,17 @@ public class QianwenApiClient {
     private String apiUrl;
     private String model;
     private QwenStreamingChatModel chatModel;
+    /**
+     * -- SETTER --
+     *  设置 MontoyaApi 引用
+     */
     // private JsonArray tools; // 工具定义列表
     // private Consumer<ToolCall> toolCallHandler; // 工具调用处理器
+    @Setter
     private MontoyaApi api; // Burp API 引用，用于日志输出
     private boolean enableThinking = false; // 是否启用思考过程
     private boolean enableSearch = false; // 是否启用搜索
+    private boolean isFirstInitialization = true; // 是否是第一次初始化
 
     /**
      * 无参构造函数，自动从配置文件加载设置
@@ -80,14 +88,7 @@ public class QianwenApiClient {
         }
         initializeChatModel();
     }
-    
-    /**
-     * 设置 MontoyaApi 引用
-     */
-    public void setApi(MontoyaApi api) {
-        this.api = api;
-    }
-    
+
     /**
      * 初始化 LangChain4j ChatModel
      */
@@ -133,7 +134,8 @@ public class QianwenApiClient {
             
             String modelName = model != null && !model.trim().isEmpty() ? model : "qwen-max";
             
-            if (api != null) {
+            // 只在第一次初始化时输出详细信息
+            if (api != null && isFirstInitialization) {
                 api.logging().logToOutput("[QianwenApiClient] 初始化LangChain4j ChatModel");
                 api.logging().logToOutput("[QianwenApiClient] 原始API URL: " + apiUrl);
                 api.logging().logToOutput("[QianwenApiClient] 处理后的BaseURL: " + baseUrl);
@@ -141,45 +143,32 @@ public class QianwenApiClient {
                 api.logging().logToOutput("[QianwenApiClient] EnableThinking: " + enableThinking);
                 api.logging().logToOutput("[QianwenApiClient] EnableSearch: " + enableSearch);
             }
-            /* 
-            //构建HTTP客户端
-            //HttpClient.Builder httpClientBuilder = HttpClient.newBuilder()
-            //            .version(HttpClient.Version.HTTP_1_1);
 
-            //JdkHttpClientBuilder jdkHttpClientBuilder = JdkHttpClientBuilder.builder()
-            //        .httpClientBuilder(httpClientBuilder)
-            //        .build();
-
-            // 移除错误的 JdkHttpClientBuilder 相关代码
-            // 将 String 类型改为 Boolean 类型
+            // test
             Boolean enableThinking = true; // 默认启用思考过程
-
             Boolean enableSearch = true; // 默认启用搜索
-
+/*
             // 通过 extra_body 传递非标准参数
             Map<String, Object> customParameters = Map.of(
                 "extra_body", Map.of(
                     "enable_thinking", enableThinking,
-                    "enable_search", enableSearch
+                    "enable_web_search", enableSearch
                 )
             );
-
-                   
+               */
             // 创建请求参数
-            OpenAiChatRequestParameters parameters = OpenAiChatRequestParameters.builder()
-            .customParameters(customParameters)
-            .build();
-
-            // 初始化LangChain4j ChatModel
-            this.chatModel = OpenAiStreamingChatModel.builder()
-                    .baseUrl(baseUrl)
-                    .apiKey(apiKey)
-                    .modelName(modelName)
-                    .temperature(0.3)
-                    .timeout(java.time.Duration.ofSeconds(60))
-                    //.httpClientBuilder(jdkHttpClientBuilder)
-                    .defaultRequestParameters(parameters)
-                    .build(); */
+            //OpenAiChatRequestParameters parameters = OpenAiChatRequestParameters.builder()
+            QwenChatRequestParameters parameters = QwenChatRequestParameters.builder()
+                    .enableSearch(enableSearch)
+                    //.searchOptions()  //TODO
+                    .enableThinking(enableThinking)
+                    .build();
+            
+            // 调试日志：输出当前参数值（仅在重新初始化时输出，避免第一次初始化时重复）
+            if (api != null && !isFirstInitialization) {
+                api.logging().logToOutput("[QianwenApiClient] 重新初始化 - EnableThinking: " + enableThinking + ", EnableSearch: " + enableSearch);
+            }
+            //.customParameters(customParameters)
 
             // 创建 DebugChatModelListener 用于监听请求和响应
             ChatModelListener debugListener = new DebugChatModelListener(api);
@@ -188,15 +177,16 @@ public class QianwenApiClient {
                     .apiKey(apiKey)
                     .baseUrl(baseUrl)
                     .modelName(modelName)
-                    //.enableThinking(enableThinking)
-                    .enableSearch(enableSearch)
-                    .temperature(0.1f) // 温度，越小越确定，越大越随机，如果效果不好就切换为0.3
-                    //.timeout(java.time.Duration.ofSeconds(60))
-                    .listeners(List.of(debugListener))
+                    //.enableSearch(enableSearch)
+                    .temperature(0.3f) // 越小越确定，越大越随机，如果效果不好就切换为0.3
+                    .defaultRequestParameters(parameters)
                     .build();
+
                     
-            if (api != null) {
+            // 只在第一次初始化时输出成功信息
+            if (api != null && isFirstInitialization) {
                 api.logging().logToOutput("[QianwenApiClient] LangChain4j ChatModel初始化成功");
+                isFirstInitialization = false; // 标记已完成第一次初始化
             }
         } catch (Exception e) {
             if (api != null) {
@@ -210,6 +200,8 @@ public class QianwenApiClient {
      * 重新初始化ChatModel（当配置更新时调用）
      */
     private void reinitializeChatModel() {
+        // 重新初始化时，需要重新创建ChatModel以应用新的参数
+        // 注意：这里不重置isFirstInitialization标志，因为我们只想在第一次初始化时输出详细日志
         initializeChatModel();
     }
     
@@ -297,22 +289,25 @@ public class QianwenApiClient {
     }
     
     public void setEnableThinking(boolean enableThinking) {
-        this.enableThinking = enableThinking;
-        reinitializeChatModel();
+        if (this.enableThinking != enableThinking) {
+            if (api != null) {
+                api.logging().logToOutput("[QianwenApiClient] setEnableThinking: " + enableThinking);
+            }
+            this.enableThinking = enableThinking;
+            reinitializeChatModel();
+        }
     }
     
     public void setEnableSearch(boolean enableSearch) {
-        this.enableSearch = enableSearch;
-        reinitializeChatModel();
+        if (this.enableSearch != enableSearch) {
+            if (api != null) {
+                api.logging().logToOutput("[QianwenApiClient] setEnableSearch: " + enableSearch);
+            }
+            this.enableSearch = enableSearch;
+            reinitializeChatModel();
+        }
     }
-    
-    public boolean isEnableThinking() {
-        return enableThinking;
-    }
-    
-    public boolean isEnableSearch() {
-        return enableSearch;
-    }
+
     
     /**
      * 设置工具定义列表
@@ -467,7 +462,7 @@ public class QianwenApiClient {
                     logError("1. API URL配置不正确，当前BaseURL: " + (apiUrl != null ? apiUrl : "未设置"));
                     logError("2. API Key无效或已过期");
                     logError("3. 模型名称不正确，当前模型: " + (model != null ? model : "未设置"));
-                    logError("4. 端点路径不正确，请确认使用兼容模式URL: https://dashscope.aliyuncs.com/compatible-mode/v1");
+                    logError("4. 端点路径不正确，请确认使用dashscope模式URL: https://dashscope.aliyuncs.com/v1");
                 } else {
                     // 对于其他错误，也输出详细信息
                     logError("API请求失败，错误详情: " + errorMsg);
@@ -493,16 +488,6 @@ public class QianwenApiClient {
                 }
             }
 
-            // 如果还有重试机会，等待后重试（指数退避）
-            if (retryCount < maxRetries && lastException != null) {
-                long waitTime = (long) Math.pow(2, retryCount - 1) * 1000;
-                try {
-                    Thread.sleep(waitTime);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    throw new Exception("重试被中断", ie);
-                }
-            }
         }
 
         // 检查最终结果

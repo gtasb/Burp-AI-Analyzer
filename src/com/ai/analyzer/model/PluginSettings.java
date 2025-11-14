@@ -17,7 +17,7 @@ public class PluginSettings implements Serializable {
         this.apiUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
         this.apiKey = "";
         this.model = "qwen3-max";
-        this.userPrompt = "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议，在给我的回答中不要有*号";
+        this.userPrompt = "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议";
         this.enableThinking = true;
         this.enableSearch = true;
     }
