@@ -146,14 +146,10 @@ public class AIAnalyzerTab extends JPanel {
         
         // 添加监听器，当复选框状态改变时更新API客户端配置
         enableThinkingCheckBox.addActionListener(e -> {
-            boolean selected = enableThinkingCheckBox.isSelected();
-            api.logging().logToOutput("[AIAnalyzerTab] EnableThinking复选框状态改变: " + selected);
-            apiClient.setEnableThinking(selected);
+            apiClient.setEnableThinking(enableThinkingCheckBox.isSelected());
         });
         enableSearchCheckBox.addActionListener(e -> {
-            boolean selected = enableSearchCheckBox.isSelected();
-            api.logging().logToOutput("[AIAnalyzerTab] EnableSearch复选框状态改变: " + selected);
-            apiClient.setEnableSearch(selected);
+            apiClient.setEnableSearch(enableSearchCheckBox.isSelected());
         });
         
         featurePanel.add(enableThinkingCheckBox);

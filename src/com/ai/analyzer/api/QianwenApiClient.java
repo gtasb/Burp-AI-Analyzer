@@ -29,8 +29,7 @@ import dev.langchain4j.service.tool.ToolExecution;
 //import dev.langchain4j.http.client.jdk.JdkHttpClientBuilder;
 import dev.langchain4j.community.model.dashscope.QwenStreamingChatModel;
 import dev.langchain4j.model.chat.listener.ChatModelListener;
-import com.ai.analyzer.listener.DebugChatModelListener;
-import lombok.Setter;
+//import com.ai.analyzer.listener.DebugChatModelListener;
 
 
 public class QianwenApiClient {
@@ -38,13 +37,8 @@ public class QianwenApiClient {
     private String apiUrl;
     private String model;
     private QwenStreamingChatModel chatModel;
-    /**
-     * -- SETTER --
-     *  设置 MontoyaApi 引用
-     */
     // private JsonArray tools; // 工具定义列表
     // private Consumer<ToolCall> toolCallHandler; // 工具调用处理器
-    @Setter
     private MontoyaApi api; // Burp API 引用，用于日志输出
     private boolean enableThinking = false; // 是否启用思考过程
     private boolean enableSearch = false; // 是否启用搜索
@@ -88,7 +82,14 @@ public class QianwenApiClient {
         }
         initializeChatModel();
     }
-
+    
+    /**
+     * 设置 MontoyaApi 引用
+     */
+    public void setApi(MontoyaApi api) {
+        this.api = api;
+    }
+    
     /**
      * 初始化 LangChain4j ChatModel
      */
@@ -143,9 +144,19 @@ public class QianwenApiClient {
                 api.logging().logToOutput("[QianwenApiClient] EnableThinking: " + enableThinking);
                 api.logging().logToOutput("[QianwenApiClient] EnableSearch: " + enableSearch);
             }
+            /* 
+            //构建HTTP客户端
+            //HttpClient.Builder httpClientBuilder = HttpClient.newBuilder()
+            //            .version(HttpClient.Version.HTTP_1_1);
 
-            // test
+            //JdkHttpClientBuilder jdkHttpClientBuilder = JdkHttpClientBuilder.builder()
+            //        .httpClientBuilder(httpClientBuilder)
+            //        .build();
+            */
+            // 移除错误的 JdkHttpClientBuilder 相关代码
+            // 将 String 类型改为 Boolean 类型
             Boolean enableThinking = true; // 默认启用思考过程
+
             Boolean enableSearch = true; // 默认启用搜索
 /*
             // 通过 extra_body 传递非标准参数
@@ -160,25 +171,16 @@ public class QianwenApiClient {
             //OpenAiChatRequestParameters parameters = OpenAiChatRequestParameters.builder()
             QwenChatRequestParameters parameters = QwenChatRequestParameters.builder()
                     .enableSearch(enableSearch)
-                    //.searchOptions()  //TODO
                     .enableThinking(enableThinking)
                     .build();
-            
-            // 调试日志：输出当前参数值（仅在重新初始化时输出，避免第一次初始化时重复）
-            if (api != null && !isFirstInitialization) {
-                api.logging().logToOutput("[QianwenApiClient] 重新初始化 - EnableThinking: " + enableThinking + ", EnableSearch: " + enableSearch);
-            }
             //.customParameters(customParameters)
-
-            // 创建 DebugChatModelListener 用于监听请求和响应
-            ChatModelListener debugListener = new DebugChatModelListener(api);
             
             this.chatModel = QwenStreamingChatModel.builder()
                     .apiKey(apiKey)
                     .baseUrl(baseUrl)
                     .modelName(modelName)
                     //.enableSearch(enableSearch)
-                    .temperature(0.3f) // 越小越确定，越大越随机，如果效果不好就切换为0.3
+                    .temperature(0.1f) // 越小越确定，越大越随机，如果效果不好就切换为0.3
                     .defaultRequestParameters(parameters)
                     .build();
 
@@ -200,8 +202,6 @@ public class QianwenApiClient {
      * 重新初始化ChatModel（当配置更新时调用）
      */
     private void reinitializeChatModel() {
-        // 重新初始化时，需要重新创建ChatModel以应用新的参数
-        // 注意：这里不重置isFirstInitialization标志，因为我们只想在第一次初始化时输出详细日志
         initializeChatModel();
     }
     
@@ -289,25 +289,22 @@ public class QianwenApiClient {
     }
     
     public void setEnableThinking(boolean enableThinking) {
-        if (this.enableThinking != enableThinking) {
-            if (api != null) {
-                api.logging().logToOutput("[QianwenApiClient] setEnableThinking: " + enableThinking);
-            }
-            this.enableThinking = enableThinking;
-            reinitializeChatModel();
-        }
+        this.enableThinking = enableThinking;
+        reinitializeChatModel();
     }
     
     public void setEnableSearch(boolean enableSearch) {
-        if (this.enableSearch != enableSearch) {
-            if (api != null) {
-                api.logging().logToOutput("[QianwenApiClient] setEnableSearch: " + enableSearch);
-            }
-            this.enableSearch = enableSearch;
-            reinitializeChatModel();
-        }
+        this.enableSearch = enableSearch;
+        reinitializeChatModel();
     }
-
+    
+    public boolean isEnableThinking() {
+        return enableThinking;
+    }
+    
+    public boolean isEnableSearch() {
+        return enableSearch;
+    }
     
     /**
      * 设置工具定义列表
@@ -360,6 +357,7 @@ public class QianwenApiClient {
                 //Assistant assistant = AiServices.create(Assistant.class, chatModel);
                 Assistant assistant = AiServices.builder(Assistant.class)
                         .streamingChatModel(this.chatModel)
+                        //.chatMemory() // 使用ChatMemory,TODO
                         .build();
 
                 // 调用流式聊天方法
@@ -487,7 +485,7 @@ public class QianwenApiClient {
                     e.printStackTrace();
                 }
             }
-
+            
         }
 
         // 检查最终结果
