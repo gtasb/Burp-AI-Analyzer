@@ -14,6 +14,7 @@ import com.ai.analyzer.model.PluginSettings;
 import burp.api.montoya.MontoyaApi;
 
 import dev.langchain4j.community.model.dashscope.QwenChatRequestParameters;
+import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.response.PartialThinking;
 import dev.langchain4j.model.openai.OpenAiChatRequestParameters;
@@ -133,7 +134,7 @@ public class QianwenApiClient {
                 baseUrl = "https://dashscope.aliyuncs.com/api/v1";
             }
             
-            String modelName = model != null && !model.trim().isEmpty() ? model : "qwen-max";
+            String modelName = model != null && !model.trim().isEmpty() ? model : "qwen3-max";
             
             // 只在第一次初始化时输出详细信息
             if (api != null && isFirstInitialization) {
@@ -144,33 +145,25 @@ public class QianwenApiClient {
                 api.logging().logToOutput("[QianwenApiClient] EnableThinking: " + enableThinking);
                 api.logging().logToOutput("[QianwenApiClient] EnableSearch: " + enableSearch);
             }
-            /* 
-            //构建HTTP客户端
-            //HttpClient.Builder httpClientBuilder = HttpClient.newBuilder()
-            //            .version(HttpClient.Version.HTTP_1_1);
 
-            //JdkHttpClientBuilder jdkHttpClientBuilder = JdkHttpClientBuilder.builder()
-            //        .httpClientBuilder(httpClientBuilder)
-            //        .build();
-            */
-            // 移除错误的 JdkHttpClientBuilder 相关代码
-            // 将 String 类型改为 Boolean 类型
-            Boolean enableThinking = true; // 默认启用思考过程
+            // 使用类成员变量的值，而不是硬编码的默认值
+            QwenChatRequestParameters.SearchOptions searchOptions = QwenChatRequestParameters.SearchOptions.builder()
+                    // 使返回结果中包含搜索信息的来源
+                    .enableSource(true)
+                    // 强制开启互联网搜索（根据用户设置）
+                    .forcedSearch(enableSearch)
+                    // 开启角标标注
+                    .enableCitation(true)
+                    // 设置角标标注样式为[ref_i]
+                    .citationFormat("[ref_<number>]")
+                    .searchStrategy("max")
+                    .build();
 
-            Boolean enableSearch = true; // 默认启用搜索
-/*
-            // 通过 extra_body 传递非标准参数
-            Map<String, Object> customParameters = Map.of(
-                "extra_body", Map.of(
-                    "enable_thinking", enableThinking,
-                    "enable_web_search", enableSearch
-                )
-            );
-               */
             // 创建请求参数
             //OpenAiChatRequestParameters parameters = OpenAiChatRequestParameters.builder()
             QwenChatRequestParameters parameters = QwenChatRequestParameters.builder()
                     .enableSearch(enableSearch)
+                    .searchOptions(searchOptions)
                     .enableThinking(enableThinking)
                     .build();
             //.customParameters(customParameters)
@@ -357,7 +350,7 @@ public class QianwenApiClient {
                 //Assistant assistant = AiServices.create(Assistant.class, chatModel);
                 Assistant assistant = AiServices.builder(Assistant.class)
                         .streamingChatModel(this.chatModel)
-                        //.chatMemory() // 使用ChatMemory,TODO
+                        .chatMemory(MessageWindowChatMemory.withMaxMessages(100000))
                         .build();
 
                 // 调用流式聊天方法
@@ -485,7 +478,7 @@ public class QianwenApiClient {
                     e.printStackTrace();
                 }
             }
-            
+
         }
 
         // 检查最终结果
