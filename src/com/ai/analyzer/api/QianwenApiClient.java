@@ -41,8 +41,8 @@ public class QianwenApiClient {
     // private JsonArray tools; // 工具定义列表
     // private Consumer<ToolCall> toolCallHandler; // 工具调用处理器
     private MontoyaApi api; // Burp API 引用，用于日志输出
-    private boolean enableThinking = false; // 是否启用思考过程
-    private boolean enableSearch = false; // 是否启用搜索
+    private boolean enableThinking;// 是否启用思考过程
+    private boolean enableSearch; // 是否启用搜索
     private boolean isFirstInitialization = true; // 是否是第一次初始化
 
     /**
@@ -140,27 +140,31 @@ public class QianwenApiClient {
             if (api != null && isFirstInitialization) {
                 api.logging().logToOutput("[QianwenApiClient] 初始化LangChain4j ChatModel");
                 api.logging().logToOutput("[QianwenApiClient] 原始API URL: " + apiUrl);
-                api.logging().logToOutput("[QianwenApiClient] 处理后的BaseURL: " + baseUrl);
+                //api.logging().logToOutput("[QianwenApiClient] 处理后的BaseURL: " + baseUrl);
                 api.logging().logToOutput("[QianwenApiClient] Model: " + modelName);
                 api.logging().logToOutput("[QianwenApiClient] EnableThinking: " + enableThinking);
                 api.logging().logToOutput("[QianwenApiClient] EnableSearch: " + enableSearch);
             }
 
-            // 使用类成员变量的值，而不是硬编码的默认值
+            // 使用类成员变量的值，确保每次初始化都使用最新的用户设置
+            // 注意：enableSearch 和 enableThinking 的值来自类成员变量，会在用户改变UI开关时更新
+            // 当用户改变UI中的复选框时，会调用 setEnableSearch() 或 setEnableThinking()
+            // 这些方法会调用 reinitializeChatModel()，重新创建 chatModel 并使用新的参数值
             QwenChatRequestParameters.SearchOptions searchOptions = QwenChatRequestParameters.SearchOptions.builder()
                     // 使返回结果中包含搜索信息的来源
-                    .enableSource(true)
+                    //.enableSource(true)
                     // 强制开启互联网搜索（根据用户设置）
                     .forcedSearch(enableSearch)
                     // 开启角标标注
-                    .enableCitation(true)
+                    //.enableCitation(true)
                     // 设置角标标注样式为[ref_i]
-                    .citationFormat("[ref_<number>]")
+                    //.citationFormat("[ref_<number>]")
                     .searchStrategy("max")
                     .build();
 
-            // 创建请求参数
-            //OpenAiChatRequestParameters parameters = OpenAiChatRequestParameters.builder()
+            // 创建请求参数，使用当前的 enableSearch 和 enableThinking 值
+            // 这些值会在用户改变UI开关时通过 setEnableSearch() 和 setEnableThinking() 更新
+            // 然后通过 reinitializeChatModel() 重新创建 chatModel 时使用新值
             QwenChatRequestParameters parameters = QwenChatRequestParameters.builder()
                     .enableSearch(enableSearch)
                     .searchOptions(searchOptions)
@@ -173,7 +177,7 @@ public class QianwenApiClient {
                     .baseUrl(baseUrl)
                     .modelName(modelName)
                     //.enableSearch(enableSearch)
-                    .temperature(0.1f) // 越小越确定，越大越随机，如果效果不好就切换为0.3
+                    .temperature(0.3f) // 越小越确定，越大越随机，如果效果不好就切换为0.3
                     .defaultRequestParameters(parameters)
                     .build();
 
@@ -195,7 +199,15 @@ public class QianwenApiClient {
      * 重新初始化ChatModel（当配置更新时调用）
      */
     private void reinitializeChatModel() {
+        // 先清理旧的 chatModel
+        if (chatModel != null) {
+            chatModel = null;
+        }
+        // 重新初始化，使用最新的 enableSearch 和 enableThinking 值
         initializeChatModel();
+        if (api != null) {
+            api.logging().logToOutput("[QianwenApiClient] ChatModel已重新初始化，EnableThinking: " + enableThinking + ", EnableSearch: " + enableSearch);
+        }
     }
     
     /**
@@ -248,8 +260,8 @@ public class QianwenApiClient {
         this.apiUrl = defaultApiUrl;
         this.apiKey = defaultApiKey;
         this.model = defaultModel;
-        this.enableThinking = true;
-        this.enableSearch = true;
+        this.enableThinking = false;
+        this.enableSearch = false;
     }
     
     /**
@@ -351,6 +363,7 @@ public class QianwenApiClient {
                 Assistant assistant = AiServices.builder(Assistant.class)
                         .streamingChatModel(this.chatModel)
                         .chatMemory(MessageWindowChatMemory.withMaxMessages(100000))
+                        //.toolProvider()   // TODO: 添加工具定义
                         .build();
 
                 // 调用流式聊天方法
@@ -366,9 +379,9 @@ public class QianwenApiClient {
                         }
                     })
                     // 可选：处理思考过程
-                    .onPartialThinking((PartialThinking partialThinking) -> {
+                    /*.onPartialThinking((PartialThinking partialThinking) -> {
                         logDebug("Thinking: " + partialThinking);
-                    })
+                    //})*/
                     // 可选：处理中间响应
                     .onIntermediateResponse((ChatResponse intermediateResponse) -> {
                         logDebug("Intermediate response received");

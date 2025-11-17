@@ -346,7 +346,7 @@ public class AIAnalyzerTab extends JPanel {
             if (requestData != null) {
             userPrompt = "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议";
             } else {
-                userPrompt = "你好，我能为你做什么？";
+                userPrompt = "";
             }
         }
 
