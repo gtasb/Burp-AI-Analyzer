@@ -44,6 +44,7 @@ public class QianwenApiClient {
     private boolean enableThinking;// 是否启用思考过程
     private boolean enableSearch; // 是否启用搜索
     private boolean isFirstInitialization = true; // 是否是第一次初始化
+    private boolean needsReinitialization = false; // 标记是否需要重新初始化（延迟初始化，避免频繁重建）
 
     /**
      * 无参构造函数，自动从配置文件加载设置
@@ -177,7 +178,7 @@ public class QianwenApiClient {
                     .baseUrl(baseUrl)
                     .modelName(modelName)
                     //.enableSearch(enableSearch)
-                    .temperature(0.3f) // 越小越确定，越大越随机，如果效果不好就切换为0.3
+                    .temperature(0.7f) // 越小越确定，越大越随机
                     .defaultRequestParameters(parameters)
                     .build();
 
@@ -197,16 +198,27 @@ public class QianwenApiClient {
     
     /**
      * 重新初始化ChatModel（当配置更新时调用）
+     * 使用延迟初始化策略，避免频繁重建导致性能问题
      */
     private void reinitializeChatModel() {
-        // 先清理旧的 chatModel
-        if (chatModel != null) {
-            chatModel = null;
-        }
-        // 重新初始化，使用最新的 enableSearch 和 enableThinking 值
-        initializeChatModel();
-        if (api != null) {
-            api.logging().logToOutput("[QianwenApiClient] ChatModel已重新初始化，EnableThinking: " + enableThinking + ", EnableSearch: " + enableSearch);
+        // 标记需要重新初始化，但不立即执行
+        // 实际重新初始化会在下次使用 chatModel 时进行（在 analyzeRequestStream 中）
+        needsReinitialization = true;
+    }
+    
+    /**
+     * 确保 ChatModel 已初始化且使用最新的配置
+     * 如果标记了需要重新初始化，则执行重新初始化
+     */
+    private void ensureChatModelInitialized() {
+        if (needsReinitialization || chatModel == null) {
+            // 先清理旧的 chatModel
+            if (chatModel != null) {
+                chatModel = null;
+            }
+            // 重新初始化，使用最新的 enableSearch 和 enableThinking 值
+            initializeChatModel();
+            needsReinitialization = false;
         }
     }
     
@@ -279,28 +291,43 @@ public class QianwenApiClient {
     }
     
     public void setApiUrl(String apiUrl) {
-        this.apiUrl = apiUrl;
-        reinitializeChatModel();
+        // 只有值真的改变时才标记需要重新初始化
+        if (this.apiUrl == null || !this.apiUrl.equals(apiUrl)) {
+            this.apiUrl = apiUrl;
+            reinitializeChatModel(); // 只标记，不立即重新初始化
+        }
     }
     
     public void setApiKey(String apiKey) {
-        this.apiKey = apiKey;
-        reinitializeChatModel();
+        // 只有值真的改变时才标记需要重新初始化
+        if (this.apiKey == null || !this.apiKey.equals(apiKey)) {
+            this.apiKey = apiKey;
+            reinitializeChatModel(); // 只标记，不立即重新初始化
+        }
     }
     
     public void setModel(String model) {
-        this.model = model;
-        reinitializeChatModel();
+        // 只有值真的改变时才标记需要重新初始化
+        if (this.model == null || !this.model.equals(model)) {
+            this.model = model;
+            reinitializeChatModel(); // 只标记，不立即重新初始化
+        }
     }
     
     public void setEnableThinking(boolean enableThinking) {
-        this.enableThinking = enableThinking;
-        reinitializeChatModel();
+        // 只有值真的改变时才标记需要重新初始化
+        if (this.enableThinking != enableThinking) {
+            this.enableThinking = enableThinking;
+            reinitializeChatModel(); // 只标记，不立即重新初始化
+        }
     }
     
     public void setEnableSearch(boolean enableSearch) {
-        this.enableSearch = enableSearch;
-        reinitializeChatModel();
+        // 只有值真的改变时才标记需要重新初始化
+        if (this.enableSearch != enableSearch) {
+            this.enableSearch = enableSearch;
+            reinitializeChatModel(); // 只标记，不立即重新初始化
+        }
     }
     
     public boolean isEnableThinking() {
@@ -327,6 +354,9 @@ public class QianwenApiClient {
 
     // 流式输出方法 - 使用LangChain4j
     public void analyzeRequestStream(String httpRequest, String userPrompt, Consumer<String> onChunk) throws Exception {
+        // 确保 ChatModel 已初始化且使用最新的配置（延迟初始化）
+        ensureChatModelInitialized();
+        
         if (chatModel == null) {
             throw new Exception("ChatModel未初始化，请检查API Key和URL配置");
         }
@@ -362,7 +392,7 @@ public class QianwenApiClient {
                 //Assistant assistant = AiServices.create(Assistant.class, chatModel);
                 Assistant assistant = AiServices.builder(Assistant.class)
                         .streamingChatModel(this.chatModel)
-                        .chatMemory(MessageWindowChatMemory.withMaxMessages(100000))
+                        .chatMemory(MessageWindowChatMemory.withMaxMessages(10))
                         //.toolProvider()   // TODO: 添加工具定义
                         .build();
 

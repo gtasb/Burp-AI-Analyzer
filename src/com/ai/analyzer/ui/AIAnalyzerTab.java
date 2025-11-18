@@ -679,6 +679,14 @@ public class AIAnalyzerTab extends JPanel {
     }
     
     /**
+     * 获取共享的 API Client 实例
+     * 用于 Side Panel 等组件共享同一个实例，避免重复初始化
+     */
+    public QianwenApiClient getApiClient() {
+        return apiClient;
+    }
+    
+    /**
      * 处理工具调用
      */
     /* Tools call 相关代码已注释

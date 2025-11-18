@@ -33,39 +33,38 @@ public class AISidePanelProvider implements HttpRequestEditorProvider, HttpRespo
     }
     
     /**
-     * 从保存的设置文件加载API配置
+     * 获取共享的 API Client（优先从 analyzerTab 获取，避免重复初始化）
      */
-    private QianwenApiClient createApiClientWithSettings() {
+    private QianwenApiClient getApiClient() {
+        // 优先使用 analyzerTab 中的共享 apiClient，避免重复初始化
+        if (analyzerTab != null) {
+            return analyzerTab.getApiClient();
+        }
+        
+        // 如果 analyzerTab 不可用，才创建新实例（这种情况应该很少发生）
         String apiUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
         String apiKey = "";
         String model = "qwen-max";
         
-        // 优先从analyzerTab获取配置
-        if (analyzerTab != null) {
-            apiUrl = analyzerTab.getApiUrl();
-            apiKey = analyzerTab.getApiKey();
-            model = analyzerTab.getModel();
-        } else {
-            // 如果analyzerTab不可用，尝试从保存的设置文件加载
-            try {
-                File settingsFile = new File(System.getProperty("user.home"), ".burp_ai_analyzer_settings");
-                if (settingsFile.exists()) {
-                    try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(settingsFile))) {
-                        PluginSettings settings = (PluginSettings) ois.readObject();
-                        if (settings.getApiUrl() != null && !settings.getApiUrl().isEmpty()) {
-                            apiUrl = settings.getApiUrl();
-                        }
-                        if (settings.getApiKey() != null && !settings.getApiKey().isEmpty()) {
-                            apiKey = settings.getApiKey();
-                        }
-                        if (settings.getModel() != null && !settings.getModel().isEmpty()) {
-                            model = settings.getModel();
-                        }
+        // 尝试从保存的设置文件加载
+        try {
+            File settingsFile = new File(System.getProperty("user.home"), ".burp_ai_analyzer_settings");
+            if (settingsFile.exists()) {
+                try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(settingsFile))) {
+                    PluginSettings settings = (PluginSettings) ois.readObject();
+                    if (settings.getApiUrl() != null && !settings.getApiUrl().isEmpty()) {
+                        apiUrl = settings.getApiUrl();
+                    }
+                    if (settings.getApiKey() != null && !settings.getApiKey().isEmpty()) {
+                        apiKey = settings.getApiKey();
+                    }
+                    if (settings.getModel() != null && !settings.getModel().isEmpty()) {
+                        model = settings.getModel();
                     }
                 }
-            } catch (Exception e) {
-                // 忽略加载错误，使用默认值
             }
+        } catch (Exception e) {
+            // 忽略加载错误，使用默认值
         }
         
         QianwenApiClient apiClient = new QianwenApiClient(api, apiUrl, apiKey);
@@ -75,9 +74,9 @@ public class AISidePanelProvider implements HttpRequestEditorProvider, HttpRespo
 
     @Override
     public ExtensionProvidedHttpRequestEditor provideHttpRequestEditor(EditorCreationContext creationContext) {
-        // Create new instances for each editor
-        QianwenApiClient newApiClient = createApiClientWithSettings();
-        ChatPanel newChatPanel = new ChatPanel(api, newApiClient);
+        // 使用共享的 apiClient，避免重复初始化
+        QianwenApiClient sharedApiClient = getApiClient();
+        ChatPanel newChatPanel = new ChatPanel(api, sharedApiClient);
         // 设置analyzerTab引用，使ChatPanel能够动态更新API配置
         if (analyzerTab != null) {
             newChatPanel.setAnalyzerTab(analyzerTab);
@@ -88,9 +87,9 @@ public class AISidePanelProvider implements HttpRequestEditorProvider, HttpRespo
 
     @Override
     public ExtensionProvidedHttpResponseEditor provideHttpResponseEditor(EditorCreationContext creationContext) {
-        // Create new instances for each editor
-        QianwenApiClient newApiClient = createApiClientWithSettings();
-        ChatPanel newChatPanel = new ChatPanel(api, newApiClient);
+        // 使用共享的 apiClient，避免重复初始化
+        QianwenApiClient sharedApiClient = getApiClient();
+        ChatPanel newChatPanel = new ChatPanel(api, sharedApiClient);
         // 设置analyzerTab引用，使ChatPanel能够动态更新API配置
         if (analyzerTab != null) {
             newChatPanel.setAnalyzerTab(analyzerTab);
