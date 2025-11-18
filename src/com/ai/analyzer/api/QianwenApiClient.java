@@ -365,7 +365,7 @@ public class QianwenApiClient {
         String systemContent = "你是一个专业的Web安全测试专家，擅长分析HTTP请求和响应中的潜在漏洞。\n\n"
             + "工作要求：\n"
             + "只输出可能存在的owasp top 10或中危及以上安全风险，不要输出低危和无风险的项，并且给出对风险点的渗透测试建议，辅助渗透测试工程师继续进行渗透测试；\n"
-            + "不要输出代码表格格式，不要输出'---'；\n"
+            + "可以以markdown格式输出，但不要输出代码表格格式，不要输出'---'；\n"
             + "格式简洁，突出重点，不要冗长描述。";
 
         SystemMessage systemMessage = new SystemMessage(systemContent);

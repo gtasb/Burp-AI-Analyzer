@@ -53,7 +53,7 @@ public class AIAnalyzerTab extends JPanel {
         this.api = api;
         this.apiClient = new QianwenApiClient(
             api,
-            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            "https://dashscope.aliyuncs.com/api/v1",
             ""
         );
         
@@ -72,6 +72,9 @@ public class AIAnalyzerTab extends JPanel {
         */
         this.requestList = new ArrayList<>();
         initializeUI();
+        
+        // 自动加载配置文件（如果存在）
+        autoLoadSettings();
     }
 
     private void initializeUI() {
@@ -599,22 +602,79 @@ public class AIAnalyzerTab extends JPanel {
         }
     }
 
+    /**
+     * 自动加载配置文件（在插件初始化时调用）
+     * 优先从当前目录加载，如果不存在则从用户主目录加载
+     */
+    private void autoLoadSettings() {
+        PluginSettings settings = null;
+        
+        // 优先尝试从当前目录加载
+        java.io.File localSettingsFile = new java.io.File("ai_analyzer_settings.dat");
+        if (localSettingsFile.exists()) {
+            try {
+                java.io.ObjectInputStream ois = new java.io.ObjectInputStream(new java.io.FileInputStream(localSettingsFile));
+                settings = (PluginSettings) ois.readObject();
+                ois.close();
+                if (settings != null) {
+                    applySettings(settings);
+                    api.logging().logToOutput("已自动加载配置文件: ai_analyzer_settings.dat");
+                    return;
+                }
+            } catch (Exception e) {
+                // 如果加载失败，继续尝试用户主目录
+            }
+        }
+        
+        // 如果当前目录没有配置文件，尝试从用户主目录加载
+        java.io.File userSettingsFile = new java.io.File(System.getProperty("user.home"), ".burp_ai_analyzer_settings");
+        if (userSettingsFile.exists()) {
+            try {
+                java.io.ObjectInputStream ois = new java.io.ObjectInputStream(new java.io.FileInputStream(userSettingsFile));
+                settings = (PluginSettings) ois.readObject();
+                ois.close();
+                if (settings != null) {
+                    applySettings(settings);
+                    api.logging().logToOutput("已自动加载配置文件: " + userSettingsFile.getAbsolutePath());
+                    return;
+                }
+            } catch (Exception e) {
+                // 加载失败，使用默认值
+            }
+        }
+        
+        // 如果没有找到配置文件，使用默认值（不输出日志，这是正常情况）
+    }
+    
+    /**
+     * 应用设置到UI和API客户端
+     */
+    private void applySettings(PluginSettings settings) {
+        apiUrlField.setText(settings.getApiUrl());
+        apiKeyField.setText(settings.getApiKey());
+        modelField.setText(settings.getModel());
+        userPromptArea.setText(settings.getUserPrompt());
+        enableThinkingCheckBox.setSelected(settings.isEnableThinking());
+        enableSearchCheckBox.setSelected(settings.isEnableSearch());
+        
+        // 更新API客户端配置
+        apiClient.setApiUrl(settings.getApiUrl());
+        apiClient.setApiKey(settings.getApiKey());
+        apiClient.setModel(settings.getModel());
+        apiClient.setEnableThinking(settings.isEnableThinking());
+        apiClient.setEnableSearch(settings.isEnableSearch());
+    }
+    
+    /**
+     * 手动加载设置（用户点击"加载设置"按钮时调用）
+     */
     private void loadSettings() {
         try {
             java.io.ObjectInputStream ois = new java.io.ObjectInputStream(new java.io.FileInputStream("ai_analyzer_settings.dat"));
             PluginSettings settings = (PluginSettings) ois.readObject();
             ois.close();
 
-            apiUrlField.setText(settings.getApiUrl());
-            apiKeyField.setText(settings.getApiKey());
-            modelField.setText(settings.getModel());
-            userPromptArea.setText(settings.getUserPrompt());
-            enableThinkingCheckBox.setSelected(settings.isEnableThinking());
-            enableSearchCheckBox.setSelected(settings.isEnableSearch());
-            
-            // 更新API客户端配置
-            apiClient.setEnableThinking(settings.isEnableThinking());
-            apiClient.setEnableSearch(settings.isEnableSearch());
+            applySettings(settings);
 
             //JOptionPane.showMessageDialog(this, "设置已加载", "成功", JOptionPane.INFORMATION_MESSAGE);
             api.logging().logToOutput("设置已加载");

@@ -14,7 +14,7 @@ public class PluginSettings implements Serializable {
     
     public PluginSettings() {
         // 默认设置
-        this.apiUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
+        this.apiUrl = "https://dashscope.aliyuncs.com/api/v1";
         this.apiKey = "";
         this.model = "qwen3-max";
         this.userPrompt = "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议";
