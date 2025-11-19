@@ -114,7 +114,7 @@ mvn clean package
 
 1. 在Burp Suite中找到`AI分析`标签页
 2. 在顶部的API配置区域填写：
-   - **API URL**：默认为`https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions`
+   - **API URL**：默认为`https://dashscope.aliyuncs.com/api/v1`
    - **API Key**：填入你的通义千问API Key
 
 ### 2. 发送请求进行分析
