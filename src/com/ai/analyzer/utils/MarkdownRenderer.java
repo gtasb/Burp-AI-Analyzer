@@ -11,9 +11,10 @@ public class MarkdownRenderer {
     private static final Color CODE_COLOR = new Color(220, 50, 47);     // 红色 - 代码
     private static final Color CODE_BG_COLOR = new Color(248, 248, 248); // 浅灰 - 代码背景
     private static final Color BOLD_COLOR = Color.BLACK;                // 黑色 - 粗体
-    private static final Color ITALIC_COLOR = Color.BLACK;              // 黑色 - 斜体
+    private static final Color ITALIC_COLOR = new Color(136, 136, 136);  // 灰色 - 斜体（用于工具信息）
     private static final Color LIST_COLOR = Color.BLACK;                // 黑色 - 列表
     private static final Color LINK_COLOR = new Color(0, 102, 204);     // 蓝色 - 链接
+    private static final Color TOOL_INFO_COLOR = new Color(136, 136, 136); // 灰色 - 工具信息
 
     /**
      * 渲染Markdown到JTextPane的末尾（不清空现有内容）
@@ -52,6 +53,13 @@ public class MarkdownRenderer {
         Style italic = getOrCreateStyle(doc, "italic", regular);
         StyleConstants.setItalic(italic, true);
         StyleConstants.setForeground(italic, ITALIC_COLOR);
+        StyleConstants.setFontSize(italic, 11); // 工具信息使用较小字体
+        
+        // 工具信息样式（灰色小字斜体）
+        Style toolInfo = getOrCreateStyle(doc, "toolInfo", regular);
+        StyleConstants.setItalic(toolInfo, true);
+        StyleConstants.setForeground(toolInfo, TOOL_INFO_COLOR);
+        StyleConstants.setFontSize(toolInfo, 11);
 
         Style code = getOrCreateStyle(doc, "code", regular);
         StyleConstants.setFontFamily(code, "Consolas");
@@ -331,6 +339,13 @@ public class MarkdownRenderer {
             Style italic = getOrCreateStyle(doc, "italic", regular);
             StyleConstants.setItalic(italic, true);
             StyleConstants.setForeground(italic, ITALIC_COLOR);
+            StyleConstants.setFontSize(italic, 11); // 工具信息使用较小字体
+            
+            // 工具信息样式（灰色小字斜体）
+            Style toolInfo = getOrCreateStyle(doc, "toolInfo", regular);
+            StyleConstants.setItalic(toolInfo, true);
+            StyleConstants.setForeground(toolInfo, TOOL_INFO_COLOR);
+            StyleConstants.setFontSize(toolInfo, 11);
 
             Style code = getOrCreateStyle(doc, "code", regular);
             StyleConstants.setFontFamily(code, "Consolas");

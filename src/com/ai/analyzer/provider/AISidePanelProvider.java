@@ -42,7 +42,7 @@ public class AISidePanelProvider implements HttpRequestEditorProvider, HttpRespo
         }
         
         // 如果 analyzerTab 不可用，才创建新实例（这种情况应该很少发生）
-        String apiUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
+        String apiUrl = "https://dashscope.aliyuncs.com/api/v1";
         String apiKey = "";
         String model = "qwen-max";
         

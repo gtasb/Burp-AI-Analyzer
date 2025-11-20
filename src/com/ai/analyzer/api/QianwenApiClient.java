@@ -1,9 +1,9 @@
 package com.ai.analyzer.api;
 
 import com.ai.analyzer.Agent.Assistant;
+import com.ai.analyzer.mcpClient.MCPtoolProvider;
+import com.ai.analyzer.mcpClient.ToolExecutionFormatter;
 
-import java.net.http.HttpClient;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.io.File;
@@ -14,11 +14,11 @@ import com.ai.analyzer.model.PluginSettings;
 import burp.api.montoya.MontoyaApi;
 
 import dev.langchain4j.community.model.dashscope.QwenChatRequestParameters;
+import dev.langchain4j.mcp.McpToolProvider;
+import dev.langchain4j.mcp.client.McpClient;
+import dev.langchain4j.mcp.client.transport.McpTransport;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
-import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.response.PartialThinking;
-import dev.langchain4j.model.openai.OpenAiChatRequestParameters;
-import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
@@ -27,24 +27,40 @@ import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.tool.BeforeToolExecution;
 import dev.langchain4j.service.tool.ToolExecution;
-//import dev.langchain4j.http.client.jdk.JdkHttpClientBuilder;
 import dev.langchain4j.community.model.dashscope.QwenStreamingChatModel;
-import dev.langchain4j.model.chat.listener.ChatModelListener;
+import lombok.Getter;
+import lombok.Setter;
+//import dev.langchain4j.model.chat.listener.ChatModelListener;
 //import com.ai.analyzer.listener.DebugChatModelListener;
 
 
 public class QianwenApiClient {
+    @Getter
     private String apiKey;
+    // 获取API配置的方法
+    @Getter
     private String apiUrl;
+    @Getter
     private String model;
     private QwenStreamingChatModel chatModel;
+    /**
+     * -- SETTER --
+     *  设置 MontoyaApi 引用
+     */
     // private JsonArray tools; // 工具定义列表
     // private Consumer<ToolCall> toolCallHandler; // 工具调用处理器
+    @Setter
     private MontoyaApi api; // Burp API 引用，用于日志输出
+    @Getter
     private boolean enableThinking;// 是否启用思考过程
+    @Getter
     private boolean enableSearch; // 是否启用搜索
     private boolean isFirstInitialization = true; // 是否是第一次初始化
     private boolean needsReinitialization = false; // 标记是否需要重新初始化（延迟初始化，避免频繁重建）
+    private Assistant assistant; // 共享的 Assistant 实例，用于保持上下文
+    private McpToolProvider mcpToolProvider; // MCP 工具提供者（共享实例）
+    private MessageWindowChatMemory chatMemory; // 共享的聊天记忆，用于保持上下文（即使 Assistant 重新创建也保留）
+    private volatile TokenStream currentTokenStream; // 当前活动的 TokenStream，用于取消流式输出
 
     /**
      * 无参构造函数，自动从配置文件加载设置
@@ -84,14 +100,7 @@ public class QianwenApiClient {
         }
         initializeChatModel();
     }
-    
-    /**
-     * 设置 MontoyaApi 引用
-     */
-    public void setApi(MontoyaApi api) {
-        this.api = api;
-    }
-    
+
     /**
      * 初始化 LangChain4j ChatModel
      */
@@ -191,7 +200,7 @@ public class QianwenApiClient {
         } catch (Exception e) {
             if (api != null) {
                 api.logging().logToError("[QianwenApiClient] 初始化ChatModel失败: " + e.getMessage());
-                e.printStackTrace();
+                //e.printStackTrace();
             }
         }
     }
@@ -199,6 +208,7 @@ public class QianwenApiClient {
     /**
      * 重新初始化ChatModel（当配置更新时调用）
      * 使用延迟初始化策略，避免频繁重建导致性能问题
+     * 注意：enableThinking 和 enableSearch 的更新不通过此方法，而是通过 updateChatModelAndAssistant()
      */
     private void reinitializeChatModel() {
         // 标记需要重新初始化，但不立即执行
@@ -207,18 +217,171 @@ public class QianwenApiClient {
     }
     
     /**
+     * 更新 ChatModel 和 Assistant（当 enableThinking 或 enableSearch 改变时调用）
+     * 立即重新创建 chatModel 和 Assistant，使用新的配置
+     * 注意：ChatMemory 不会被清空，保留上下文记忆
+     */
+    private void updateChatModelAndAssistant() {
+        // 先清理旧的 Assistant（因为它依赖于 chatModel）
+        // 注意：不清理 chatMemory，保留上下文记忆
+        if (assistant != null) {
+            assistant = null;
+        }
+        // 清理旧的 chatModel
+        if (chatModel != null) {
+            chatModel = null;
+        }
+        // 重新初始化 chatModel，使用最新的 enableSearch 和 enableThinking 值
+        initializeChatModel();
+        // Assistant 会在下次调用 ensureAssistantInitialized() 时自动创建
+        // 新的 Assistant 会使用同一个 chatMemory 实例，从而保留上下文记忆
+        if (api != null) {
+            api.logging().logToOutput("[QianwenApiClient] ChatModel 已更新，使用新的配置 (EnableThinking: " + enableThinking + ", EnableSearch: " + enableSearch + ")");
+            api.logging().logToOutput("[QianwenApiClient] Assistant 将在下次使用时使用新的 ChatModel（保留上下文记忆）");
+        }
+    }
+    
+    /**
      * 确保 ChatModel 已初始化且使用最新的配置
      * 如果标记了需要重新初始化，则执行重新初始化
      */
     private void ensureChatModelInitialized() {
         if (needsReinitialization || chatModel == null) {
-            // 先清理旧的 chatModel
+            // 先清理旧的 Assistant（因为它依赖于 chatModel）
+            if (assistant != null) {
+                assistant = null; // Assistant 依赖于 chatModel，需要重新创建
+            }
+            // 清理旧的 chatModel
             if (chatModel != null) {
                 chatModel = null;
             }
             // 重新初始化，使用最新的 enableSearch 和 enableThinking 值
             initializeChatModel();
             needsReinitialization = false;
+            if (api != null) {
+                api.logging().logToOutput("[QianwenApiClient] ChatModel 已重新初始化，使用新的配置 (EnableThinking: " + enableThinking + ", EnableSearch: " + enableSearch + ")");
+            }
+        }
+    }
+    
+    /**
+     * 确保 Assistant 实例已创建（共享实例，保持上下文）
+     * 如果 Assistant 不存在，则创建新的 Assistant
+     * 注意：此方法在 ensureChatModelInitialized() 之后调用，确保使用最新的 chatModel
+     */
+    private void ensureAssistantInitialized() {
+        // 如果 assistant 为 null，创建新的实例（使用最新的 chatModel）
+        if (assistant == null) {
+            // 获取或创建 MCP 工具提供者
+            if (mcpToolProvider == null) {
+                try {
+                    MCPtoolProvider mcpProviderHelper = new MCPtoolProvider();
+                    McpTransport transport = mcpProviderHelper.createTransport();
+                    McpClient mcpClient = mcpProviderHelper.createMcpClient(transport);
+                    // 等待连接稳定
+                    Thread.sleep(1000);
+                    mcpToolProvider = mcpProviderHelper.createToolProvider(mcpClient);
+                    if (api != null) {
+                        api.logging().logToOutput("[QianwenApiClient] MCP 工具提供者初始化成功");
+                    }
+                } catch (Exception e) {
+                    // MCP 服务器不可用，不影响主要功能
+                    if (api != null) {
+                        api.logging().logToOutput("[QianwenApiClient] MCP 工具提供者初始化失败（MCP 服务器可能未运行）: " + e.getMessage());
+                    }
+                    mcpToolProvider = null;
+                }
+            }
+            
+            // 确保 ChatMemory 已创建（共享实例，保持上下文）
+            if (chatMemory == null) {
+                chatMemory = MessageWindowChatMemory.withMaxMessages(10);
+                if (api != null) {
+                    api.logging().logToOutput("[QianwenApiClient] ChatMemory 已创建（共享实例，保持上下文）");
+                }
+            }
+            
+            // 创建 Assistant 实例（使用共享的 ChatMemory）
+            var assistantBuilder = AiServices.builder(Assistant.class)
+                    .streamingChatModel(this.chatModel)
+                    .chatMemory(chatMemory); // 使用共享的 ChatMemory，保留上下文记忆
+            
+            // 如果 MCP 工具提供者可用，则添加工具支持
+            if (mcpToolProvider != null) {
+                assistantBuilder.toolProvider(mcpToolProvider);
+                if (api != null) {
+                    api.logging().logToOutput("[QianwenApiClient] 已启用 MCP 工具支持");
+                }
+            }
+            
+            assistant = assistantBuilder.build();
+            if (api != null) {
+                api.logging().logToOutput("[QianwenApiClient] Assistant 实例已创建（共享实例，保持上下文）");
+            }
+        }
+    }
+    
+    /**
+     * 取消流式输出
+     * 当用户点击"停止"按钮时调用
+     */
+    public void cancelStreaming() {
+        if (currentTokenStream != null) {
+            try {
+                // 尝试调用 TokenStream 的 cancel 方法（如果存在）
+                java.lang.reflect.Method cancelMethod = currentTokenStream.getClass().getMethod("cancel");
+                cancelMethod.invoke(currentTokenStream);
+                if (api != null) {
+                    api.logging().logToOutput("[QianwenApiClient] 流式输出已取消");
+                }
+            } catch (NoSuchMethodException e) {
+                // 如果 TokenStream 没有 cancel 方法，尝试通过反射查找其他取消方法
+                try {
+                    // 尝试查找 stop、abort 等方法
+                    java.lang.reflect.Method[] methods = currentTokenStream.getClass().getMethods();
+                    for (java.lang.reflect.Method method : methods) {
+                        String methodName = method.getName().toLowerCase();
+                        if ((methodName.contains("cancel") || methodName.contains("stop") || methodName.contains("abort"))
+                            && method.getParameterCount() == 0) {
+                            method.invoke(currentTokenStream);
+                            if (api != null) {
+                                api.logging().logToOutput("[QianwenApiClient] 流式输出已取消（通过 " + method.getName() + " 方法）");
+                            }
+                            break;
+                        }
+                    }
+                } catch (Exception ex) {
+                    if (api != null) {
+                        api.logging().logToError("[QianwenApiClient] 取消流式输出失败: " + ex.getMessage());
+                    }
+                }
+            } catch (Exception e) {
+                if (api != null) {
+                    api.logging().logToError("[QianwenApiClient] 取消流式输出失败: " + e.getMessage());
+                }
+            }
+            currentTokenStream = null;
+        } else {
+            if (api != null) {
+                api.logging().logToOutput("[QianwenApiClient] 没有活动的流式输出可以取消");
+            }
+        }
+    }
+    
+    /**
+     * 清空聊天上下文（清空 Assistant 的聊天记忆）
+     * 当用户点击"清空"按钮时调用
+     */
+    public void clearContext() {
+        // 清空 Assistant 和 ChatMemory，从而清空所有上下文记忆
+        if (assistant != null) {
+            assistant = null;
+        }
+        if (chatMemory != null) {
+            chatMemory = null; // 创建新的 ChatMemory 以清空记忆
+        }
+        if (api != null) {
+            api.logging().logToOutput("[QianwenApiClient] 聊天上下文已清空");
         }
     }
     
@@ -315,35 +478,26 @@ public class QianwenApiClient {
     }
     
     public void setEnableThinking(boolean enableThinking) {
-        // 只有值真的改变时才标记需要重新初始化
+        // 只有值真的改变时才更新
         if (this.enableThinking != enableThinking) {
             this.enableThinking = enableThinking;
-            reinitializeChatModel(); // 只标记，不立即重新初始化
+            // 立即重新创建 chatModel 和 Assistant，使用新的配置
+            updateChatModelAndAssistant();
         }
     }
     
     public void setEnableSearch(boolean enableSearch) {
-        // 只有值真的改变时才标记需要重新初始化
+        // 只有值真的改变时才更新
         if (this.enableSearch != enableSearch) {
             this.enableSearch = enableSearch;
-            reinitializeChatModel(); // 只标记，不立即重新初始化
+            // 立即重新创建 chatModel 和 Assistant，使用新的配置
+            updateChatModelAndAssistant();
         }
     }
-    
-    public boolean isEnableThinking() {
-        return enableThinking;
-    }
-    
-    public boolean isEnableSearch() {
-        return enableSearch;
-    }
-    
-    /**
-     * 设置工具定义列表
+
+    /*
+      设置工具定义列表
      */
-    // public void setTools(JsonArray tools) {
-    //     this.tools = tools;
-    // }
     
     /**
      * 设置工具调用处理器
@@ -362,9 +516,10 @@ public class QianwenApiClient {
         }
 
         // 构建系统消息
-        String systemContent = "你是一个专业的Web安全测试专家，擅长分析HTTP请求和响应中的潜在漏洞。\n\n"
+        String systemContent = "你是一个专业的Web安全测试专家，擅长分析HTTP请求和响应中的潜在漏洞，也能直接进行渗透测试。\n\n"
             + "工作要求：\n"
-            + "只输出可能存在的owasp top 10或中危及以上安全风险，不要输出低危和无风险的项，并且给出对风险点的渗透测试建议，辅助渗透测试工程师继续进行渗透测试；\n"
+            + "只输出可能存在的owasp top 10或中危及以上安全风险，不要输出低危和无风险的项，并且给出对风险点的渗透测试建议，根据上下文信息，辅助渗透测试工程师继续进行渗透测试；\n"
+            + "你只有在用户主动请求你使用提供的工具来调用Burp Suite的功能时，才能使用提供的工具来调用Burp Suite的功能，\n"
             + "可以以markdown格式输出，但不要输出代码表格格式，不要输出'---'；\n"
             + "格式简洁，突出重点，不要冗长描述。";
 
@@ -388,30 +543,82 @@ public class QianwenApiClient {
                 // 调用流式生成方法（使用 AI Service 和 StreamingResponseHandler）
                 List<ChatMessage> messages = List.of(systemMessage, userMessage);
 
-                // 使用AI Service创建Assistant实例
-                //Assistant assistant = AiServices.create(Assistant.class, chatModel);
-                Assistant assistant = AiServices.builder(Assistant.class)
-                        .streamingChatModel(this.chatModel)
-                        .chatMemory(MessageWindowChatMemory.withMaxMessages(10))
-                        //.toolProvider()   // TODO: 添加工具定义
-                        .build();
+                // 确保 Assistant 实例已创建（共享实例，保持上下文）
+                ensureAssistantInitialized();
+
+                // 使用共享的 Assistant 实例
+                Assistant assistant = this.assistant;
 
                 // 调用流式聊天方法
                 TokenStream tokenStream = assistant.chat(messages);
                 CompletableFuture<ChatResponse> futureResponse = new CompletableFuture<>();
+                
+                // 保存当前 TokenStream 引用，以便可以取消
+                currentTokenStream = tokenStream;
 
-                tokenStream
-                    // 关键：将 partialResponse 通过 onChunk 传递给UI
-                    .onPartialResponse((String partialResponse) -> {
+                // 尝试使用带 context 的回调方法以获取 StreamingHandle
+                // 根据 LangChain4j 文档，应该使用 onPartialResponse(PartialResponse, PartialResponseContext)
+                // 但 TokenStream 的 API 可能使用简化的版本，所以先尝试带 context 的版本，如果失败则回退
+                try {
+                    // 尝试使用反射调用带 context 的方法
+                    java.lang.reflect.Method onPartialResponseMethod = null;
+                    for (java.lang.reflect.Method method : tokenStream.getClass().getMethods()) {
+                        if (method.getName().equals("onPartialResponse") && method.getParameterCount() == 2) {
+                            onPartialResponseMethod = method;
+                            break;
+                        }
+                    }
+                    
+                    if (onPartialResponseMethod != null) {
+                        // 使用带 context 的版本
+                        java.util.function.BiConsumer<String, Object> biConsumer = (String partialResponse, Object context) -> {
+                            // 尝试从 context 获取 StreamingHandle
+                            if (context != null) {
+                                try {
+                                    java.lang.reflect.Method streamingHandleMethod = context.getClass().getMethod("streamingHandle");
+                                    Object handle = streamingHandleMethod.invoke(context);
+                                    if (handle != null) {
+                                        // 保存 StreamingHandle 到 currentTokenStream（复用字段）
+                                        currentTokenStream = (TokenStream) handle;
+                                        if (api != null) {
+                                            api.logging().logToOutput("[QianwenApiClient] 已获取 StreamingHandle");
+                                        }
+                                    }
+                                } catch (Exception e) {
+                                    // 忽略，继续使用 TokenStream
+                                }
+                            }
+                            
+                            if (partialResponse != null && !partialResponse.isEmpty()) {
+                                onChunk.accept(partialResponse);
+                                contentChunkCount[0]++;
+                            }
+                        };
+                        onPartialResponseMethod.invoke(tokenStream, biConsumer);
+                    } else {
+                        // 回退到不带 context 的版本
+                        tokenStream.onPartialResponse((String partialResponse) -> {
+                            if (partialResponse != null && !partialResponse.isEmpty()) {
+                                onChunk.accept(partialResponse);
+                                contentChunkCount[0]++;
+                            }
+                        });
+                    }
+                } catch (Exception e) {
+                    // 如果反射失败，使用标准方法
+                    tokenStream.onPartialResponse((String partialResponse) -> {
                         if (partialResponse != null && !partialResponse.isEmpty()) {
                             onChunk.accept(partialResponse);
                             contentChunkCount[0]++;
                         }
-                    })
+                    });
+                }
+                
+                tokenStream
                     // 可选：处理思考过程
-                    /*.onPartialThinking((PartialThinking partialThinking) -> {
+                    .onPartialThinking((PartialThinking partialThinking) -> {
                         logDebug("Thinking: " + partialThinking);
-                    //})*/
+                    })
                     // 可选：处理中间响应
                     .onIntermediateResponse((ChatResponse intermediateResponse) -> {
                         logDebug("Intermediate response received");
@@ -419,6 +626,10 @@ public class QianwenApiClient {
                     // 工具执行前的回调
                     .beforeToolExecution((BeforeToolExecution beforeToolExecution) -> {
                         logDebug("Before tool execution: " + beforeToolExecution);
+                        String toolInfoHtml = ToolExecutionFormatter.formatToolExecutionInfo(beforeToolExecution);
+                        if (toolInfoHtml != null && !toolInfoHtml.isEmpty()) {
+                            onChunk.accept(toolInfoHtml);
+                        }
                     })
                     // 工具执行后的回调
                     .onToolExecuted((ToolExecution toolExecution) -> {
@@ -457,8 +668,11 @@ public class QianwenApiClient {
                     })
                     .start();
 
-                // 等待流式输出完成（最多等待2分钟）
-                ChatResponse finalResponse = futureResponse.get(2, java.util.concurrent.TimeUnit.MINUTES);
+                // 等待流式输出完成（最多等待10分钟，因为工具执行可能需要较长时间）
+                ChatResponse finalResponse = futureResponse.get(10, java.util.concurrent.TimeUnit.MINUTES);
+                
+                // 流式输出完成，清除引用
+                currentTokenStream = null;
 
                 // 记录token使用信息（可选）
                 if (finalResponse != null && finalResponse.tokenUsage() != null) {
@@ -469,7 +683,7 @@ public class QianwenApiClient {
                 break;
 
             } catch (java.util.concurrent.TimeoutException e) {
-                lastException = new Exception("流式输出超时（2分钟）", e);
+                lastException = new Exception("流式输出超时（10分钟）", e);
                 retryCount++;
                 logError("请求超时: " + e.getMessage());
             } catch (java.util.concurrent.ExecutionException e) {
@@ -561,19 +775,6 @@ public class QianwenApiClient {
         }
 
         return content.toString();
-    }
-
-    // 获取API配置的方法
-    public String getApiUrl() {
-        return apiUrl;
-    }
-
-    public String getApiKey() {
-        return apiKey;
-    }
-
-    public String getModel() {
-        return model;
     }
 
     /**

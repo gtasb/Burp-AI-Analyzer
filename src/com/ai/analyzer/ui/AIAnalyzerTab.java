@@ -126,7 +126,7 @@ public class AIAnalyzerTab extends JPanel {
         JPanel apiConfigPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 5));
 
         apiConfigPanel.add(new JLabel("API URL:"));
-        apiUrlField = new JTextField("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", 25);
+        apiUrlField = new JTextField("https://dashscope.aliyuncs.com/api/v1", 25);
         apiConfigPanel.add(apiUrlField);
 
         apiConfigPanel.add(new JLabel("API Key:"));
@@ -145,7 +145,7 @@ public class AIAnalyzerTab extends JPanel {
         // 功能开关面板
         JPanel featurePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 5));
         enableThinkingCheckBox = new JCheckBox("启用深度思考", true);
-        enableSearchCheckBox = new JCheckBox("启用网络搜索", true);
+        enableSearchCheckBox = new JCheckBox("启用网络搜索", false);
         
         // 添加监听器，当复选框状态改变时更新API客户端配置
         enableThinkingCheckBox.addActionListener(e -> {
@@ -555,6 +555,8 @@ public class AIAnalyzerTab extends JPanel {
     
     private void clearResults() {
         resultTextPane.setText("");
+        // 清空 Assistant 的聊天记忆（共享实例）
+        apiClient.clearContext();
     }
 
     private void deleteSelectedRequest() {

@@ -345,7 +345,7 @@ public class ChatPanel extends JPanel {
                             StyleConstants.setBold(senderStyle, true);
                             StyleConstants.setForeground(senderStyle, Color.GREEN);
                             
-                            doc.insertString(doc.getLength(), "AI助手: ", senderStyle);
+                            doc.insertString(doc.getLength(), "AI助手: \n", senderStyle);
                             aiMessageStartPos = doc.getLength(); // 记录AI消息内容开始位置
                         } catch (Exception e) {
                             api.logging().logToError("添加AI助手前缀失败: " + e.getMessage());
@@ -494,6 +494,11 @@ public class ChatPanel extends JPanel {
 
     private void stopStreaming() {
         if (currentWorker != null && !currentWorker.isDone()) {
+            // 先取消流式输出连接
+            if (apiClient != null) {
+                apiClient.cancelStreaming();
+            }
+            // 然后取消 SwingWorker
             currentWorker.cancel(true);
             isStreaming = false;
             sendButton.setEnabled(true);
@@ -530,6 +535,8 @@ public class ChatPanel extends JPanel {
     private void clearContext() {
         chatHistory.clear();
         chatArea.setText("");
+        // 清空 Assistant 的聊天记忆（共享实例）
+        apiClient.clearContext();
         api.logging().logToOutput("聊天上下文已清空");
     }
 
