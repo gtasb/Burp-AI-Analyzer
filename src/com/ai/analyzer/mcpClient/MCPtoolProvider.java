@@ -8,6 +8,7 @@ import dev.langchain4j.mcp.client.transport.http.HttpMcpTransport;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 import java.util.List;
+import java.util.function.BiFunction;
 
 
 public class MCPtoolProvider {
@@ -38,18 +39,63 @@ public class MCPtoolProvider {
                 .build();
     }
 
+    /**
+     * 创建 MCP 工具提供者（不带映射和过滤）
+     */
     public McpToolProvider createToolProvider(McpClient mcpClient) {
-        return McpToolProvider.builder()
-                .mcpClients(mcpClient)
-                //.filterToolNames("get_issue", "get_issue_comments", "list_issues")
-                .build();
+        return createToolProviderWithMapping(mcpClient, null, (String[]) null);
     }
 
+    /**
+     * 创建 MCP 工具提供者（带工具名称过滤）
+     * @param mcpClient MCP 客户端
+     * @param filterToolNames 要过滤的工具名称
+     * @return MCP 工具提供者
+     */
     public McpToolProvider createToolProvider(McpClient mcpClient, String ... filterToolNames) {
-        return McpToolProvider.builder()
-                .mcpClients(mcpClient)
-                .filterToolNames(filterToolNames)
-                .build();
+        return createToolProviderWithMapping(mcpClient, null, filterToolNames);
+    }
+    
+    /**
+     * 创建 MCP 工具提供者（带映射配置）
+     * @param mcpClient MCP 客户端
+     * @param mappingConfig 映射配置（可为 null，表示不使用映射）
+     * @return MCP 工具提供者
+     */
+    public McpToolProvider createToolProviderWithMapping(McpClient mcpClient, McpToolMappingConfig mappingConfig) {
+        return createToolProviderWithMapping(mcpClient, mappingConfig, (String[]) null);
+    }
+    
+    /**
+     * 创建 MCP 工具提供者（带映射配置和工具名称过滤）
+     * @param mcpClient MCP 客户端
+     * @param mappingConfig 映射配置（可为 null，表示不使用映射）
+     * @param filterToolNames 要过滤的工具名称（可选）
+     * @return MCP 工具提供者
+     */
+    public McpToolProvider createToolProviderWithMapping(McpClient mcpClient, McpToolMappingConfig mappingConfig, String ... filterToolNames) {
+        var builder = McpToolProvider.builder()
+                .mcpClients(mcpClient);
+        
+        // 如果提供了映射配置，应用工具规范映射
+        // 注意：不能同时设置 toolNameMapper 和 toolSpecificationMapper
+        // 因此我们只使用 toolSpecificationMapper，在其中同时处理名称映射和描述映射
+        if (mappingConfig != null) {
+            // 应用工具规范映射（包含名称映射和描述映射）
+            // 根据 LangChain4j 文档：https://docs.langchain4j.dev/tutorials/mcp#mcp-tool-specification-mapping
+            // McpToolProvider 支持 toolSpecificationMapper 方法，可以修改工具的名称、描述、参数等
+            BiFunction<McpClient, ToolSpecification, ToolSpecification> toolSpecMapper = mappingConfig.getToolSpecMapper();
+            if (toolSpecMapper != null) {
+                builder.toolSpecificationMapper(toolSpecMapper);
+            }
+        }
+        
+        // 如果提供了工具名称过滤，应用过滤
+        if (filterToolNames != null && filterToolNames.length > 0) {
+            builder.filterToolNames(filterToolNames);
+        }
+        
+        return builder.build();
     }
     
     /**

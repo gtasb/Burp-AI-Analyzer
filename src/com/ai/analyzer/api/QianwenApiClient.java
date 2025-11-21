@@ -2,6 +2,7 @@ package com.ai.analyzer.api;
 
 import com.ai.analyzer.Agent.Assistant;
 import com.ai.analyzer.mcpClient.MCPtoolProvider;
+import com.ai.analyzer.mcpClient.McpToolMappingConfig;
 import com.ai.analyzer.mcpClient.ToolExecutionFormatter;
 
 import java.util.concurrent.CompletableFuture;
@@ -272,7 +273,7 @@ public class QianwenApiClient {
     private void ensureAssistantInitialized() {
         // 如果 assistant 为 null，创建新的实例（使用最新的 chatModel）
         if (assistant == null) {
-            // 获取或创建 MCP 工具提供者
+            // 获取或创建 MCP 工具提供者（带映射配置）
             if (mcpToolProvider == null) {
                 try {
                     MCPtoolProvider mcpProviderHelper = new MCPtoolProvider();
@@ -280,9 +281,17 @@ public class QianwenApiClient {
                     McpClient mcpClient = mcpProviderHelper.createMcpClient(transport);
                     // 等待连接稳定
                     Thread.sleep(1000);
-                    mcpToolProvider = mcpProviderHelper.createToolProvider(mcpClient);
+                    
+                    // 创建 Burp MCP 工具映射配置（包含中文名称和描述映射）
+                    McpToolMappingConfig mappingConfig = McpToolMappingConfig.createBurpMapping();
+                    
+                    // 使用映射配置创建 Tool Provider
+                    // 只保留 create_repeater_tab 和 send_to_intruder 工具
+                    mcpToolProvider = mcpProviderHelper.createToolProviderWithMapping(mcpClient, mappingConfig, 
+                    "create_repeater_tab", "send_to_intruder");
+
                     if (api != null) {
-                        api.logging().logToOutput("[QianwenApiClient] MCP 工具提供者初始化成功");
+                        api.logging().logToOutput("[QianwenApiClient] MCP 工具提供者初始化成功（已应用工具名称和描述映射）");
                     }
                 } catch (Exception e) {
                     // MCP 服务器不可用，不影响主要功能
@@ -619,9 +628,22 @@ public class QianwenApiClient {
                     .onPartialThinking((PartialThinking partialThinking) -> {
                         logDebug("Thinking: " + partialThinking);
                     })
-                    // 可选：处理中间响应
+                    // 处理中间响应（工具执行后的 AI 继续输出）
+                    // 这是关键：当工具执行完成后，AI 会基于工具结果继续输出
+                    // 我们需要从中间响应中提取文本内容并传递给 UI
                     .onIntermediateResponse((ChatResponse intermediateResponse) -> {
                         logDebug("Intermediate response received");
+                        // 检查中间响应是否包含文本内容（工具执行后的 AI 继续输出）
+                        if (intermediateResponse != null && intermediateResponse.aiMessage() != null) {
+                            String text = intermediateResponse.aiMessage().text();
+                            if (text != null && !text.isEmpty()) {
+                                // 将中间响应的文本内容传递给 UI
+                                // 这样 AI 在工具执行后继续输出的内容能够实时显示
+                                onChunk.accept(text);
+                                contentChunkCount[0]++;
+                                logDebug("Intermediate response text: " + (text.length() > 100 ? text.substring(0, 100) + "..." : text));
+                            }
+                        }
                     })
                     // 工具执行前的回调
                     .beforeToolExecution((BeforeToolExecution beforeToolExecution) -> {
@@ -634,6 +656,15 @@ public class QianwenApiClient {
                     // 工具执行后的回调
                     .onToolExecuted((ToolExecution toolExecution) -> {
                         logDebug("Tool executed: " + toolExecution);
+                        // 工具执行完成后，AI 会基于工具结果继续输出
+                        // 这些输出会通过 onIntermediateResponse 和 onPartialResponse 传递
+                        if (toolExecution != null) {
+                            // result() 返回的是 String，直接使用
+                            String resultText = toolExecution.result();
+                            if (resultText != null && !resultText.isEmpty()) {
+                                logDebug("Tool execution result: " + (resultText.length() > 200 ? resultText.substring(0, 200) + "..." : resultText));
+                            }
+                        }
                     })
                     // 完成响应时
                     .onCompleteResponse((ChatResponse response) -> {
