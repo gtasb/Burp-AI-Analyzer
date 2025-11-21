@@ -1,17 +1,16 @@
 package com.ai.analyzer.mcpClient;
 
-import dev.langchain4j.mcp.McpToolProvider;
 import dev.langchain4j.mcp.client.McpClient;
 import dev.langchain4j.mcp.client.DefaultMcpClient;
 import dev.langchain4j.mcp.client.transport.McpTransport;
 import dev.langchain4j.mcp.client.transport.http.HttpMcpTransport;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
-import java.util.List;
+
 import java.util.function.BiFunction;
 
 
-public class MCPtoolProvider {
+public class McpToolProvider {
 
     private McpTransport transport;
     private McpClient mcpClient;
@@ -42,7 +41,7 @@ public class MCPtoolProvider {
     /**
      * 创建 MCP 工具提供者（不带映射和过滤）
      */
-    public McpToolProvider createToolProvider(McpClient mcpClient) {
+    public dev.langchain4j.mcp.McpToolProvider createToolProvider(McpClient mcpClient) {
         return createToolProviderWithMapping(mcpClient, null, (String[]) null);
     }
 
@@ -52,7 +51,7 @@ public class MCPtoolProvider {
      * @param filterToolNames 要过滤的工具名称
      * @return MCP 工具提供者
      */
-    public McpToolProvider createToolProvider(McpClient mcpClient, String ... filterToolNames) {
+    public dev.langchain4j.mcp.McpToolProvider createToolProvider(McpClient mcpClient, String ... filterToolNames) {
         return createToolProviderWithMapping(mcpClient, null, filterToolNames);
     }
     
@@ -62,7 +61,7 @@ public class MCPtoolProvider {
      * @param mappingConfig 映射配置（可为 null，表示不使用映射）
      * @return MCP 工具提供者
      */
-    public McpToolProvider createToolProviderWithMapping(McpClient mcpClient, McpToolMappingConfig mappingConfig) {
+    public dev.langchain4j.mcp.McpToolProvider createToolProviderWithMapping(McpClient mcpClient, McpToolMappingConfig mappingConfig) {
         return createToolProviderWithMapping(mcpClient, mappingConfig, (String[]) null);
     }
     
@@ -73,8 +72,8 @@ public class MCPtoolProvider {
      * @param filterToolNames 要过滤的工具名称（可选）
      * @return MCP 工具提供者
      */
-    public McpToolProvider createToolProviderWithMapping(McpClient mcpClient, McpToolMappingConfig mappingConfig, String ... filterToolNames) {
-        var builder = McpToolProvider.builder()
+    public dev.langchain4j.mcp.McpToolProvider createToolProviderWithMapping(McpClient mcpClient, McpToolMappingConfig mappingConfig, String ... filterToolNames) {
+        var builder = dev.langchain4j.mcp.McpToolProvider.builder()
                 .mcpClients(mcpClient);
         
         // 如果提供了映射配置，应用工具规范映射

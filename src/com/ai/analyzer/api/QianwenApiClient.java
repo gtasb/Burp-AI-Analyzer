@@ -1,7 +1,7 @@
 package com.ai.analyzer.api;
 
 import com.ai.analyzer.Agent.Assistant;
-import com.ai.analyzer.mcpClient.MCPtoolProvider;
+import com.ai.analyzer.mcpClient.McpToolProvider;
 import com.ai.analyzer.mcpClient.McpToolMappingConfig;
 import com.ai.analyzer.mcpClient.ToolExecutionFormatter;
 
@@ -15,7 +15,6 @@ import com.ai.analyzer.model.PluginSettings;
 import burp.api.montoya.MontoyaApi;
 
 import dev.langchain4j.community.model.dashscope.QwenChatRequestParameters;
-import dev.langchain4j.mcp.McpToolProvider;
 import dev.langchain4j.mcp.client.McpClient;
 import dev.langchain4j.mcp.client.transport.McpTransport;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
@@ -59,7 +58,7 @@ public class QianwenApiClient {
     private boolean isFirstInitialization = true; // 是否是第一次初始化
     private boolean needsReinitialization = false; // 标记是否需要重新初始化（延迟初始化，避免频繁重建）
     private Assistant assistant; // 共享的 Assistant 实例，用于保持上下文
-    private McpToolProvider mcpToolProvider; // MCP 工具提供者（共享实例）
+    private dev.langchain4j.mcp.McpToolProvider mcpToolProvider; // MCP 工具提供者（共享实例）
     private MessageWindowChatMemory chatMemory; // 共享的聊天记忆，用于保持上下文（即使 Assistant 重新创建也保留）
     private volatile TokenStream currentTokenStream; // 当前活动的 TokenStream，用于取消流式输出
 
@@ -276,7 +275,7 @@ public class QianwenApiClient {
             // 获取或创建 MCP 工具提供者（带映射配置）
             if (mcpToolProvider == null) {
                 try {
-                    MCPtoolProvider mcpProviderHelper = new MCPtoolProvider();
+                    McpToolProvider mcpProviderHelper = new McpToolProvider();
                     McpTransport transport = mcpProviderHelper.createTransport();
                     McpClient mcpClient = mcpProviderHelper.createMcpClient(transport);
                     // 等待连接稳定
@@ -287,8 +286,9 @@ public class QianwenApiClient {
                     
                     // 使用映射配置创建 Tool Provider
                     // 只保留 create_repeater_tab 和 send_to_intruder 工具
-                    mcpToolProvider = mcpProviderHelper.createToolProviderWithMapping(mcpClient, mappingConfig, 
-                    "create_repeater_tab", "send_to_intruder");
+                    //mcpToolProvider = mcpProviderHelper.createToolProviderWithMapping(mcpClient, mappingConfig, 
+                    //"create_repeater_tab", "send_to_intruder");
+                    mcpToolProvider = mcpProviderHelper.createToolProviderWithMapping(mcpClient, mappingConfig);    
 
                     if (api != null) {
                         api.logging().logToOutput("[QianwenApiClient] MCP 工具提供者初始化成功（已应用工具名称和描述映射）");
@@ -528,7 +528,7 @@ public class QianwenApiClient {
         String systemContent = "你是一个专业的Web安全测试专家，擅长分析HTTP请求和响应中的潜在漏洞，也能直接进行渗透测试。\n\n"
             + "工作要求：\n"
             + "只输出可能存在的owasp top 10或中危及以上安全风险，不要输出低危和无风险的项，并且给出对风险点的渗透测试建议，根据上下文信息，辅助渗透测试工程师继续进行渗透测试；\n"
-            + "你只有在用户主动请求你使用提供的工具来调用Burp Suite的功能时，才能使用提供的工具来调用Burp Suite的功能，\n"
+            //+ "你只有在用户主动请求你使用提供的工具来调用Burp Suite的功能时，才能使用提供的工具来调用Burp Suite的功能，\n"
             + "可以以markdown格式输出，但不要输出代码表格格式，不要输出'---'；\n"
             + "格式简洁，突出重点，不要冗长描述。";
 

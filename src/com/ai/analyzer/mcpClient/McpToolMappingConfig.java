@@ -197,17 +197,50 @@ public class McpToolMappingConfig {
         Map<String, String> descriptionMappings = new HashMap<>();
         
         // HTTP 请求功能
-        descriptionMappings.put("send_http1_request", "发送 HTTP/1.1 请求到指定目标并返回响应。用于测试和验证漏洞。");
-        descriptionMappings.put("send_http2_request", "发送 HTTP/2 请求到指定目标并返回响应。支持 HTTP/2 协议特性。");
-        descriptionMappings.put("create_repeater_tab", "在 Burp Repeater 中创建新标签页，用于手动修改和重放请求。");
-        descriptionMappings.put("send_to_intruder", "将请求发送到 Burp Intruder，用于自动化攻击和模糊测试。");
+        descriptionMappings.put("send_http1_request", "发送 HTTP/1.1 请求到指定目标并返回响应。用于测试和验证漏洞。\n" +
+                "参数：\n" +
+                "- targetHostname: 目标主机名\n" +
+                "- targetPort: 目标端口号\n" +
+                "- usesHttps: 是否使用HTTPS\n" +
+                "- requestContent: 请求内容\n" +
+                "- tabName: 标签页名称，尽量使用中文命名");
+
+        descriptionMappings.put("send_http2_request", "发送 HTTP/2 请求到指定目标并返回响应。支持 HTTP/2 协议特性。\n" +
+                "参数：\n" +
+                "- targetHostname: 目标主机名\n" +
+                "- targetPort: 目标端口号\n" +
+                "- usesHttps: 是否使用HTTPS\n" +
+                "- requestContent: 请求内容\n" +
+                "- tabName: 标签页名称，尽量使用中文命名");
+
+        descriptionMappings.put("create_repeater_tab", "在 Burp Repeater 中创建新标签页，用于手动修改和重放请求。\n" + 
+                "优先级：\n" + 
+                "低于send_http1_request和send_http2_request，因为create_repeater_tab是手动创建标签页，而send_http1_request和send_http2_request是自动发送请求。\n" +
+                "可以搭配get_active_editor_contents使用，获取当前活动消息编辑器的内容，然后使用set_active_editor_contents设置请求内容。\n" +
+                "参数：\n" +
+                "- targetHostname: 目标主机名\n" +
+                "- targetPort: 目标端口号\n" +
+                "- usesHttps: 是否使用HTTPS\n" +
+                "- requestContent: 请求内容\n" +
+                "- tabName: 标签页名称，尽量使用中文命名");
+
+        descriptionMappings.put("send_to_intruder", "将请求发送到 Burp Intruder，多用于批量爆破payload。\n" +
+                "优先级：\n" + 
+                "低于send_http1_request和send_http2_request\n" +
+                "可以搭配get_active_editor_contents使用，获取当前活动消息编辑器的内容，然后使用set_active_editor_contents设置请求内容。\n" +
+                "参数：\n" +
+                "- targetHostname: 目标主机名\n" +
+                "- targetPort: 目标端口号\n" +
+                "- usesHttps: 是否使用HTTPS\n" +
+                "- requestContent: 请求内容\n" +
+                "- tabName: 标签页名称，尽量使用中文命名");
         
         // 编码/解码工具
-        descriptionMappings.put("url_encode", "对字符串进行 URL 编码，将特殊字符转换为 URL 安全格式。");
+        descriptionMappings.put("url_encode", "对字符串进行 URL 编码，将特殊字符转换为 URL 格式。");
         descriptionMappings.put("url_decode", "对 URL 编码的字符串进行解码，还原原始字符串。");
         descriptionMappings.put("base64_encode", "将字符串进行 Base64 编码。");
         descriptionMappings.put("base64_decode", "将 Base64 编码的字符串进行解码。");
-        descriptionMappings.put("generate_random_string", "生成指定长度和字符集的随机字符串，用于测试和生成令牌。");
+        descriptionMappings.put("generate_random_string", "生成指定长度和字符集的随机字符串，用于fuzz。");
         
         // 配置管理
         descriptionMappings.put("output_project_options", "以 JSON 格式输出当前项目的所有配置选项。");
