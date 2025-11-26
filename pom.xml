@@ -88,6 +88,13 @@
         <version>1.8.0-beta15</version>
     </dependency>
 
+    <!-- Easy RAG 模块 -->
+    <dependency>
+        <groupId>dev.langchain4j</groupId>
+        <artifactId>langchain4j-easy-rag</artifactId>
+        <version>1.8.0-beta15</version>
+    </dependency>
+
     <!-- 用于 JSON 处理（推荐使用）-->
     <dependency>
         <groupId>com.fasterxml.jackson.core</groupId>
@@ -101,6 +108,19 @@
         <artifactId>lombok</artifactId>
         <version>1.18.34</version>
         <scope>provided</scope>
+    </dependency>
+
+    <!-- Apache Tika 用于解析文档 -->
+    <dependency>
+       <groupId>dev.langchain4j</groupId>
+       <artifactId>langchain4j-document-parser-apache-tika</artifactId>
+       <version>1.8.0-beta15</version>
+   </dependency>
+
+    <dependency>
+        <groupId>commons-io</groupId>
+        <artifactId>commons-io</artifactId>
+        <version>2.15.1</version>
     </dependency>
 
 
@@ -179,6 +199,15 @@
                         </goals>
                     </execution>
                 </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.6.2</version>
+                <configuration>
+                    <mainClass>com.ai.analyzer.rag.RagProvider</mainClass>
+                    <includeProjectDependencies>true</includeProjectDependencies>
+                </configuration>
             </plugin>
         </plugins>
     </build>

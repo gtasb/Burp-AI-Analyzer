@@ -10,11 +10,11 @@ public class AIExtension implements BurpExtension {
     @Override
     public void initialize(MontoyaApi api) {
         // 设置插件名称
-        api.extension().setName("AI漏洞分析助手");
+        api.extension().setName("Ai Analyzer");
 
         // 创建AI分析标签页
         AIAnalyzerTab analyzerTab = new AIAnalyzerTab(api);
-        api.userInterface().registerSuiteTab("AI-Analyzer", analyzerTab.getUiComponent());
+        api.userInterface().registerSuiteTab("Ai Analyzer", analyzerTab.getUiComponent());
 
         // 注册右键菜单
         AIContextMenuProvider contextMenuProvider = new AIContextMenuProvider(api, analyzerTab);

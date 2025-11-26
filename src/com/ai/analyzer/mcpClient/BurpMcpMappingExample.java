@@ -27,7 +27,7 @@ public class BurpMcpMappingExample {
         
         try {
             // 1. 创建 Transport
-            McpToolProvider mcpProvider = new McpToolProvider();
+            BurpMcpToolProvider mcpProvider = new BurpMcpToolProvider();
             McpTransport transport = mcpProvider.createTransport();
             
             // 2. 创建 MCP Client
@@ -71,7 +71,7 @@ public class BurpMcpMappingExample {
         System.out.println("\n=== 示例 2: 自定义工具名称映射 ===");
         
         try {
-            McpToolProvider mcpProvider = new McpToolProvider();
+            BurpMcpToolProvider mcpProvider = new BurpMcpToolProvider();
             McpTransport transport = mcpProvider.createTransport();
             McpClient mcpClient = mcpProvider.createMcpClient(transport);
             Thread.sleep(2000);
@@ -109,7 +109,7 @@ public class BurpMcpMappingExample {
         System.out.println("\n=== 示例 3: 工具过滤 + 名称映射 ===");
         
         try {
-            McpToolProvider mcpProvider = new McpToolProvider();
+            BurpMcpToolProvider mcpProvider = new BurpMcpToolProvider();
             McpTransport transport = mcpProvider.createTransport();
             McpClient mcpClient = mcpProvider.createMcpClient(transport);
             Thread.sleep(2000);
@@ -156,7 +156,7 @@ public class BurpMcpMappingExample {
         System.out.println("\n=== 示例 4: 工具规范映射（修改工具描述） ===");
         
         try {
-            McpToolProvider mcpProvider = new McpToolProvider();
+            BurpMcpToolProvider mcpProvider = new BurpMcpToolProvider();
             McpTransport transport = mcpProvider.createTransport();
             McpClient mcpClient = mcpProvider.createMcpClient(transport);
             Thread.sleep(2000);
@@ -208,7 +208,7 @@ public class BurpMcpMappingExample {
         System.out.println("\n=== 示例 5: 在 AI Service 中使用映射后的工具 ===");
         
         try {
-            McpToolProvider mcpProvider = new McpToolProvider();
+            BurpMcpToolProvider mcpProvider = new BurpMcpToolProvider();
             McpTransport transport = mcpProvider.createTransport();
             McpClient mcpClient = mcpProvider.createMcpClient(transport);
             Thread.sleep(2000);

@@ -6,6 +6,7 @@ import com.ai.analyzer.model.RequestData;
 import com.ai.analyzer.api.QianwenApiClient;
 import com.ai.analyzer.utils.HttpSyntaxHighlighter;
 import com.ai.analyzer.utils.MarkdownRenderer;
+import com.ai.analyzer.utils.HttpFormatter;
 // import com.example.ai.analyzer.Tools.ToolDefinitions;
 // import com.example.ai.analyzer.Tools.ToolExecutor;
 
@@ -28,6 +29,10 @@ public class AIAnalyzerTab extends JPanel {
     private JTextField modelField;
     private JCheckBox enableThinkingCheckBox;
     private JCheckBox enableSearchCheckBox;
+    private JCheckBox enableMcpCheckBox;
+    private JTextField mcpUrlField;
+    private JCheckBox enableRagCheckBox;
+    private JTextField ragDocumentsPathField;
     private JTable requestListTable;
     private DefaultTableModel requestTableModel;
     private JTextPane requestTextPane;
@@ -81,20 +86,34 @@ public class AIAnalyzerTab extends JPanel {
         setLayout(new BorderLayout(10, 10));
         setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
+        // 创建主标签页
+        JTabbedPane mainTabbedPane = new JTabbedPane();
+        
+        // 第一个标签页：主要功能（请求分析）
+        JPanel mainPanel = createMainPanel();
+        mainTabbedPane.addTab("请求分析", mainPanel);
+        
+        // 第二个标签页：配置
+        JPanel configPanel = createConfigTabPanel();
+        mainTabbedPane.addTab("配置", configPanel);
+        
+        add(mainTabbedPane, BorderLayout.CENTER);
+    }
+    
+    /**
+     * 创建主功能面板（第一个标签页）
+     * 包含请求列表、请求/响应显示、分析结果等
+     */
+    private JPanel createMainPanel() {
+        JPanel mainPanel = new JPanel(new BorderLayout(10, 10));
+        
         // 创建主分割面板
         JSplitPane mainSplitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
         mainSplitPane.setDividerLocation(400);
 
-        // 左侧面板
-        JPanel leftPanel = new JPanel(new BorderLayout());
-        
-        // 配置面板
-        JPanel configPanel = createConfigPanel();
-        leftPanel.add(configPanel, BorderLayout.NORTH);
-        
-        // 请求列表面板
+        // 左侧面板：请求列表
         JPanel requestListPanel = createRequestListPanel();
-        leftPanel.add(requestListPanel, BorderLayout.CENTER);
+        mainSplitPane.setLeftComponent(requestListPanel);
         
         // 右侧面板
         JSplitPane rightSplitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
@@ -108,58 +127,205 @@ public class AIAnalyzerTab extends JPanel {
         JPanel resultPanel = createResultPanel();
         rightSplitPane.setBottomComponent(resultPanel);
 
-        mainSplitPane.setLeftComponent(leftPanel);
         mainSplitPane.setRightComponent(rightSplitPane);
-
-        add(mainSplitPane, BorderLayout.CENTER);
+        mainPanel.add(mainSplitPane, BorderLayout.CENTER);
 
         // 按钮面板
         JPanel buttonPanel = createButtonPanel();
-        add(buttonPanel, BorderLayout.SOUTH);
+        mainPanel.add(buttonPanel, BorderLayout.SOUTH);
+        
+        return mainPanel;
     }
-
-    private JPanel createConfigPanel() {
-        JPanel panel = new JPanel(new BorderLayout(5, 5));
-        panel.setBorder(BorderFactory.createTitledBorder("API配置（通义千问）"));
-
-        // API配置
-        JPanel apiConfigPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 5));
-
-        apiConfigPanel.add(new JLabel("API URL:"));
-        apiUrlField = new JTextField("https://dashscope.aliyuncs.com/api/v1", 25);
-        apiConfigPanel.add(apiUrlField);
-
-        apiConfigPanel.add(new JLabel("API Key:"));
-        apiKeyField = new JTextField("", 20);
-        apiConfigPanel.add(apiKeyField);
-
-        apiConfigPanel.add(new JLabel("Model:"));
-        modelField = new JTextField("qwen-max", 10);
-        apiConfigPanel.add(modelField);
-
-        panel.add(apiConfigPanel, BorderLayout.CENTER);
+    
+    /**
+     * 创建配置标签页（第二个标签页）
+     * 包含 API 配置、功能开关、设置按钮等
+     */
+    private JPanel createConfigTabPanel() {
+        JPanel configPanel = new JPanel(new BorderLayout(10, 10));
+        configPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
         
-        // 底部面板：包含功能开关和设置按钮
-        JPanel bottomPanel = new JPanel(new BorderLayout(5, 5));
+        // 创建配置面板（复用原有的 createConfigPanel 逻辑，但去掉边框）
+        JPanel apiConfigPanel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.anchor = GridBagConstraints.WEST;
         
-        // 功能开关面板
-        JPanel featurePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 5));
-        enableThinkingCheckBox = new JCheckBox("启用深度思考", true);
-        enableSearchCheckBox = new JCheckBox("启用网络搜索", false);
+        // API URL
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        apiConfigPanel.add(new JLabel("API URL:"), gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        apiUrlField = new JTextField("https://dashscope.aliyuncs.com/api/v1", 30);
+        apiConfigPanel.add(apiUrlField, gbc);
         
-        // 添加监听器，当复选框状态改变时更新API客户端配置
-        enableThinkingCheckBox.addActionListener(e -> {
-            apiClient.setEnableThinking(enableThinkingCheckBox.isSelected());
+        // API Key
+        gbc.gridx = 0;
+        gbc.gridy = 1;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        apiConfigPanel.add(new JLabel("API Key:"), gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        apiKeyField = new JTextField("", 30);
+        apiConfigPanel.add(apiKeyField, gbc);
+        
+        // Model
+        gbc.gridx = 0;
+        gbc.gridy = 2;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        apiConfigPanel.add(new JLabel("Model:"), gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        modelField = new JTextField("qwen-max", 30);
+        apiConfigPanel.add(modelField, gbc);
+        
+        // MCP 配置分隔线
+        gbc.gridx = 0;
+        gbc.gridy = 3;
+        gbc.gridwidth = 2;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        JSeparator mcpSeparator = new JSeparator();
+        apiConfigPanel.add(mcpSeparator, gbc);
+        
+        // MCP 工具调用开关
+        gbc.gridx = 0;
+        gbc.gridy = 4;
+        gbc.gridwidth = 1;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        apiConfigPanel.add(new JLabel("启用 MCP 工具:"), gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        enableMcpCheckBox = new JCheckBox("启用 MCP 工具调用", false);
+        enableMcpCheckBox.addActionListener(e -> {
+            boolean enabled = enableMcpCheckBox.isSelected();
+            mcpUrlField.setEnabled(enabled);
+            apiClient.setEnableMcp(enabled);
+            if (enabled && !mcpUrlField.getText().trim().isEmpty()) {
+                apiClient.setMcpUrl(mcpUrlField.getText().trim());
+            }
         });
-        enableSearchCheckBox.addActionListener(e -> {
-            apiClient.setEnableSearch(enableSearchCheckBox.isSelected());
-        });
+        apiConfigPanel.add(enableMcpCheckBox, gbc);
         
-        featurePanel.add(enableThinkingCheckBox);
-        featurePanel.add(enableSearchCheckBox);
+        // MCP URL
+        gbc.gridx = 0;
+        gbc.gridy = 5;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        apiConfigPanel.add(new JLabel("MCP 地址:"), gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        mcpUrlField = new JTextField("http://localhost:9876/sse", 30);
+        mcpUrlField.setEnabled(false); // 默认禁用，只有启用 MCP 时才可用
+        mcpUrlField.addActionListener(e -> {
+            if (enableMcpCheckBox.isSelected()) {
+                apiClient.setMcpUrl(mcpUrlField.getText().trim());
+            }
+        });
+        mcpUrlField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            @Override
+            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                updateMcpUrl();
+            }
+            @Override
+            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                updateMcpUrl();
+            }
+            @Override
+            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+                updateMcpUrl();
+            }
+            private void updateMcpUrl() {
+                if (enableMcpCheckBox.isSelected() && !mcpUrlField.getText().trim().isEmpty()) {
+                    apiClient.setMcpUrl(mcpUrlField.getText().trim());
+                }
+            }
+        });
+        apiConfigPanel.add(mcpUrlField, gbc);
+        
+        // RAG 配置分隔线
+        gbc.gridx = 0;
+        gbc.gridy = 6;
+        gbc.gridwidth = 2;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        JSeparator ragSeparator = new JSeparator();
+        apiConfigPanel.add(ragSeparator, gbc);
+        
+        // RAG 工具调用开关
+        gbc.gridx = 0;
+        gbc.gridy = 7;
+        gbc.gridwidth = 1;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        apiConfigPanel.add(new JLabel("启用 RAG:"), gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        enableRagCheckBox = new JCheckBox("启用 RAG（检索增强生成）", false);
+        enableRagCheckBox.addActionListener(e -> {
+            boolean enabled = enableRagCheckBox.isSelected();
+            ragDocumentsPathField.setEnabled(enabled);
+            apiClient.setEnableRag(enabled);
+            if (enabled && !ragDocumentsPathField.getText().trim().isEmpty()) {
+                apiClient.setRagDocumentsPath(ragDocumentsPathField.getText().trim());
+            }
+        });
+        apiConfigPanel.add(enableRagCheckBox, gbc);
+        
+        // RAG 文档路径
+        gbc.gridx = 0;
+        gbc.gridy = 8;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        apiConfigPanel.add(new JLabel("RAG 文档路径:"), gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        ragDocumentsPathField = new JTextField("", 30);
+        ragDocumentsPathField.setEnabled(false); // 默认禁用，只有启用 RAG 时才可用
+        ragDocumentsPathField.addActionListener(e -> {
+            if (enableRagCheckBox.isSelected()) {
+                apiClient.setRagDocumentsPath(ragDocumentsPathField.getText().trim());
+            }
+        });
+        ragDocumentsPathField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            @Override
+            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                updateRagDocumentsPath();
+            }
+            @Override
+            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                updateRagDocumentsPath();
+            }
+            @Override
+            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+                updateRagDocumentsPath();
+            }
+            private void updateRagDocumentsPath() {
+                if (enableRagCheckBox.isSelected() && !ragDocumentsPathField.getText().trim().isEmpty()) {
+                    apiClient.setRagDocumentsPath(ragDocumentsPathField.getText().trim());
+                }
+            }
+        });
+        apiConfigPanel.add(ragDocumentsPathField, gbc);
         
         // 设置按钮
-        JPanel settingsPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 5));
+        gbc.gridx = 0;
+        gbc.gridy = 9;
+        gbc.gridwidth = 2;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        JPanel settingsPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 5));
         saveSettingsButton = new JButton("保存设置");
         loadSettingsButton = new JButton("加载设置");
         
@@ -168,14 +334,36 @@ public class AIAnalyzerTab extends JPanel {
         
         settingsPanel.add(saveSettingsButton);
         settingsPanel.add(loadSettingsButton);
+        apiConfigPanel.add(settingsPanel, gbc);
         
-        bottomPanel.add(featurePanel, BorderLayout.WEST);
-        bottomPanel.add(settingsPanel, BorderLayout.EAST);
+        configPanel.add(apiConfigPanel, BorderLayout.NORTH);
         
-        panel.add(bottomPanel, BorderLayout.SOUTH);
-
-        return panel;
+        // 添加说明文本
+        JTextArea infoArea = new JTextArea();
+        infoArea.setEditable(false);
+        infoArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
+        infoArea.setBackground(new Color(245, 245, 245));
+        infoArea.setForeground(new Color(100, 100, 100));
+        infoArea.setText("配置说明：\n" +
+                        "• API URL: 通义千问 API 的端点地址\n" +
+                        "• API Key: 从阿里云 DashScope 获取的 API 密钥\n" +
+                        "• Model: 使用的模型名称（如 qwen-max, qwen-plus 等）\n" +
+                        "• 启用 MCP 工具: 启用后 AI 可以调用 Burp Suite 的 MCP 工具\n" +
+                        "• MCP 地址: Burp MCP Server 的 SSE 端点地址（默认: http://localhost:9876/sse）\n" +
+                        "• 启用 RAG: 启用检索增强生成，AI 可以从指定文档目录中检索相关信息\n" +
+                        "• RAG 文档路径: 包含文档的目录路径（支持 PDF、Word、HTML 等格式，会递归加载子目录）\n" +
+                        "\n提示：配置修改后会自动应用到 API 客户端，无需重启插件。\n" +
+                        "功能开关（深度思考、网络搜索）位于\"请求分析\"标签页中。\n" +
+                        "注意：启用 RAG 后，每次加载插件时会自动加载文档到内存中（向量化过程）。");
+        infoArea.setLineWrap(true);
+        infoArea.setWrapStyleWord(true);
+        JScrollPane infoScrollPane = new JScrollPane(infoArea);
+        infoScrollPane.setBorder(BorderFactory.createTitledBorder("配置说明"));
+        configPanel.add(infoScrollPane, BorderLayout.CENTER);
+        
+        return configPanel;
     }
+
 
     private JPanel createRequestListPanel() {
         JPanel panel = new JPanel(new BorderLayout());
@@ -290,8 +478,28 @@ public class AIAnalyzerTab extends JPanel {
     }
 
     private JPanel createButtonPanel() {
-        JPanel panel = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 5));
-
+        JPanel panel = new JPanel(new BorderLayout(5, 5));
+        
+        // 左侧：功能开关
+        JPanel featurePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 5));
+        featurePanel.setBorder(BorderFactory.createTitledBorder("功能开关"));
+        enableThinkingCheckBox = new JCheckBox("启用深度思考", true);
+        enableSearchCheckBox = new JCheckBox("启用网络搜索", false);
+        
+        // 添加监听器，当复选框状态改变时更新API客户端配置
+        enableThinkingCheckBox.addActionListener(e -> {
+            apiClient.setEnableThinking(enableThinkingCheckBox.isSelected());
+        });
+        enableSearchCheckBox.addActionListener(e -> {
+            apiClient.setEnableSearch(enableSearchCheckBox.isSelected());
+        });
+        
+        featurePanel.add(enableThinkingCheckBox);
+        featurePanel.add(enableSearchCheckBox);
+        panel.add(featurePanel, BorderLayout.WEST);
+        
+        // 右侧：操作按钮
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 5));
         analyzeButton = new JButton("开始分析");
         clearButton = new JButton("清空结果");
         stopButton = new JButton("停止");
@@ -302,9 +510,11 @@ public class AIAnalyzerTab extends JPanel {
         
         stopButton.setEnabled(false); // 初始状态禁用
 
-        panel.add(analyzeButton);
-        panel.add(clearButton);
-        panel.add(stopButton);
+        buttonPanel.add(analyzeButton);
+        buttonPanel.add(clearButton);
+        buttonPanel.add(stopButton);
+        
+        panel.add(buttonPanel, BorderLayout.EAST);
 
         return panel;
     }
@@ -379,17 +589,10 @@ public class AIAnalyzerTab extends JPanel {
             @Override
             protected Void doInBackground() throws Exception {
                 try {
-                    // 构建HTTP内容（与QianwenApiClient的buildAnalysisContent逻辑一致）
-                    StringBuilder httpBuilder = new StringBuilder();
-                    if (finalRequestData != null) {
-                        httpBuilder.append("=== HTTP请求 ===\n");
-                        httpBuilder.append(finalRequestData.getRequest());
-                        if (finalRequestData.hasResponse()) {
-                            httpBuilder.append("\n\n=== HTTP响应 ===\n");
-                            httpBuilder.append(finalRequestData.getResponse());
-                        }
-                    }
-                    String httpContent = httpBuilder.toString();
+                    // 构建HTTP内容（使用统一的格式化工具）
+                    String httpContent = finalRequestData != null 
+                        ? finalRequestData.getFullRequestResponse() 
+                        : "";
                     
                     // 在开始分析前清空结果面板
                     SwingUtilities.invokeLater(() -> {
@@ -589,7 +792,11 @@ public class AIAnalyzerTab extends JPanel {
                 modelField.getText().trim(),
                 userPromptArea.getText().trim(),
                 enableThinkingCheckBox.isSelected(),
-                enableSearchCheckBox.isSelected()
+                enableSearchCheckBox.isSelected(),
+                enableMcpCheckBox.isSelected(),
+                mcpUrlField.getText().trim(),
+                enableRagCheckBox.isSelected(),
+                ragDocumentsPathField.getText().trim()
             );
 
             java.io.ObjectOutputStream oos = new java.io.ObjectOutputStream(new java.io.FileOutputStream("ai_analyzer_settings.dat"));
@@ -658,6 +865,12 @@ public class AIAnalyzerTab extends JPanel {
         userPromptArea.setText(settings.getUserPrompt());
         enableThinkingCheckBox.setSelected(settings.isEnableThinking());
         enableSearchCheckBox.setSelected(settings.isEnableSearch());
+        enableMcpCheckBox.setSelected(settings.isEnableMcp());
+        mcpUrlField.setText(settings.getMcpUrl());
+        mcpUrlField.setEnabled(settings.isEnableMcp());
+        enableRagCheckBox.setSelected(settings.isEnableRag());
+        ragDocumentsPathField.setText(settings.getRagDocumentsPath());
+        ragDocumentsPathField.setEnabled(settings.isEnableRag());
         
         // 更新API客户端配置
         apiClient.setApiUrl(settings.getApiUrl());
@@ -665,6 +878,11 @@ public class AIAnalyzerTab extends JPanel {
         apiClient.setModel(settings.getModel());
         apiClient.setEnableThinking(settings.isEnableThinking());
         apiClient.setEnableSearch(settings.isEnableSearch());
+        apiClient.setEnableMcp(settings.isEnableMcp());
+        apiClient.setMcpUrl(settings.getMcpUrl());
+        apiClient.setEnableRag(settings.isEnableRag());
+        apiClient.setRagDocumentsPath(settings.getRagDocumentsPath());
+        apiClient.ensureRagInitialized();
     }
     
     /**

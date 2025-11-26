@@ -1,9 +1,16 @@
 package com.ai.analyzer.api;
 
 import com.ai.analyzer.Agent.Assistant;
-import com.ai.analyzer.mcpClient.McpToolProvider;
+import com.ai.analyzer.mcpClient.BurpMcpToolProvider;
 import com.ai.analyzer.mcpClient.McpToolMappingConfig;
 import com.ai.analyzer.mcpClient.ToolExecutionFormatter;
+//import com.ai.analyzer.rag.RagProvider;
+import com.ai.analyzer.utils.RequestSourceDetector;
+import burp.api.montoya.http.message.HttpRequestResponse;
+import dev.langchain4j.data.document.Document;
+import dev.langchain4j.data.document.loader.FileSystemDocumentLoader;
+import dev.langchain4j.data.segment.TextSegment;
+import dev.langchain4j.rag.content.retriever.ContentRetriever;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
@@ -22,12 +29,15 @@ import dev.langchain4j.model.chat.response.PartialThinking;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.tool.BeforeToolExecution;
 import dev.langchain4j.service.tool.ToolExecution;
 import dev.langchain4j.community.model.dashscope.QwenStreamingChatModel;
+import dev.langchain4j.store.embedding.EmbeddingStoreIngestor;
+import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
 import lombok.Getter;
 import lombok.Setter;
 //import dev.langchain4j.model.chat.listener.ChatModelListener;
@@ -55,10 +65,20 @@ public class QianwenApiClient {
     private boolean enableThinking;// 是否启用思考过程
     @Getter
     private boolean enableSearch; // 是否启用搜索
+    @Getter
+    private boolean enableMcp = false; // 是否启用 MCP 工具调用
+    @Getter
+    private String mcpUrl = "http://localhost:9876/sse"; // MCP 服务器地址
+    @Getter
+    private boolean enableRag = false; // 是否启用 RAG
+    @Getter
+    private String ragDocumentsPath = ""; // RAG 文档路径
     private boolean isFirstInitialization = true; // 是否是第一次初始化
     private boolean needsReinitialization = false; // 标记是否需要重新初始化（延迟初始化，避免频繁重建）
     private Assistant assistant; // 共享的 Assistant 实例，用于保持上下文
     private dev.langchain4j.mcp.McpToolProvider mcpToolProvider; // MCP 工具提供者（共享实例）
+    //private RagProvider ragProvider; // RAG 提供者（暂时不用 RagProvider 实现）
+    private InMemoryEmbeddingStore<TextSegment> ragEmbeddingStore; // RAG 向量存储
     private MessageWindowChatMemory chatMemory; // 共享的聊天记忆，用于保持上下文（即使 Assistant 重新创建也保留）
     private volatile TokenStream currentTokenStream; // 当前活动的 TokenStream，用于取消流式输出
 
@@ -272,11 +292,16 @@ public class QianwenApiClient {
     private void ensureAssistantInitialized() {
         // 如果 assistant 为 null，创建新的实例（使用最新的 chatModel）
         if (assistant == null) {
-            // 获取或创建 MCP 工具提供者（带映射配置）
-            if (mcpToolProvider == null) {
+            // 如果启用了 MCP，获取或创建 MCP 工具提供者（带映射配置）
+            if (enableMcp && mcpToolProvider == null) {
                 try {
-                    McpToolProvider mcpProviderHelper = new McpToolProvider();
-                    McpTransport transport = mcpProviderHelper.createTransport();
+                    BurpMcpToolProvider mcpProviderHelper = new BurpMcpToolProvider();
+                    // 使用配置的 MCP URL
+                    String mcpUrlValue = (this.mcpUrl != null && !this.mcpUrl.trim().isEmpty()) 
+                        ? this.mcpUrl.trim() 
+                        : "http://localhost:9876/sse";
+                    // 直接调用方法（类已重命名，不再有冲突）
+                    McpTransport transport = mcpProviderHelper.createTransport(mcpUrlValue);
                     McpClient mcpClient = mcpProviderHelper.createMcpClient(transport);
                     // 等待连接稳定
                     Thread.sleep(1000);
@@ -288,18 +313,24 @@ public class QianwenApiClient {
                     // 只保留 create_repeater_tab 和 send_to_intruder 工具
                     //mcpToolProvider = mcpProviderHelper.createToolProviderWithMapping(mcpClient, mappingConfig, 
                     //"create_repeater_tab", "send_to_intruder");
-                    mcpToolProvider = mcpProviderHelper.createToolProviderWithMapping(mcpClient, mappingConfig);    
+                    mcpToolProvider = mcpProviderHelper.createToolProviderWithMapping(mcpClient, mappingConfig,
+                    "create_repeater_tab", "send_http1_request", "send_http2_request", "get_proxy_http_history", "get_proxy_http_history_regex",
+                    "get_proxy_websocket_history", "get_proxy_websocket_history_regex", "get_scanner_issues", "set_task_execution_engine_state",
+                    "get_active_editor_contents","set_active_editor_contents");    
 
                     if (api != null) {
-                        api.logging().logToOutput("[QianwenApiClient] MCP 工具提供者初始化成功（已应用工具名称和描述映射）");
+                        api.logging().logToOutput("[QianwenApiClient] MCP 工具提供者初始化成功（已应用工具名称和描述映射，地址: " + mcpUrl + "）");
                     }
                 } catch (Exception e) {
                     // MCP 服务器不可用，不影响主要功能
                     if (api != null) {
-                        api.logging().logToOutput("[QianwenApiClient] MCP 工具提供者初始化失败（MCP 服务器可能未运行）: " + e.getMessage());
+                        api.logging().logToOutput("[QianwenApiClient] MCP 工具提供者初始化失败（MCP 服务器可能未运行，地址: " + mcpUrl + "）: " + e.getMessage());
                     }
                     mcpToolProvider = null;
                 }
+            } else if (!enableMcp) {
+                // 如果禁用了 MCP，确保 mcpToolProvider 为 null
+                mcpToolProvider = null;
             }
             
             // 确保 ChatMemory 已创建（共享实例，保持上下文）
@@ -320,6 +351,19 @@ public class QianwenApiClient {
                 assistantBuilder.toolProvider(mcpToolProvider);
                 if (api != null) {
                     api.logging().logToOutput("[QianwenApiClient] 已启用 MCP 工具支持");
+                }
+            }
+            
+            // 如果启用了 RAG，添加 ContentRetriever
+            if (enableRag) {
+                ensureRagInitialized();
+                if (ragEmbeddingStore != null) {
+                    assistantBuilder.contentRetriever(EmbeddingStoreContentRetriever.from(ragEmbeddingStore));
+                    if (api != null) {
+                        api.logging().logToOutput("[QianwenApiClient] 已启用 RAG 内容检索");
+                    }
+                } else if (api != null) {
+                    api.logging().logToOutput("[QianwenApiClient] 警告: RAG 已启用但向量存储未准备就绪");
                 }
             }
             
@@ -419,6 +463,8 @@ public class QianwenApiClient {
                     ? settings.getModel() : defaultModel;
                 this.enableThinking = settings.isEnableThinking();
                 this.enableSearch = settings.isEnableSearch();
+                this.enableRag = settings.isEnableRag();
+                this.ragDocumentsPath = settings.getRagDocumentsPath() != null ? settings.getRagDocumentsPath() : "";
                 return;
             }
         }
@@ -436,6 +482,8 @@ public class QianwenApiClient {
                     ? settings.getModel() : defaultModel;
                 this.enableThinking = settings.isEnableThinking();
                 this.enableSearch = settings.isEnableSearch();
+                this.enableRag = settings.isEnableRag();
+                this.ragDocumentsPath = settings.getRagDocumentsPath() != null ? settings.getRagDocumentsPath() : "";
                 return;
             }
         }
@@ -446,6 +494,21 @@ public class QianwenApiClient {
         this.model = defaultModel;
         this.enableThinking = false;
         this.enableSearch = false;
+        this.enableRag = false;
+        this.ragDocumentsPath = "";
+    }
+
+    /**
+     * 在需要时初始化 RAG（例如 UI 完成加载配置后）
+     */
+    public void ensureRagInitialized() {
+        if (!enableRag) {
+            return;
+        }
+        if (ragEmbeddingStore != null) {
+            return;
+        }
+        initializeRagEmbeddingStore();
     }
     
     /**
@@ -503,6 +566,149 @@ public class QianwenApiClient {
             updateChatModelAndAssistant();
         }
     }
+    
+    /**
+     * 设置是否启用 MCP 工具调用
+     * 如果启用状态改变，需要重新初始化 Assistant
+     */
+    public void setEnableMcp(boolean enableMcp) {
+        if (this.enableMcp != enableMcp) {
+            this.enableMcp = enableMcp;
+            // 如果禁用 MCP，清空 mcpToolProvider
+            if (!enableMcp) {
+                mcpToolProvider = null;
+            }
+            // 清空 Assistant，下次使用时重新创建（会根据新的 enableMcp 状态决定是否启用 MCP）
+            assistant = null;
+            if (api != null) {
+                api.logging().logToOutput("[QianwenApiClient] MCP 工具调用已" + (enableMcp ? "启用" : "禁用"));
+            }
+        }
+    }
+    
+    /**
+     * 设置 MCP 服务器地址
+     * 如果地址改变，需要重新初始化 MCP 工具提供者
+     */
+    public void setMcpUrl(String mcpUrl) {
+        if (mcpUrl == null || mcpUrl.trim().isEmpty()) {
+            mcpUrl = "http://localhost:9876/sse";
+        }
+        if (!this.mcpUrl.equals(mcpUrl.trim())) {
+            this.mcpUrl = mcpUrl.trim();
+            // 如果已启用 MCP，清空 mcpToolProvider，下次使用时重新创建
+            if (enableMcp) {
+                mcpToolProvider = null;
+                assistant = null; // 清空 Assistant，下次使用时重新创建
+                if (api != null) {
+                    api.logging().logToOutput("[QianwenApiClient] MCP 地址已更新: " + mcpUrl);
+                }
+            }
+        }
+    }
+    
+    /**
+     * 设置是否启用 RAG
+     * 如果启用状态改变，需要重新初始化 RAG 和 Assistant
+     */
+    public void setEnableRag(boolean enableRag) {
+        if (this.enableRag != enableRag) {
+            this.enableRag = enableRag;
+            // 旧逻辑：使用 RagProvider 管理 RAG
+            /*
+            if (enableRag) {
+                initializeRagProvider();
+            } else {
+                if (ragProvider != null) {
+                    ragProvider.clear();
+                    ragProvider = null;
+                }
+            }
+            */
+            // 新逻辑：直接维护内存向量存储
+            if (enableRag) {
+                initializeRagEmbeddingStore();
+            } else {
+                ragEmbeddingStore = null;
+            }
+            // 清空 Assistant，下次使用时重新创建（会根据新的 enableRag 状态决定是否启用 RAG）
+            assistant = null;
+            if (api != null) {
+                api.logging().logToOutput("[QianwenApiClient] RAG 已" + (enableRag ? "启用" : "禁用"));
+            }
+        }
+    }
+    
+    /**
+     * 设置 RAG 文档路径
+     * 如果路径改变且已启用 RAG，需要重新加载文档
+     */
+    public void setRagDocumentsPath(String ragDocumentsPath) {
+        if (ragDocumentsPath == null) {
+            ragDocumentsPath = "";
+        }
+        if (!this.ragDocumentsPath.equals(ragDocumentsPath.trim())) {
+            this.ragDocumentsPath = ragDocumentsPath.trim();
+            // 如果已启用 RAG，重新加载文档
+            if (enableRag) {
+                initializeRagEmbeddingStore();
+                // 清空 Assistant，下次使用时重新创建
+                assistant = null;
+                if (api != null) {
+                    api.logging().logToOutput("[QianwenApiClient] RAG 文档路径已更新: " + ragDocumentsPath);
+                }
+            }
+        }
+    }
+    
+    /*
+     * 旧版实现：使用 RagProvider 进行文档加载和向量化
+     * private void initializeRagProvider() { ... }
+     */
+    
+    /**
+     * 初始化 RAG 向量存储并加载文档
+     * 只有在启用 RAG 且文档路径不为空时才会执行
+     */
+    private void initializeRagEmbeddingStore() {
+        if (!enableRag) {
+            return;
+        }
+        
+        String normalizedPath = ragDocumentsPath != null ? ragDocumentsPath.trim() : "";
+        if (normalizedPath.isEmpty()) {
+            if (api != null) {
+                api.logging().logToOutput("[QianwenApiClient] RAG 文档路径为空，跳过初始化");
+            }
+            return;
+        }
+        
+        try {
+            List<Document> documents = FileSystemDocumentLoader.loadDocumentsRecursively(normalizedPath);
+            if (documents == null || documents.isEmpty()) {
+                ragEmbeddingStore = null;
+                if (api != null) {
+                    api.logging().logToOutput("[QianwenApiClient] RAG 文档加载失败或未找到文档: " + normalizedPath);
+                }
+                return;
+            }
+            
+            InMemoryEmbeddingStore<TextSegment> embeddingStore = new InMemoryEmbeddingStore<>();
+            EmbeddingStoreIngestor.ingest(documents, embeddingStore);
+            ragEmbeddingStore = embeddingStore;
+            
+            if (api != null) {
+                api.logging().logToOutput("[QianwenApiClient] RAG 文档加载成功: " + normalizedPath + "，向量存储已构建（共 " 
+                        + documents.size() + " 条）");
+            }
+        } catch (Exception e) {
+            ragEmbeddingStore = null;
+            if (api != null) {
+                api.logging().logToError("[QianwenApiClient] 初始化 RAG 向量存储失败: " + e.getMessage());
+                e.printStackTrace();
+            }
+        }
+    }
 
     /*
       设置工具定义列表
@@ -515,8 +721,30 @@ public class QianwenApiClient {
     //     this.toolCallHandler = handler;
     // }
 
-    // 流式输出方法 - 使用LangChain4j
+    // 流式输出方法 - 使用LangChain4j（带请求来源检测）
+    public void analyzeRequestStream(HttpRequestResponse requestResponse, String userPrompt, Consumer<String> onChunk) throws Exception {
+        // 检测请求来源
+        RequestSourceDetector.RequestSourceInfo sourceInfo = null;
+        if (api != null && requestResponse != null) {
+            sourceInfo = RequestSourceDetector.detectSource(api, requestResponse);
+        }
+        
+        // 格式化 HTTP 内容
+        String httpRequest = requestResponse != null 
+            ? com.ai.analyzer.utils.HttpFormatter.formatHttpRequestResponse(requestResponse)
+            : "";
+        
+        // 调用原始方法
+        analyzeRequestStream(httpRequest, userPrompt, sourceInfo, onChunk);
+    }
+    
+    // 流式输出方法 - 使用LangChain4j（原始方法，保持向后兼容）
     public void analyzeRequestStream(String httpRequest, String userPrompt, Consumer<String> onChunk) throws Exception {
+        analyzeRequestStream(httpRequest, userPrompt, null, onChunk);
+    }
+    
+    // 流式输出方法 - 使用LangChain4j（内部方法，支持请求来源信息）
+    private void analyzeRequestStream(String httpRequest, String userPrompt, RequestSourceDetector.RequestSourceInfo sourceInfo, Consumer<String> onChunk) throws Exception {
         // 确保 ChatModel 已初始化且使用最新的配置（延迟初始化）
         ensureChatModelInitialized();
         
@@ -533,7 +761,7 @@ public class QianwenApiClient {
             + "格式简洁，突出重点，不要冗长描述。";
 
         SystemMessage systemMessage = new SystemMessage(systemContent);
-        String userContent = buildAnalysisContent(httpRequest, userPrompt);
+        String userContent = buildAnalysisContent(httpRequest, userPrompt, sourceInfo);
         UserMessage userMessage = new UserMessage(userContent);
 
         logInfo("使用LangChain4j发送流式请求");
@@ -565,63 +793,13 @@ public class QianwenApiClient {
                 // 保存当前 TokenStream 引用，以便可以取消
                 currentTokenStream = tokenStream;
 
-                // 尝试使用带 context 的回调方法以获取 StreamingHandle
-                // 根据 LangChain4j 文档，应该使用 onPartialResponse(PartialResponse, PartialResponseContext)
-                // 但 TokenStream 的 API 可能使用简化的版本，所以先尝试带 context 的版本，如果失败则回退
-                try {
-                    // 尝试使用反射调用带 context 的方法
-                    java.lang.reflect.Method onPartialResponseMethod = null;
-                    for (java.lang.reflect.Method method : tokenStream.getClass().getMethods()) {
-                        if (method.getName().equals("onPartialResponse") && method.getParameterCount() == 2) {
-                            onPartialResponseMethod = method;
-                            break;
-                        }
+                // 使用标准方法处理部分响应
+                tokenStream.onPartialResponse((String partialResponse) -> {
+                    if (partialResponse != null && !partialResponse.isEmpty()) {
+                        onChunk.accept(partialResponse);
+                        contentChunkCount[0]++;
                     }
-                    
-                    if (onPartialResponseMethod != null) {
-                        // 使用带 context 的版本
-                        java.util.function.BiConsumer<String, Object> biConsumer = (String partialResponse, Object context) -> {
-                            // 尝试从 context 获取 StreamingHandle
-                            if (context != null) {
-                                try {
-                                    java.lang.reflect.Method streamingHandleMethod = context.getClass().getMethod("streamingHandle");
-                                    Object handle = streamingHandleMethod.invoke(context);
-                                    if (handle != null) {
-                                        // 保存 StreamingHandle 到 currentTokenStream（复用字段）
-                                        currentTokenStream = (TokenStream) handle;
-                                        if (api != null) {
-                                            api.logging().logToOutput("[QianwenApiClient] 已获取 StreamingHandle");
-                                        }
-                                    }
-                                } catch (Exception e) {
-                                    // 忽略，继续使用 TokenStream
-                                }
-                            }
-                            
-                            if (partialResponse != null && !partialResponse.isEmpty()) {
-                                onChunk.accept(partialResponse);
-                                contentChunkCount[0]++;
-                            }
-                        };
-                        onPartialResponseMethod.invoke(tokenStream, biConsumer);
-                    } else {
-                        // 回退到不带 context 的版本
-                        tokenStream.onPartialResponse((String partialResponse) -> {
-                            if (partialResponse != null && !partialResponse.isEmpty()) {
-                                onChunk.accept(partialResponse);
-                                contentChunkCount[0]++;
-                            }
-                        });
-                    }
-                } catch (Exception e) {
-                    // 如果反射失败，使用标准方法
-                    tokenStream.onPartialResponse((String partialResponse) -> {
-                        if (partialResponse != null && !partialResponse.isEmpty()) {
-                            onChunk.accept(partialResponse);
-                            contentChunkCount[0]++;
-                        }
-                    });
-                }
+                });
                 
                 tokenStream
                     // 可选：处理思考过程
@@ -778,8 +956,13 @@ public class QianwenApiClient {
         logInfo("流式输出处理完成，总chunk数: " + contentChunkCount[0]);
     }
 
-    private String buildAnalysisContent(String httpContent, String userPrompt) {
+    private String buildAnalysisContent(String httpContent, String userPrompt, RequestSourceDetector.RequestSourceInfo sourceInfo) {
         StringBuilder content = new StringBuilder();
+
+        // 如果有请求来源信息，添加到顶部
+        if (sourceInfo != null) {
+            content.append(sourceInfo.format()).append("\n\n");
+        }
 
         // 如果有HTTP内容，先添加HTTP内容（不重复分析要求，system message已说明）
         if (httpContent != null && !httpContent.trim().isEmpty()) {

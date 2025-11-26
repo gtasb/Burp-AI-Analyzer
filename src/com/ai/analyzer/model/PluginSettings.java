@@ -11,6 +11,10 @@ public class PluginSettings implements Serializable {
     private String userPrompt;
     private boolean enableThinking = true; // 默认启用思考过程
     private boolean enableSearch = true; // 默认启用搜索
+    private boolean enableMcp = false; // 默认禁用 MCP 工具调用
+    private String mcpUrl = "http://localhost:9876/sse"; // MCP 服务器地址
+    private boolean enableRag = false; // 默认禁用 RAG
+    private String ragDocumentsPath = ""; // RAG 文档路径
     
     public PluginSettings() {
         // 默认设置
@@ -20,6 +24,10 @@ public class PluginSettings implements Serializable {
         this.userPrompt = "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议";
         this.enableThinking = true;
         this.enableSearch = true;
+        this.enableMcp = false;
+        this.mcpUrl = "http://localhost:9876/sse";
+        this.enableRag = false;
+        this.ragDocumentsPath = "";
     }
     public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt) {
         this.apiUrl = apiUrl;
@@ -36,6 +44,36 @@ public class PluginSettings implements Serializable {
         this.userPrompt = userPrompt;
         this.enableThinking = enableThinking;
         this.enableSearch = enableSearch;
+        this.enableMcp = false;
+        this.mcpUrl = "http://localhost:9876/sse";
+        this.enableRag = false;
+        this.ragDocumentsPath = "";
+    }
+    
+    public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt, boolean enableThinking, boolean enableSearch, boolean enableMcp, String mcpUrl) {
+        this.apiUrl = apiUrl;
+        this.apiKey = apiKey;
+        this.model = model;
+        this.userPrompt = userPrompt;
+        this.enableThinking = enableThinking;
+        this.enableSearch = enableSearch;
+        this.enableMcp = enableMcp;
+        this.mcpUrl = mcpUrl;
+        this.enableRag = false;
+        this.ragDocumentsPath = "";
+    }
+    
+    public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt, boolean enableThinking, boolean enableSearch, boolean enableMcp, String mcpUrl, boolean enableRag, String ragDocumentsPath) {
+        this.apiUrl = apiUrl;
+        this.apiKey = apiKey;
+        this.model = model;
+        this.userPrompt = userPrompt;
+        this.enableThinking = enableThinking;
+        this.enableSearch = enableSearch;
+        this.enableMcp = enableMcp;
+        this.mcpUrl = mcpUrl;
+        this.enableRag = enableRag;
+        this.ragDocumentsPath = ragDocumentsPath;
     }
     
     // Getters and Setters
@@ -85,5 +123,37 @@ public class PluginSettings implements Serializable {
     
     public void setEnableSearch(boolean enableSearch) {
         this.enableSearch = enableSearch;
+    }
+    
+    public boolean isEnableMcp() {
+        return enableMcp;
+    }
+    
+    public void setEnableMcp(boolean enableMcp) {
+        this.enableMcp = enableMcp;
+    }
+    
+    public String getMcpUrl() {
+        return mcpUrl;
+    }
+    
+    public void setMcpUrl(String mcpUrl) {
+        this.mcpUrl = mcpUrl;
+    }
+    
+    public boolean isEnableRag() {
+        return enableRag;
+    }
+    
+    public void setEnableRag(boolean enableRag) {
+        this.enableRag = enableRag;
+    }
+    
+    public String getRagDocumentsPath() {
+        return ragDocumentsPath;
+    }
+    
+    public void setRagDocumentsPath(String ragDocumentsPath) {
+        this.ragDocumentsPath = ragDocumentsPath;
     }
 }

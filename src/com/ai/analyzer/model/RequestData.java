@@ -1,5 +1,6 @@
 package com.ai.analyzer.model;
 
+import com.ai.analyzer.utils.HttpFormatter;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 public class RequestData {
@@ -57,16 +58,7 @@ public class RequestData {
     }
 
     public String getFullRequestResponse() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("=== HTTP请求 ===\n");
-        sb.append(request);
-        
-        if (hasResponse) {
-            sb.append("\n\n=== HTTP响应 ===\n");
-            sb.append(response);
-        }
-        
-        return sb.toString();
+        return HttpFormatter.formatHttpRequestResponse(request, response);
     }
 
     @Override

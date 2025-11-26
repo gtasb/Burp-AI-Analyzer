@@ -10,7 +10,7 @@ import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 import java.util.function.BiFunction;
 
 
-public class McpToolProvider {
+public class BurpMcpToolProvider {
 
     private McpTransport transport;
     private McpClient mcpClient;
@@ -20,14 +20,26 @@ public class McpToolProvider {
      * 根据 curl 测试：Burp MCP Server 使用 SSE (Server-Sent Events) 协议
      * GET /sse 返回 SSE 流，服务器会提供动态的 /message?sessionId=xxx 端点
      * 注意：HttpMcpTransport 虽然已弃用，但这是唯一能连接 Burp MCP Server 的方式
+     * 
+     * @param sseUrl MCP 服务器的 SSE 端点 URL
+     * @return McpTransport 实例
      */
     @SuppressWarnings("deprecation")
-    public McpTransport createTransport() {
+    public McpTransport createTransport(String sseUrl) {
         return new HttpMcpTransport.Builder()
-                .sseUrl("http://localhost:9876/sse")   // Burp MCP Server SSE endpoint
+                .sseUrl(sseUrl)   // Burp MCP Server SSE endpoint
                 .logRequests(true)  // 在日志中查看请求流量
                 .logResponses(true)  // 在日志中查看响应流量
                 .build();
+    }
+    
+    /**
+     * 创建 Legacy HTTP Transport（使用默认 URL）
+     * @return McpTransport 实例
+     */
+    @SuppressWarnings("deprecation")
+    public McpTransport createTransport() {
+        return createTransport("http://localhost:9876/sse");
     }
 
     public McpClient createMcpClient(McpTransport transport) {
@@ -122,7 +134,7 @@ public class McpToolProvider {
 
     /*
     public static void main(String[] args) {
-        MCPtoolProvider mcpProvider = new MCPtoolProvider();
+        BurpMcpToolProvider mcpProvider = new BurpMcpToolProvider();
 
         try {
             System.out.println("=== 开始连接 MCP 服务器 ===");

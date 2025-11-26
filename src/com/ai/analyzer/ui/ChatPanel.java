@@ -3,6 +3,7 @@ package com.ai.analyzer.ui;
 import burp.api.montoya.MontoyaApi;
 import com.ai.analyzer.api.QianwenApiClient;
 import com.ai.analyzer.utils.MarkdownRenderer;
+import com.ai.analyzer.utils.HttpFormatter;
 // import com.example.ai.analyzer.Tools.ToolDefinitions;
 // import com.example.ai.analyzer.Tools.ToolExecutor;
 
@@ -299,15 +300,7 @@ public class ChatPanel extends JPanel {
                         contextBuilder.append("- 生成随机字符串\n\n"); */
                     }
                     
-                    // 添加聊天历史
-                    if (!chatHistory.isEmpty()) {
-                        contextBuilder.append("对话历史：\n");
-                        for (ChatMessage msg : chatHistory) {
-                            contextBuilder.append(msg.getRole()).append(": ").append(msg.getContent()).append("\n");
-                        }
-                        contextBuilder.append("\n");
-                    }
-                    
+                    // 注意：聊天历史由 LangChain4j 的 chatMemory 自动管理，不需要手动添加到上下文
                     contextBuilder.append("用户问题：").append(finalMessage);
 
                     // 在调用API前更新配置
@@ -318,24 +311,6 @@ public class ChatPanel extends JPanel {
                     debugLog("API URL: " + apiClient.getApiUrl());
                     debugLog("API Key: " + (apiClient.getApiKey().isEmpty() ? "未设置" : "已设置"));
                     debugLog("上下文:\n" + contextBuilder.toString());
-                    
-                    // 构建HTTP请求内容（如果有）
-                    String httpContent = "";
-                    if (currentRequest != null) {
-                        StringBuilder httpBuilder = new StringBuilder();
-                        httpBuilder.append("=== HTTP请求 ===\n");
-                        byte[] requestBytes = currentRequest.request().toByteArray().getBytes();
-                        String requestStr = new String(requestBytes, java.nio.charset.StandardCharsets.UTF_8);
-                        httpBuilder.append(requestStr).append("\n\n");
-                        
-                        if (currentRequest.response() != null) {
-                            httpBuilder.append("=== HTTP响应 ===\n");
-                            byte[] responseBytes = currentRequest.response().toByteArray().getBytes();
-                            String responseStr = new String(responseBytes, java.nio.charset.StandardCharsets.UTF_8);
-                            httpBuilder.append(responseStr).append("\n\n");
-                        }
-                        httpContent = httpBuilder.toString();
-                    }
                     
                     // 先在UI中添加AI助手前缀（只添加一次）
                     SwingUtilities.invokeLater(() -> {
@@ -352,10 +327,10 @@ public class ChatPanel extends JPanel {
                         }
                     });
                     
-                    // 调用API：第一个参数是HTTP请求内容，第二个参数是用户提示
+                    // 调用API：传递 HttpRequestResponse 对象以检测请求来源
                     api.logging().logToOutput("[ChatPanel] 开始调用analyzeRequestStream");
                     apiClient.analyzeRequestStream(
-                        httpContent,
+                        currentRequest,
                         finalMessage,
                         chunk -> {
                             api.logging().logToOutput("[ChatPanel] 收到内容chunk: " + (chunk.length() > 100 ? chunk.substring(0, 100) + "..." : chunk));
