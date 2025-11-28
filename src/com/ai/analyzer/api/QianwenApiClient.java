@@ -4,14 +4,9 @@ import com.ai.analyzer.Agent.Assistant;
 import com.ai.analyzer.mcpClient.BurpMcpToolProvider;
 import com.ai.analyzer.mcpClient.McpToolMappingConfig;
 import com.ai.analyzer.mcpClient.ToolExecutionFormatter;
-//import com.ai.analyzer.rag.RagProvider;
+import com.ai.analyzer.rag.RagContentManager;
 import com.ai.analyzer.utils.RequestSourceDetector;
 import burp.api.montoya.http.message.HttpRequestResponse;
-import dev.langchain4j.data.document.Document;
-import dev.langchain4j.data.document.loader.FileSystemDocumentLoader;
-import dev.langchain4j.data.segment.TextSegment;
-import dev.langchain4j.rag.content.retriever.ContentRetriever;
-
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.io.File;
@@ -29,19 +24,13 @@ import dev.langchain4j.model.chat.response.PartialThinking;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.tool.BeforeToolExecution;
 import dev.langchain4j.service.tool.ToolExecution;
 import dev.langchain4j.community.model.dashscope.QwenStreamingChatModel;
-import dev.langchain4j.store.embedding.EmbeddingStoreIngestor;
-import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
 import lombok.Getter;
-import lombok.Setter;
-//import dev.langchain4j.model.chat.listener.ChatModelListener;
-//import com.ai.analyzer.listener.DebugChatModelListener;
 
 
 public class QianwenApiClient {
@@ -59,7 +48,6 @@ public class QianwenApiClient {
      */
     // private JsonArray tools; // 工具定义列表
     // private Consumer<ToolCall> toolCallHandler; // 工具调用处理器
-    @Setter
     private MontoyaApi api; // Burp API 引用，用于日志输出
     @Getter
     private boolean enableThinking;// 是否启用思考过程
@@ -77,10 +65,16 @@ public class QianwenApiClient {
     private boolean needsReinitialization = false; // 标记是否需要重新初始化（延迟初始化，避免频繁重建）
     private Assistant assistant; // 共享的 Assistant 实例，用于保持上下文
     private dev.langchain4j.mcp.McpToolProvider mcpToolProvider; // MCP 工具提供者（共享实例）
-    //private RagProvider ragProvider; // RAG 提供者（暂时不用 RagProvider 实现）
-    private InMemoryEmbeddingStore<TextSegment> ragEmbeddingStore; // RAG 向量存储
+    private RagContentManager ragContentManager;
     private MessageWindowChatMemory chatMemory; // 共享的聊天记忆，用于保持上下文（即使 Assistant 重新创建也保留）
     private volatile TokenStream currentTokenStream; // 当前活动的 TokenStream，用于取消流式输出
+
+    public void setApi(MontoyaApi api) {
+        this.api = api;
+        if (ragContentManager != null) {
+            ragContentManager.updateApi(api);
+        }
+    }
 
     /**
      * 无参构造函数，自动从配置文件加载设置
@@ -314,7 +308,7 @@ public class QianwenApiClient {
                     //mcpToolProvider = mcpProviderHelper.createToolProviderWithMapping(mcpClient, mappingConfig, 
                     //"create_repeater_tab", "send_to_intruder");
                     mcpToolProvider = mcpProviderHelper.createToolProviderWithMapping(mcpClient, mappingConfig,
-                    "create_repeater_tab", "send_http1_request", "send_http2_request", "get_proxy_http_history", "get_proxy_http_history_regex",
+                    "send_http1_request", "send_http2_request", "get_proxy_http_history", "get_proxy_http_history_regex",
                     "get_proxy_websocket_history", "get_proxy_websocket_history_regex", "get_scanner_issues", "set_task_execution_engine_state",
                     "get_active_editor_contents","set_active_editor_contents");    
 
@@ -354,16 +348,16 @@ public class QianwenApiClient {
                 }
             }
             
-            // 如果启用了 RAG，添加 ContentRetriever
+            // 如果启用了 RAG，添加 ContentRetriever（使用缓存实例）
             if (enableRag) {
                 ensureRagInitialized();
-                if (ragEmbeddingStore != null) {
-                    assistantBuilder.contentRetriever(EmbeddingStoreContentRetriever.from(ragEmbeddingStore));
+                if (ragContentManager != null && ragContentManager.isReady()) {
+                    assistantBuilder.contentRetriever(ragContentManager.getContentRetriever());
                     if (api != null) {
                         api.logging().logToOutput("[QianwenApiClient] 已启用 RAG 内容检索");
                     }
                 } else if (api != null) {
-                    api.logging().logToOutput("[QianwenApiClient] 警告: RAG 已启用但向量存储未准备就绪");
+                    api.logging().logToOutput("[QianwenApiClient] 警告: RAG 已启用但内容检索器尚未就绪");
                 }
             }
             
@@ -505,10 +499,10 @@ public class QianwenApiClient {
         if (!enableRag) {
             return;
         }
-        if (ragEmbeddingStore != null) {
-            return;
+        RagContentManager manager = getOrCreateRagContentManager();
+        if (!manager.isReady()) {
+            manager.load(ragDocumentsPath);
         }
-        initializeRagEmbeddingStore();
     }
     
     /**
@@ -627,9 +621,9 @@ public class QianwenApiClient {
             */
             // 新逻辑：直接维护内存向量存储
             if (enableRag) {
-                initializeRagEmbeddingStore();
+                loadRagContent();
             } else {
-                ragEmbeddingStore = null;
+                clearRagContentManager();
             }
             // 清空 Assistant，下次使用时重新创建（会根据新的 enableRag 状态决定是否启用 RAG）
             assistant = null;
@@ -651,12 +645,14 @@ public class QianwenApiClient {
             this.ragDocumentsPath = ragDocumentsPath.trim();
             // 如果已启用 RAG，重新加载文档
             if (enableRag) {
-                initializeRagEmbeddingStore();
+                loadRagContent();
                 // 清空 Assistant，下次使用时重新创建
                 assistant = null;
                 if (api != null) {
                     api.logging().logToOutput("[QianwenApiClient] RAG 文档路径已更新: " + ragDocumentsPath);
                 }
+            } else {
+                clearRagContentManager();
             }
         }
     }
@@ -666,60 +662,29 @@ public class QianwenApiClient {
      * private void initializeRagProvider() { ... }
      */
     
-    /**
-     * 初始化 RAG 向量存储并加载文档
-     * 只有在启用 RAG 且文档路径不为空时才会执行
-     */
-    private void initializeRagEmbeddingStore() {
+    private void loadRagContent() {
         if (!enableRag) {
+            clearRagContentManager();
             return;
         }
-        
-        String normalizedPath = ragDocumentsPath != null ? ragDocumentsPath.trim() : "";
-        if (normalizedPath.isEmpty()) {
-            if (api != null) {
-                api.logging().logToOutput("[QianwenApiClient] RAG 文档路径为空，跳过初始化");
-            }
-            return;
+        getOrCreateRagContentManager().load(ragDocumentsPath);
+    }
+
+    private RagContentManager getOrCreateRagContentManager() {
+        if (ragContentManager == null) {
+            ragContentManager = new RagContentManager(api);
+        } else {
+            ragContentManager.updateApi(api);
         }
-        
-        try {
-            List<Document> documents = FileSystemDocumentLoader.loadDocumentsRecursively(normalizedPath);
-            if (documents == null || documents.isEmpty()) {
-                ragEmbeddingStore = null;
-                if (api != null) {
-                    api.logging().logToOutput("[QianwenApiClient] RAG 文档加载失败或未找到文档: " + normalizedPath);
-                }
-                return;
-            }
-            
-            InMemoryEmbeddingStore<TextSegment> embeddingStore = new InMemoryEmbeddingStore<>();
-            EmbeddingStoreIngestor.ingest(documents, embeddingStore);
-            ragEmbeddingStore = embeddingStore;
-            
-            if (api != null) {
-                api.logging().logToOutput("[QianwenApiClient] RAG 文档加载成功: " + normalizedPath + "，向量存储已构建（共 " 
-                        + documents.size() + " 条）");
-            }
-        } catch (Exception e) {
-            ragEmbeddingStore = null;
-            if (api != null) {
-                api.logging().logToError("[QianwenApiClient] 初始化 RAG 向量存储失败: " + e.getMessage());
-                e.printStackTrace();
-            }
+        return ragContentManager;
+    }
+
+    private void clearRagContentManager() {
+        if (ragContentManager != null) {
+            ragContentManager.clear();
         }
     }
 
-    /*
-      设置工具定义列表
-     */
-    
-    /**
-     * 设置工具调用处理器
-     */
-    // public void setToolCallHandler(Consumer<ToolCall> handler) {
-    //     this.toolCallHandler = handler;
-    // }
 
     // 流式输出方法 - 使用LangChain4j（带请求来源检测）
     public void analyzeRequestStream(HttpRequestResponse requestResponse, String userPrompt, Consumer<String> onChunk) throws Exception {
@@ -991,36 +956,6 @@ public class QianwenApiClient {
         return content.toString();
     }
 
-    /**
-     * 工具调用数据类
-     */
-    /* Tools call 相关代码已注释
-    public static class ToolCall {
-        private String id;
-        private String name;
-        private String arguments;
-        
-        public ToolCall(String id, String name, String arguments) {
-            this.id = id;
-            this.name = name;
-            this.arguments = arguments;
-        }
-        
-        public String getId() {
-            return id;
-        }
-        
-        public String getName() {
-            return name;
-        }
-        
-        public String getArguments() {
-            return arguments;
-        }
-    }
-    */
-    
-    // 日志辅助方法
     private void logInfo(String message) {
         if (api != null) {
             api.logging().logToOutput("[QianwenApiClient] " + message);
@@ -1038,6 +973,7 @@ public class QianwenApiClient {
             api.logging().logToOutput("[QianwenApiClient] " + message);
         }
     }
+    
 
 
 }

@@ -16,6 +16,7 @@ import java.nio.file.FileSystems;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
 import java.nio.file.Paths;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -178,29 +179,32 @@ public class RagProvider {
     }
     
     /**
-     * 使用自定义 EmbeddingModel 创建 ContentRetriever
-     * 
-     * @param embeddingModel 自定义的 EmbeddingModel
-     * @param maxResults 最多返回的结果数量
-     * @param minScore 最小相似度分数（0.0-1.0）
+     * 基于传入文档临时创建 ContentRetriever
+     * 优先使用嵌入式索引，失败时回退到简单检索
      */
-    public void createContentRetriever(EmbeddingModel embeddingModel, int maxResults, double minScore) {
+    public ContentRetriever createContentRetriever(List<Document> documents) {
+        if (documents == null || documents.isEmpty()) {
+            if (api != null) {
+                api.logging().logToOutput("[RagProvider] 警告: 文档列表为空，无法创建 ContentRetriever");
+            }
+            return null;
+        }
+
         try {
-            this.contentRetriever = EmbeddingStoreContentRetriever.builder()
-                    .embeddingStore(embeddingStore)
-                    .embeddingModel(embeddingModel)
-                    .maxResults(maxResults)
-                    .minScore(minScore)
-                    .build();
-            
+            InMemoryEmbeddingStore<TextSegment> tempStore = new InMemoryEmbeddingStore<>();
+            EmbeddingStoreIngestor.ingest(documents, tempStore);
+
+            ContentRetriever retriever = EmbeddingStoreContentRetriever.from(tempStore);
             if (api != null) {
-                api.logging().logToOutput("[RagProvider] ContentRetriever 已创建（使用自定义 EmbeddingModel）");
+                api.logging().logToOutput("[RagProvider] ContentRetriever 已创建（向量检索）");
             }
-        } catch (Exception e) {
+            return retriever;
+        } catch (Throwable e) {
             if (api != null) {
-                api.logging().logToError("[RagProvider] 创建 ContentRetriever 失败: " + e.getMessage());
-                e.printStackTrace();
+                api.logging().logToError("[RagProvider] 创建向量 ContentRetriever 失败，回退到简单检索: " + e.getMessage());
             }
+            // 回退到轻量级检索，不依赖额外模型
+            return new SimpleDocumentContentRetriever(documents);
         }
     }
     
@@ -251,14 +255,14 @@ public class RagProvider {
         return embeddingStore;
     }
 
-    public static void main(String[] args) {
-        List<Document> documents = FileSystemDocumentLoader.loadDocumentsRecursively("E:\\HackTools\\develop\\PluginExample\\untitled\\PayloadsAllTheThings-master");
-        //InMemoryEmbeddingStore<TextSegment> store = null;
-        InMemoryEmbeddingStore<TextSegment> store = new InMemoryEmbeddingStore<>();
-        EmbeddingStoreIngestor.ingest(documents, store); // throws AssertionError;
-//        if (store.toString() != null) {
-//            System.out.println("[RagProvider] 索引成功");
-//        }
-    }
+//    public static void main(String[] args) {
+//        List<Document> documents = FileSystemDocumentLoader.loadDocumentsRecursively("E:\\HackTools\\PayloadsAllTheThings-master");
+////        System.out.println("[RagProvider] 索引开始");
+//        InMemoryEmbeddingStore<TextSegment> store = new InMemoryEmbeddingStore<>();
+//        EmbeddingStoreIngestor.ingest(documents, store); // throws AssertionError;
+////        if (store.toString() != null) {
+////            System.out.println("[RagProvider] 索引成功");
+////        }
+//    }
 }
 

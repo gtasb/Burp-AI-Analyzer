@@ -4,20 +4,22 @@ import burp.api.montoya.MontoyaApi;
 import com.ai.analyzer.model.PluginSettings;
 import com.ai.analyzer.model.RequestData;
 import com.ai.analyzer.api.QianwenApiClient;
-import com.ai.analyzer.utils.HttpSyntaxHighlighter;
 import com.ai.analyzer.utils.MarkdownRenderer;
-import com.ai.analyzer.utils.HttpFormatter;
 // import com.example.ai.analyzer.Tools.ToolDefinitions;
 // import com.example.ai.analyzer.Tools.ToolExecutor;
 
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
-import javax.swing.text.*;
+import javax.swing.text.BadLocationException;
+import javax.swing.text.StyledDocument;
 import java.awt.*;
 import java.util.ArrayList;
 import java.util.List;
 
-import burp.api.montoya.http.message.HttpRequestResponse;
+import burp.api.montoya.http.message.requests.HttpRequest;
+import burp.api.montoya.http.message.responses.HttpResponse;
+import burp.api.montoya.ui.editor.HttpRequestEditor;
+import burp.api.montoya.ui.editor.HttpResponseEditor;
 
 public class AIAnalyzerTab extends JPanel {
     private final MontoyaApi api;
@@ -35,8 +37,8 @@ public class AIAnalyzerTab extends JPanel {
     private JTextField ragDocumentsPathField;
     private JTable requestListTable;
     private DefaultTableModel requestTableModel;
-    private JTextPane requestTextPane;
-    private JTextPane responseTextPane;
+    private HttpRequestEditor requestEditor;
+    private HttpResponseEditor responseEditor;
     private JTextArea userPromptArea;
     private JTextPane resultTextPane;
     private JButton analyzeButton;
@@ -61,6 +63,8 @@ public class AIAnalyzerTab extends JPanel {
             "https://dashscope.aliyuncs.com/api/v1",
             ""
         );
+        this.requestEditor = api.userInterface().createHttpRequestEditor();
+        this.responseEditor = api.userInterface().createHttpResponseEditor();
         
         /* Tools call 相关代码已注释
         // 设置工具定义
@@ -385,6 +389,8 @@ public class AIAnalyzerTab extends JPanel {
                 if (selectedRow >= 0 && selectedRow < requestList.size()) {
                     RequestData requestData = requestList.get(selectedRow);
                     updateRequestDisplay(requestData);
+                } else {
+                    clearHttpEditors();
                 }
             }
         });
@@ -419,26 +425,12 @@ public class AIAnalyzerTab extends JPanel {
         // 左侧：请求区域
         JPanel requestPanel = new JPanel(new BorderLayout());
         requestPanel.setBorder(BorderFactory.createTitledBorder("HTTP请求"));
-        requestTextPane = new JTextPane();
-        requestTextPane.setEditable(false);
-        requestTextPane.setFont(new Font("Consolas", Font.PLAIN, 12));
-        requestTextPane.setContentType("text/plain");
-        requestTextPane.setBackground(Color.WHITE);
-        requestTextPane.setForeground(Color.BLACK);
-        JScrollPane requestScrollPane = new JScrollPane(requestTextPane);
-        requestPanel.add(requestScrollPane, BorderLayout.CENTER);
+        requestPanel.add(requestEditor.uiComponent(), BorderLayout.CENTER);
 
         // 右侧：响应区域
         JPanel responsePanel = new JPanel(new BorderLayout());
         responsePanel.setBorder(BorderFactory.createTitledBorder("HTTP响应"));
-        responseTextPane = new JTextPane();
-        responseTextPane.setEditable(false);
-        responseTextPane.setFont(new Font("Consolas", Font.PLAIN, 12));
-        responseTextPane.setContentType("text/plain");
-        responseTextPane.setBackground(Color.WHITE);
-        responseTextPane.setForeground(Color.BLACK);
-        JScrollPane responseScrollPane = new JScrollPane(responseTextPane);
-        responsePanel.add(responseScrollPane, BorderLayout.CENTER);
+        responsePanel.add(responseEditor.uiComponent(), BorderLayout.CENTER);
 
         splitPane.setLeftComponent(requestPanel);
         splitPane.setRightComponent(responsePanel);
@@ -520,11 +512,23 @@ public class AIAnalyzerTab extends JPanel {
     }
 
     private void updateRequestDisplay(RequestData requestData) {
-        HttpSyntaxHighlighter.highlightHttp(requestTextPane, requestData.getRequest());
-        if (requestData.getResponse() != null && !requestData.getResponse().trim().isEmpty()) {
-            HttpSyntaxHighlighter.highlightHttp(responseTextPane, requestData.getResponse());
+        if (requestData == null) {
+            clearHttpEditors();
+            return;
+        }
+
+        String requestText = requestData.getRequest() != null ? requestData.getRequest() : "";
+        if (requestText.isEmpty()) {
+            requestEditor.setRequest(HttpRequest.httpRequest());
         } else {
-            responseTextPane.setText("");
+            requestEditor.setRequest(HttpRequest.httpRequest(requestText));
+        }
+
+        String responseText = requestData.getResponse();
+        if (responseText != null && !responseText.trim().isEmpty()) {
+            responseEditor.setResponse(HttpResponse.httpResponse(responseText));
+        } else {
+            responseEditor.setResponse(HttpResponse.httpResponse());
         }
     }
 
@@ -706,7 +710,7 @@ public class AIAnalyzerTab extends JPanel {
 
     private void appendStreamChunk(String chunk) {
         try {
-            javax.swing.text.StyledDocument doc = resultTextPane.getStyledDocument();
+            StyledDocument doc = resultTextPane.getStyledDocument();
             javax.swing.text.Style regularStyle = doc.addStyle("regular", null);
             javax.swing.text.StyleConstants.setFontFamily(regularStyle, "Microsoft YaHei");
             javax.swing.text.StyleConstants.setFontSize(regularStyle, 12);
@@ -720,7 +724,7 @@ public class AIAnalyzerTab extends JPanel {
 
     private void appendToResult(String text) {
         try {
-            javax.swing.text.StyledDocument doc = resultTextPane.getStyledDocument();
+            StyledDocument doc = resultTextPane.getStyledDocument();
             javax.swing.text.Style regularStyle = doc.addStyle("regular", null);
             javax.swing.text.StyleConstants.setFontFamily(regularStyle, "Microsoft YaHei");
             javax.swing.text.StyleConstants.setFontSize(regularStyle, 12);
@@ -741,16 +745,16 @@ public class AIAnalyzerTab extends JPanel {
             analyzeButton.setText("开始分析");
             
             // 添加中断提示
-            try {
-                javax.swing.text.StyledDocument doc = resultTextPane.getStyledDocument();
-                javax.swing.text.Style stopStyle = doc.addStyle("stop", null);
-                javax.swing.text.StyleConstants.setForeground(stopStyle, java.awt.Color.ORANGE);
-                javax.swing.text.StyleConstants.setBold(stopStyle, true);
-                javax.swing.text.StyleConstants.setItalic(stopStyle, true);
-                doc.insertString(doc.getLength(), "\n\n[输出已中断]", stopStyle);
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+        try {
+            StyledDocument doc = resultTextPane.getStyledDocument();
+            javax.swing.text.Style stopStyle = doc.addStyle("stop", null);
+            javax.swing.text.StyleConstants.setForeground(stopStyle, java.awt.Color.ORANGE);
+            javax.swing.text.StyleConstants.setBold(stopStyle, true);
+            javax.swing.text.StyleConstants.setItalic(stopStyle, true);
+            doc.insertString(doc.getLength(), "\n\n[输出已中断]", stopStyle);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
             
             api.logging().logToOutput("用户中断了AI分析");
         }
@@ -767,8 +771,7 @@ public class AIAnalyzerTab extends JPanel {
         if (selectedRow >= 0) {
             requestList.remove(selectedRow);
             refreshRequestTable();
-                requestTextPane.setText("");
-                responseTextPane.setText("");
+            clearHttpEditors();
             resultTextPane.setText("");
         }
     }
@@ -778,8 +781,7 @@ public class AIAnalyzerTab extends JPanel {
         if (result == JOptionPane.YES_OPTION) {
             requestList.clear();
             refreshRequestTable();
-            requestTextPane.setText("");
-            responseTextPane.setText("");
+            clearHttpEditors();
             resultTextPane.setText("");
         }
     }
@@ -903,30 +905,20 @@ public class AIAnalyzerTab extends JPanel {
             api.logging().logToError("加载设置失败: " + e.getMessage());
         }
     }
-
-    public void addRequestFromHttpRequestResponse(String method, String url, HttpRequestResponse requestResponse) {
+    
+    public void addRequestFromHttpRequestResponse(String method, String url, burp.api.montoya.http.message.HttpRequestResponse requestResponse) {
         try {
-            // 使用UTF-8编码获取请求内容，正确处理中文字符
-            byte[] requestBytes = requestResponse.request().toByteArray().getBytes();
-            String request = new String(requestBytes, java.nio.charset.StandardCharsets.UTF_8);
-            
-            String response = null;
-            if (requestResponse.response() != null) {
-                byte[] responseBytes = requestResponse.response().toByteArray().getBytes();
-                response = new String(responseBytes, java.nio.charset.StandardCharsets.UTF_8);
-            }
-
-            RequestData requestData = new RequestData(nextRequestId++, method, url, request, response);
+            RequestData requestData = new RequestData(
+                nextRequestId++,
+                method,
+                url,
+                requestResponse.request().toString(),
+                requestResponse.response() != null ? requestResponse.response().toString() : null
+            );
             requestList.add(requestData);
             refreshRequestTable();
 
-            // 直接设置到文本区域并应用语法高亮
-            HttpSyntaxHighlighter.highlightHttp(requestTextPane, request);
-            if (response != null) {
-                HttpSyntaxHighlighter.highlightHttp(responseTextPane, response);
-            } else {
-                responseTextPane.setText("");
-            }
+            updateRequestDisplay(requestData);
 
             api.logging().logToOutput("请求已添加到AI分析器: " + method + " " + url);
         } catch (Exception e) {
@@ -964,6 +956,11 @@ public class AIAnalyzerTab extends JPanel {
      */
     public QianwenApiClient getApiClient() {
         return apiClient;
+    }
+
+    private void clearHttpEditors() {
+        requestEditor.setRequest(HttpRequest.httpRequest());
+        responseEditor.setResponse(HttpResponse.httpResponse());
     }
     
     /**
