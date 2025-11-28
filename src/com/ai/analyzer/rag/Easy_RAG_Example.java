@@ -35,7 +35,7 @@ import java.util.concurrent.TimeUnit;
 public class Easy_RAG_Example {
                 
     private static final QwenStreamingChatModel streamingChatModel = QwenStreamingChatModel.builder()
-                .apiKey("sk-f5ab54a742f64f12a4b7213b0011f44c")
+                .apiKey("sk-f5ab54a742f64f12a4b7213b0011f44c")  // Don't worry, it can`t use now.
                 .baseUrl("https://dashscope.aliyuncs.com/api/v1")
                 .modelName("qwen-max")
                 .build();
