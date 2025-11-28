@@ -89,7 +89,7 @@ config.properties
 secrets.properties
 *.key
 *.secret
-/src/com/ai/analyzer/rag/Easy_RAG_Example.java
+src/com/ai/analyzer/rag/Easy_RAG_Example.java
 
 # Test data
 test-data/
