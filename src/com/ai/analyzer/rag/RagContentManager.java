@@ -7,7 +7,7 @@ import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.embedding.onnx.OnnxEmbeddingModel;
 import dev.langchain4j.model.embedding.onnx.PoolingMode;
-//import dev.langchain4j.model.embedding.onnx.allminilml6v2.AllMiniLmL6V2EmbeddingModel;
+import dev.langchain4j.model.embedding.onnx.allminilml6v2.AllMiniLmL6V2EmbeddingModel;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
 import dev.langchain4j.store.embedding.EmbeddingStore;
@@ -51,39 +51,61 @@ public class RagContentManager {
     public boolean load(String ragDocumentsPath) {
         clear();
 
-        // 确保 DJL tokenizers 资源已提取到文件系统
-        String djlCacheDir = ensureDjlResourcesExtracted();
-        if (djlCacheDir != null) {
-            System.setProperty("ai.djl.cache_dir", djlCacheDir);
-        }
-
         String normalizedPath = ragDocumentsPath != null ? ragDocumentsPath.trim() : "";
-        File ragPath = new File(normalizedPath);
 
         List<Document> loadedDocuments = loadDocuments(normalizedPath);
+        if (loadedDocuments.isEmpty()) {
+            logError("未找到任何 RAG 文档，路径: " + normalizedPath);
+            return false;
+        }
 
-        embeddingModel = new OnnxEmbeddingModel(
-                "E:\\HackTools\\develop\\all-minilm-l6-v2.onnx",
-                "E:\\HackTools\\develop\\all-minilm-l6-v2-tokenizer.json",
-                PoolingMode.MEAN
-        );
-        embeddingStore = new InMemoryEmbeddingStore<>();
-        EmbeddingStoreIngestor ingestor = EmbeddingStoreIngestor.builder()
-                .embeddingModel(embeddingModel)
-                .embeddingStore(embeddingStore)
-                .build();
-        ingestor.ingest(loadedDocuments);
-
-        contentRetriever = EmbeddingStoreContentRetriever.builder()
-                .embeddingStore(embeddingStore)
-                .embeddingModel(embeddingModel)
-                .maxResults(5)
-                .minScore(0.0)
-                .build();
+        // 尝试使用向量检索，失败时回退到简单关键词检索
+        if (!tryInitEmbeddingRetriever(loadedDocuments)) {
+            logInfo("向量检索初始化失败，回退到简单关键词检索");
+            contentRetriever = new SimpleDocumentContentRetriever(loadedDocuments, 5);
+            logInfo("RAG 内容检索器已创建（关键词检索，回退模式）");
+        }
 
         documents = loadedDocuments;
-        logInfo("RAG 内容检索器已创建（向量检索）");
         return true;
+    }
+
+    /**
+     * 尝试初始化基于向量的内容检索器
+     * @return 初始化成功返回 true，失败返回 false
+     */
+    private boolean tryInitEmbeddingRetriever(List<Document> loadedDocuments) {
+        try {
+/*             embeddingModel = new OnnxEmbeddingModel(
+                    "E:\\HackTools\\develop\\all-minilm-l6-v2.onnx",
+                    "E:\\HackTools\\develop\\all-minilm-l6-v2-tokenizer.json",
+                    PoolingMode.MEAN
+            ); */
+            embeddingModel = new AllMiniLmL6V2EmbeddingModel();
+            embeddingStore = new InMemoryEmbeddingStore<>();
+            EmbeddingStoreIngestor ingestor = EmbeddingStoreIngestor.builder()
+                    .embeddingModel(embeddingModel)
+                    .embeddingStore(embeddingStore)
+                    .build();
+            ingestor.ingest(loadedDocuments);
+
+            contentRetriever = EmbeddingStoreContentRetriever.builder()
+                    .embeddingStore(embeddingStore)
+                    .embeddingModel(embeddingModel)
+                    .maxResults(5)
+                    .minScore(0.0)
+                    .build();
+
+            logInfo("RAG 内容检索器已创建（向量检索）");
+            return true;
+        } catch (Exception e) {
+            logError("向量检索初始化失败: " + e.getMessage());
+            // 清理可能部分初始化的资源
+            embeddingModel = null;
+            embeddingStore = null;
+            contentRetriever = null;
+            return false;
+        }
     }
 
     public boolean isReady() {
@@ -111,7 +133,7 @@ public class RagContentManager {
 
     private void logInfo(String message) {
         if (api != null) {
-            api.logging().logToOutput("[QianwenApiClient] " + message);
+            api.logging().logToOutput("[RagContentManager] " + message);
         }
     }
 

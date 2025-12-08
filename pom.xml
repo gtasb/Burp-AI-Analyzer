@@ -96,11 +96,11 @@
     </dependency>
 
     <!-- 添加嵌入模型依赖，使用ONNX实现的轻量级模型 -->
-<!--    <dependency>-->
-<!--        <groupId>dev.langchain4j</groupId>-->
-<!--        <artifactId>langchain4j-embeddings-all-minilm-l6-v2</artifactId>-->
-<!--        <version>1.8.0-beta15</version>-->
-<!--    </dependency>-->
+    <dependency>
+        <groupId>dev.langchain4j</groupId>
+        <artifactId>langchain4j-embeddings-all-minilm-l6-v2</artifactId>
+        <version>1.8.0-beta15</version>
+   </dependency>
 
     <dependency>
         <groupId>dev.langchain4j</groupId>
