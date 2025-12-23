@@ -173,7 +173,8 @@ public class MarkdownRenderer {
             Style regular, Style bold, Style italic, Style code, Style link) throws BadLocationException {
         
         renderInlineContent(doc, paragraph, regular, bold, italic, code, link);
-        doc.insertString(doc.getLength(), "\n\n", regular);
+        // 只添加一个换行，避免产生过多空行
+        doc.insertString(doc.getLength(), "\n", regular);
     }
     
     /**
@@ -197,8 +198,8 @@ public class MarkdownRenderer {
         while (item != null) {
             if (item instanceof ListItem) {
                 doc.insertString(doc.getLength(), "• ", list);
-                renderNode(doc, item, regular, bold, italic, code, link, header1, header2, header3, list);
-                doc.insertString(doc.getLength(), "\n", regular);
+                // 渲染列表项内容（段落或其他块元素会自带换行，无需额外添加）
+                renderListItemContent(doc, (ListItem) item, regular, bold, italic, code, link, header1, header2, header3, list);
             }
             item = item.getNext();
         }
@@ -216,11 +217,31 @@ public class MarkdownRenderer {
         while (item != null) {
             if (item instanceof ListItem) {
                 doc.insertString(doc.getLength(), index + ". ", list);
-                renderNode(doc, item, regular, bold, italic, code, link, header1, header2, header3, list);
-                doc.insertString(doc.getLength(), "\n", regular);
+                // 渲染列表项内容（段落或其他块元素会自带换行，无需额外添加）
+                renderListItemContent(doc, (ListItem) item, regular, bold, italic, code, link, header1, header2, header3, list);
                 index++;
             }
             item = item.getNext();
+        }
+    }
+    
+    /**
+     * 渲染列表项内容
+     * 特殊处理：如果列表项只包含一个段落，直接渲染其内联内容（不添加段落的额外换行）
+     */
+    private static void renderListItemContent(StyledDocument doc, ListItem listItem, 
+            Style regular, Style bold, Style italic, Style code, Style link,
+            Style header1, Style header2, Style header3, Style list) throws BadLocationException {
+        
+        Node child = listItem.getFirstChild();
+        
+        // 如果列表项只有一个段落子节点，直接渲染内联内容
+        if (child instanceof Paragraph && child.getNext() == null) {
+            renderInlineContent(doc, child, regular, bold, italic, code, link);
+            doc.insertString(doc.getLength(), "\n", regular);
+        } else {
+            // 否则使用标准的节点渲染
+            renderNode(doc, listItem, regular, bold, italic, code, link, header1, header2, header3, list);
         }
     }
     

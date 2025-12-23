@@ -738,6 +738,11 @@ public class AIAnalyzerTab extends JPanel {
     
     private void stopAnalysis() {
         if (currentWorker != null && !currentWorker.isDone()) {
+            // 先取消流式输出连接（使用 StreamingHandle.cancel()）
+            if (apiClient != null) {
+                apiClient.cancelStreaming();
+            }
+            // 然后取消 SwingWorker
             currentWorker.cancel(true);
             isAnalyzing = false;
             stopButton.setEnabled(false);
@@ -745,24 +750,37 @@ public class AIAnalyzerTab extends JPanel {
             analyzeButton.setText("开始分析");
             
             // 添加中断提示
-        try {
-            StyledDocument doc = resultTextPane.getStyledDocument();
-            javax.swing.text.Style stopStyle = doc.addStyle("stop", null);
-            javax.swing.text.StyleConstants.setForeground(stopStyle, java.awt.Color.ORANGE);
-            javax.swing.text.StyleConstants.setBold(stopStyle, true);
-            javax.swing.text.StyleConstants.setItalic(stopStyle, true);
-            doc.insertString(doc.getLength(), "\n\n[输出已中断]", stopStyle);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+            try {
+                StyledDocument doc = resultTextPane.getStyledDocument();
+                javax.swing.text.Style stopStyle = doc.addStyle("stop", null);
+                javax.swing.text.StyleConstants.setForeground(stopStyle, java.awt.Color.ORANGE);
+                javax.swing.text.StyleConstants.setBold(stopStyle, true);
+                javax.swing.text.StyleConstants.setItalic(stopStyle, true);
+                doc.insertString(doc.getLength(), "\n\n[输出已中断]", stopStyle);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
             
             api.logging().logToOutput("用户中断了AI分析");
         }
     }
     
     private void clearResults() {
+        // 如果正在分析，先停止
+        if (currentWorker != null && !currentWorker.isDone()) {
+            if (apiClient != null) {
+                apiClient.cancelStreaming();
+            }
+            currentWorker.cancel(true);
+            isAnalyzing = false;
+            stopButton.setEnabled(false);
+            analyzeButton.setEnabled(true);
+            analyzeButton.setText("开始分析");
+        }
+        
         resultTextPane.setText("");
         // 清空 Assistant 的聊天记忆（共享实例）
+        // 注意：apiClient.clearContext() 内部已经会先调用 cancelStreaming()
         apiClient.clearContext();
     }
 

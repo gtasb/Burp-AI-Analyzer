@@ -15,9 +15,11 @@ import java.io.ObjectInputStream;
 import java.util.List;
 import com.ai.analyzer.model.PluginSettings;
 import burp.api.montoya.MontoyaApi;
-
+import dev.langchain4j.model.chat.response.PartialResponse;
+import dev.langchain4j.service.StreamingHandle;
 import dev.langchain4j.community.model.dashscope.QwenChatRequestParameters;
 import dev.langchain4j.mcp.client.McpClient;
+import dev.langchain4j.mcp.McpToolProvider;
 import dev.langchain4j.mcp.client.transport.McpTransport;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.response.PartialThinking;
@@ -30,6 +32,7 @@ import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.tool.BeforeToolExecution;
 import dev.langchain4j.service.tool.ToolExecution;
 import dev.langchain4j.community.model.dashscope.QwenStreamingChatModel;
+import dev.langchain4j.service.PartialResponseContext; 
 import lombok.Getter;
 
 
@@ -64,10 +67,11 @@ public class QianwenApiClient {
     private boolean isFirstInitialization = true; // 是否是第一次初始化
     private boolean needsReinitialization = false; // 标记是否需要重新初始化（延迟初始化，避免频繁重建）
     private Assistant assistant; // 共享的 Assistant 实例，用于保持上下文
-    private dev.langchain4j.mcp.McpToolProvider mcpToolProvider; // MCP 工具提供者（共享实例）
+    private McpToolProvider mcpToolProvider; // MCP 工具提供者（共享实例）
     private RagContentManager ragContentManager;
     private MessageWindowChatMemory chatMemory; // 共享的聊天记忆，用于保持上下文（即使 Assistant 重新创建也保留）
     private volatile TokenStream currentTokenStream; // 当前活动的 TokenStream，用于取消流式输出
+    private volatile StreamingHandle streamingHandle; // 流式句柄，用于正确取消流
 
     public void setApi(MontoyaApi api) {
         this.api = api;
@@ -370,44 +374,31 @@ public class QianwenApiClient {
     
     /**
      * 取消流式输出
-     * 当用户点击"停止"按钮时调用
+     * 当用户点击"停止"按钮或清空上下文时调用
+     * 使用 LangChain4j 推荐的 StreamingHandle.cancel() 方法
      */
     public void cancelStreaming() {
-        if (currentTokenStream != null) {
+        // 优先使用 StreamingHandle 取消（推荐方式）
+        if (streamingHandle != null) {
             try {
-                // 尝试调用 TokenStream 的 cancel 方法（如果存在）
-                java.lang.reflect.Method cancelMethod = currentTokenStream.getClass().getMethod("cancel");
-                cancelMethod.invoke(currentTokenStream);
+                streamingHandle.cancel();
                 if (api != null) {
-                    api.logging().logToOutput("[QianwenApiClient] 流式输出已取消");
-                }
-            } catch (NoSuchMethodException e) {
-                // 如果 TokenStream 没有 cancel 方法，尝试通过反射查找其他取消方法
-                try {
-                    // 尝试查找 stop、abort 等方法
-                    java.lang.reflect.Method[] methods = currentTokenStream.getClass().getMethods();
-                    for (java.lang.reflect.Method method : methods) {
-                        String methodName = method.getName().toLowerCase();
-                        if ((methodName.contains("cancel") || methodName.contains("stop") || methodName.contains("abort"))
-                            && method.getParameterCount() == 0) {
-                            method.invoke(currentTokenStream);
-                            if (api != null) {
-                                api.logging().logToOutput("[QianwenApiClient] 流式输出已取消（通过 " + method.getName() + " 方法）");
-                            }
-                            break;
-                        }
-                    }
-                } catch (Exception ex) {
-                    if (api != null) {
-                        api.logging().logToError("[QianwenApiClient] 取消流式输出失败: " + ex.getMessage());
-                    }
+                    api.logging().logToOutput("[QianwenApiClient] 流式输出已取消（通过 StreamingHandle）");
                 }
             } catch (Exception e) {
                 if (api != null) {
                     api.logging().logToError("[QianwenApiClient] 取消流式输出失败: " + e.getMessage());
                 }
+            } finally {
+                streamingHandle = null;
+                currentTokenStream = null;
             }
+        } else if (currentTokenStream != null) {
+            // 兼容旧逻辑：如果 StreamingHandle 不可用，清空 TokenStream 引用
             currentTokenStream = null;
+            if (api != null) {
+                api.logging().logToOutput("[QianwenApiClient] TokenStream 引用已清空");
+            }
         } else {
             if (api != null) {
                 api.logging().logToOutput("[QianwenApiClient] 没有活动的流式输出可以取消");
@@ -418,8 +409,12 @@ public class QianwenApiClient {
     /**
      * 清空聊天上下文（清空 Assistant 的聊天记忆）
      * 当用户点击"清空"按钮时调用
+     * 注意：会先中断正在进行的流式输出
      */
     public void clearContext() {
+        // 先中断正在进行的流式输出
+        cancelStreaming();
+        
         // 清空 Assistant 和 ChatMemory，从而清空所有上下文记忆
         if (assistant != null) {
             assistant = null;
@@ -758,15 +753,21 @@ public class QianwenApiClient {
                 // 保存当前 TokenStream 引用，以便可以取消
                 currentTokenStream = tokenStream;
 
-                // 使用标准方法处理部分响应
-                tokenStream.onPartialResponse((String partialResponse) -> {
-                    if (partialResponse != null && !partialResponse.isEmpty()) {
-                        onChunk.accept(partialResponse);
-                        contentChunkCount[0]++;
-                    }
-                });
-                
+                // 使用链式调用配置所有回调
                 tokenStream
+                    // 处理部分响应（流式输出的主要内容）+ 获取 StreamingHandle 用于取消
+                    .onPartialResponseWithContext((PartialResponse partialResponse, 
+                            PartialResponseContext context) -> {
+                        // 保存 StreamingHandle 引用，用于后续取消操作
+                        if (streamingHandle == null && context != null) {
+                            streamingHandle = context.streamingHandle();
+                        }
+                        String text = partialResponse != null ? partialResponse.text() : null;
+                        if (text != null && !text.isEmpty()) {
+                            onChunk.accept(text);
+                            contentChunkCount[0]++;
+                        }
+                    })
                     // 可选：处理思考过程
                     .onPartialThinking((PartialThinking partialThinking) -> {
                         logDebug("Thinking: " + partialThinking);
@@ -847,6 +848,7 @@ public class QianwenApiClient {
                 
                 // 流式输出完成，清除引用
                 currentTokenStream = null;
+                streamingHandle = null;
 
                 // 记录token使用信息（可选）
                 if (finalResponse != null && finalResponse.tokenUsage() != null) {
@@ -857,10 +859,16 @@ public class QianwenApiClient {
                 break;
 
             } catch (java.util.concurrent.TimeoutException e) {
+                // 超时时清除引用
+                currentTokenStream = null;
+                streamingHandle = null;
                 lastException = new Exception("流式输出超时（10分钟）", e);
                 retryCount++;
                 logError("请求超时: " + e.getMessage());
             } catch (java.util.concurrent.ExecutionException e) {
+                // 异常时清除引用
+                currentTokenStream = null;
+                streamingHandle = null;
                 // 直接使用原始异常，避免过度包装
                 Throwable cause = e.getCause();
                 String errorMsg = cause != null ? cause.getMessage() : e.getMessage();
@@ -897,9 +905,15 @@ public class QianwenApiClient {
                 }
                 retryCount++;
             } catch (InterruptedException e) {
+                // 中断时清除引用
+                currentTokenStream = null;
+                streamingHandle = null;
                 Thread.currentThread().interrupt();
                 throw new Exception("等待流式输出被中断", e);
             } catch (Exception e) {
+                // 异常时清除引用
+                currentTokenStream = null;
+                streamingHandle = null;
                 lastException = e;
                 retryCount++;
                 logError("请求异常: " + e.getClass().getSimpleName() + " - " + e.getMessage());

@@ -508,9 +508,19 @@ public class ChatPanel extends JPanel {
     }
 
     private void clearContext() {
+        // 如果正在输出，先停止
+        if (currentWorker != null && !currentWorker.isDone()) {
+            // apiClient.clearContext() 内部会先调用 cancelStreaming()
+            currentWorker.cancel(true);
+            isStreaming = false;
+            sendButton.setEnabled(true);
+            stopButton.setEnabled(false);
+        }
+        
         chatHistory.clear();
         chatArea.setText("");
         // 清空 Assistant 的聊天记忆（共享实例）
+        // 注意：apiClient.clearContext() 内部已经会先调用 cancelStreaming()
         apiClient.clearContext();
         api.logging().logToOutput("聊天上下文已清空");
     }
