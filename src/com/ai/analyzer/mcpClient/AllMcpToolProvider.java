@@ -6,6 +6,7 @@ import dev.langchain4j.mcp.client.transport.McpTransport;
 import dev.langchain4j.mcp.client.transport.http.HttpMcpTransport;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
+import dev.langchain4j.mcp.McpToolProvider;
 
 import java.util.function.BiFunction;
 
@@ -39,7 +40,7 @@ public class BurpMcpToolProvider {
      */
     @SuppressWarnings("deprecation")
     public McpTransport createTransport() {
-        return createTransport("http://localhost:9876/sse");
+        return createTransport("http://127.0.0.1:9876/sse");
     }
 
     public McpClient createMcpClient(McpTransport transport) {
@@ -53,7 +54,7 @@ public class BurpMcpToolProvider {
     /**
      * 创建 MCP 工具提供者（不带映射和过滤）
      */
-    public dev.langchain4j.mcp.McpToolProvider createToolProvider(McpClient mcpClient) {
+    public McpToolProvider createToolProvider(McpClient mcpClient) {
         return createToolProviderWithMapping(mcpClient, null, (String[]) null);
     }
 
@@ -63,7 +64,7 @@ public class BurpMcpToolProvider {
      * @param filterToolNames 要过滤的工具名称
      * @return MCP 工具提供者
      */
-    public dev.langchain4j.mcp.McpToolProvider createToolProvider(McpClient mcpClient, String ... filterToolNames) {
+    public McpToolProvider createToolProvider(McpClient mcpClient, String ... filterToolNames) {
         return createToolProviderWithMapping(mcpClient, null, filterToolNames);
     }
     
@@ -73,7 +74,7 @@ public class BurpMcpToolProvider {
      * @param mappingConfig 映射配置（可为 null，表示不使用映射）
      * @return MCP 工具提供者
      */
-    public dev.langchain4j.mcp.McpToolProvider createToolProviderWithMapping(McpClient mcpClient, McpToolMappingConfig mappingConfig) {
+    public McpToolProvider createToolProviderWithMapping(McpClient mcpClient, McpToolMappingConfig mappingConfig) {
         return createToolProviderWithMapping(mcpClient, mappingConfig, (String[]) null);
     }
     
@@ -84,7 +85,7 @@ public class BurpMcpToolProvider {
      * @param filterToolNames 要过滤的工具名称（可选）
      * @return MCP 工具提供者
      */
-    public dev.langchain4j.mcp.McpToolProvider createToolProviderWithMapping(McpClient mcpClient, McpToolMappingConfig mappingConfig, String ... filterToolNames) {
+    public McpToolProvider createToolProviderWithMapping(McpClient mcpClient, McpToolMappingConfig mappingConfig, String ... filterToolNames) {
         var builder = dev.langchain4j.mcp.McpToolProvider.builder()
                 .mcpClients(mcpClient);
         
@@ -145,7 +146,7 @@ public class BurpMcpToolProvider {
             if (mcpProvider.transport == null) {
                 throw new IllegalStateException("Transport creation failed - returned null");
             }
-            System.out.println("   Transport 创建成功: http://localhost:9876/sse");
+            System.out.println("   Transport 创建成功: http://127.0.0.1:9876/sse");
 
             // 创建 mcpClient
             System.out.println("2. 创建 MCP Client...");
