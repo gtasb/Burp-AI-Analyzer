@@ -217,6 +217,8 @@ public class McpToolMappingConfig {
                 "注意：不要将头部字段传递给 body 参数。伪头部字段会自动添加 : 前缀。");
 
         descriptionMappings.put("create_repeater_tab", "在 Burp Repeater 中创建新标签页，用于手动修改和重放请求。\n" + 
+                "此工具必须在使用 send_http1_request 或 send_http2_request 发送HTTP请求后才能使用，用于手动验证测试结果，以及进一步的测试。\n" +
+                "此工具只能用于用户手工修改和发送请求，因此你无需关心此工具的返回结果。\n" +
                 "优先级：\n" + 
                 "低于 send_http1_request 和 send_http2_request，因为 create_repeater_tab 是手动创建标签页，而 send_http1_request 和 send_http2_request 是直接发送请求。\n" +
                 "可以搭配 get_active_editor_contents 使用，获取当前活动消息编辑器的内容，然后使用 set_active_editor_contents 设置请求内容。\n" +
@@ -229,6 +231,8 @@ public class McpToolMappingConfig {
                 "注意：确保请求内容使用正确的回车符（\\r\\n）。");
 
         descriptionMappings.put("send_to_intruder", "将 HTTP 请求发送到 Burp Intruder，用于批量爆破和模糊测试。\n" +
+                "此工具必须在使用 send_http1_request 或 send_http2_request 发送HTTP请求后才能使用，用于手动验证测试结果，以及进一步的测试。\n" +
+                "此工具只能用于用户手工修改和批量测试payload，因此你无需关心此工具的返回结果。\n" +
                 "优先级：\n" + 
                 "低于 send_http1_request 和 send_http2_request，因为 send_to_intruder 需要手动配置 payload 位置。\n" +
                 "可以搭配 get_active_editor_contents 使用，获取当前活动消息编辑器的内容，然后使用 set_active_editor_contents 设置请求内容。\n" +

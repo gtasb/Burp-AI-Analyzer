@@ -11,8 +11,13 @@ public class PluginSettings implements Serializable {
     private String userPrompt;
     private boolean enableThinking = true; // 默认启用思考过程
     private boolean enableSearch = true; // 默认启用搜索
-    private boolean enableMcp = false; // 默认禁用 MCP 工具调用
-    private String mcpUrl = "http://localhost:9876/sse"; // MCP 服务器地址
+    private boolean enableMcp = false; // 默认禁用 Burp MCP 工具调用
+    private String BurpMcpUrl = "http://127.0.0.1:9876/sse"; // Burp MCP 服务器地址
+    private boolean enableRagMcp = false; // 默认禁用 RAG MCP 工具调用
+    private String ragMcpUrl = " "; // RAG MCP 服务器地址
+    private String ragMcpDocumentsPath = ""; // RAG MCP 知识库文档路径
+    private boolean enableChromeMcp = false; // 默认禁用 Chrome MCP 工具调用
+    private String chromeMcpUrl = " "; // Chrome MCP 服务器地址
     private boolean enableRag = false; // 默认禁用 RAG
     private String ragDocumentsPath = ""; // RAG 文档路径
     
@@ -25,7 +30,12 @@ public class PluginSettings implements Serializable {
         this.enableThinking = true;
         this.enableSearch = true;
         this.enableMcp = false;
-        this.mcpUrl = "http://localhost:9876/sse";
+        this.BurpMcpUrl = "http://127.0.0.1:9876/sse";
+        this.enableRagMcp = false;
+        this.ragMcpUrl = " ";
+        this.ragMcpDocumentsPath = "";
+        this.enableChromeMcp = false;
+        this.chromeMcpUrl = " ";
         this.enableRag = false;
         this.ragDocumentsPath = "";
     }
@@ -45,7 +55,7 @@ public class PluginSettings implements Serializable {
         this.enableThinking = enableThinking;
         this.enableSearch = enableSearch;
         this.enableMcp = false;
-        this.mcpUrl = "http://localhost:9876/sse";
+        this.BurpMcpUrl = "http://127.0.0.1:9876/sse";
         this.enableRag = false;
         this.ragDocumentsPath = "";
     }
@@ -58,7 +68,7 @@ public class PluginSettings implements Serializable {
         this.enableThinking = enableThinking;
         this.enableSearch = enableSearch;
         this.enableMcp = enableMcp;
-        this.mcpUrl = mcpUrl;
+        this.BurpMcpUrl = mcpUrl;
         this.enableRag = false;
         this.ragDocumentsPath = "";
     }
@@ -71,7 +81,51 @@ public class PluginSettings implements Serializable {
         this.enableThinking = enableThinking;
         this.enableSearch = enableSearch;
         this.enableMcp = enableMcp;
-        this.mcpUrl = mcpUrl;
+        this.BurpMcpUrl = mcpUrl;
+        this.enableRagMcp = false;
+        this.ragMcpUrl = " ";
+        this.enableChromeMcp = false;
+        this.chromeMcpUrl = " ";
+        this.enableRag = enableRag;
+        this.ragDocumentsPath = ragDocumentsPath;
+    }
+    
+    public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt, boolean enableThinking, boolean enableSearch, 
+            boolean enableMcp, String mcpUrl, boolean enableRagMcp, String ragMcpUrl, boolean enableChromeMcp, String chromeMcpUrl, 
+            boolean enableRag, String ragDocumentsPath) {
+        this.apiUrl = apiUrl;
+        this.apiKey = apiKey;
+        this.model = model;
+        this.userPrompt = userPrompt;
+        this.enableThinking = enableThinking;
+        this.enableSearch = enableSearch;
+        this.enableMcp = enableMcp;
+        this.BurpMcpUrl = mcpUrl;
+        this.enableRagMcp = enableRagMcp;
+        this.ragMcpUrl = ragMcpUrl;
+        this.ragMcpDocumentsPath = "";
+        this.enableChromeMcp = enableChromeMcp;
+        this.chromeMcpUrl = chromeMcpUrl;
+        this.enableRag = enableRag;
+        this.ragDocumentsPath = ragDocumentsPath;
+    }
+    
+    public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt, boolean enableThinking, boolean enableSearch, 
+            boolean enableMcp, String mcpUrl, boolean enableRagMcp, String ragMcpUrl, String ragMcpDocumentsPath, 
+            boolean enableChromeMcp, String chromeMcpUrl, boolean enableRag, String ragDocumentsPath) {
+        this.apiUrl = apiUrl;
+        this.apiKey = apiKey;
+        this.model = model;
+        this.userPrompt = userPrompt;
+        this.enableThinking = enableThinking;
+        this.enableSearch = enableSearch;
+        this.enableMcp = enableMcp;
+        this.BurpMcpUrl = mcpUrl;
+        this.enableRagMcp = enableRagMcp;
+        this.ragMcpUrl = ragMcpUrl;
+        this.ragMcpDocumentsPath = ragMcpDocumentsPath;
+        this.enableChromeMcp = enableChromeMcp;
+        this.chromeMcpUrl = chromeMcpUrl;
         this.enableRag = enableRag;
         this.ragDocumentsPath = ragDocumentsPath;
     }
@@ -134,11 +188,51 @@ public class PluginSettings implements Serializable {
     }
     
     public String getMcpUrl() {
-        return mcpUrl;
+        return BurpMcpUrl;
     }
     
     public void setMcpUrl(String mcpUrl) {
-        this.mcpUrl = mcpUrl;
+        this.BurpMcpUrl = mcpUrl;
+    }
+    
+    public boolean isEnableRagMcp() {
+        return enableRagMcp;
+    }
+    
+    public void setEnableRagMcp(boolean enableRagMcp) {
+        this.enableRagMcp = enableRagMcp;
+    }
+    
+    public String getRagMcpUrl() {
+        return ragMcpUrl;
+    }
+    
+    public void setRagMcpUrl(String ragMcpUrl) {
+        this.ragMcpUrl = ragMcpUrl;
+    }
+    
+    public String getRagMcpDocumentsPath() {
+        return ragMcpDocumentsPath;
+    }
+    
+    public void setRagMcpDocumentsPath(String ragMcpDocumentsPath) {
+        this.ragMcpDocumentsPath = ragMcpDocumentsPath;
+    }
+    
+    public boolean isEnableChromeMcp() {
+        return enableChromeMcp;
+    }
+    
+    public void setEnableChromeMcp(boolean enableChromeMcp) {
+        this.enableChromeMcp = enableChromeMcp;
+    }
+    
+    public String getChromeMcpUrl() {
+        return chromeMcpUrl;
+    }
+    
+    public void setChromeMcpUrl(String chromeMcpUrl) {
+        this.chromeMcpUrl = chromeMcpUrl;
     }
     
     public boolean isEnableRag() {

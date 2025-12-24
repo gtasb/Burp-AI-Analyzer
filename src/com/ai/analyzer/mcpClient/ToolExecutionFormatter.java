@@ -77,16 +77,16 @@ public class ToolExecutionFormatter {
     }
     
     /**
-     * 创建工具信息的Markdown格式（灰体小字）
+     * 创建工具信息的Markdown格式
+     * 使用特殊标记 [TOOL] 让 MarkdownRenderer 识别并应用醒目样式
      * 只显示工具名称，不显示参数（保持简洁）
-     * 使用Markdown格式，以便MarkdownRenderer能够正确渲染
      */
     private static String createToolInfoMarkdown(String toolName) {
         // 转义Markdown特殊字符
         String escapedName = escapeMarkdown(toolName);
-        // 只显示工具名称，不显示参数
-        // 使用Markdown的斜体格式，工具名用代码格式
-        return "*🔧 正在执行工具: `" + escapedName + "`*\n\n";
+        // 使用特殊的标记格式，让 MarkdownRenderer 可以识别并应用特殊样式
+        // 格式: [TOOL]工具名称[/TOOL]
+        return "[TOOL]⚡ 正在执行工具: " + escapedName + "[/TOOL]\n\n";
     }
     
     /**
@@ -102,13 +102,6 @@ public class ToolExecutionFormatter {
         // 反引号 ` 需要转义，因为它是代码块的边界
         return text.replace("\\", "\\\\")
                    .replace("`", "\\`");
-                   // 不转义下划线 _，因为它在代码块中会正常显示
-                   // .replace("_", "\\_")
-                   // 不转义 *，因为它在代码块中会正常显示
-                   // .replace("*", "\\*")
-                   // 不转义方括号，因为它在代码块中会正常显示
-                   // .replace("[", "\\[")
-                   // .replace("]", "\\]");
     }
     
 }

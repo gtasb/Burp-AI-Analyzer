@@ -3,6 +3,7 @@ package com.ai.analyzer.mcpClient;
 import dev.langchain4j.mcp.client.McpClient;
 import dev.langchain4j.mcp.client.transport.McpTransport;
 import dev.langchain4j.agent.tool.ToolSpecification;
+import dev.langchain4j.mcp.McpToolProvider;
 import java.util.List;
 
 /**
@@ -27,7 +28,7 @@ public class BurpMcpMappingExample {
         
         try {
             // 1. 创建 Transport
-            BurpMcpToolProvider mcpProvider = new BurpMcpToolProvider();
+            AllMcpToolProvider mcpProvider = new AllMcpToolProvider();
             McpTransport transport = mcpProvider.createTransport();
             
             // 2. 创建 MCP Client
@@ -40,7 +41,7 @@ public class BurpMcpMappingExample {
             McpToolMappingConfig mappingConfig = McpToolMappingConfig.createBurpMapping();
             
             // 4. 使用映射配置创建 Tool Provider
-            dev.langchain4j.mcp.McpToolProvider toolProvider = mcpProvider.createToolProviderWithMapping(mcpClient, mappingConfig);
+            McpToolProvider toolProvider = mcpProvider.createToolProviderWithMapping(mcpClient, mappingConfig);
             
             // 5. 获取工具列表（此时工具名称已映射为中文）
             List<ToolSpecification> tools = mcpClient.listTools();
@@ -71,7 +72,7 @@ public class BurpMcpMappingExample {
         System.out.println("\n=== 示例 2: 自定义工具名称映射 ===");
         
         try {
-            BurpMcpToolProvider mcpProvider = new BurpMcpToolProvider();
+            AllMcpToolProvider mcpProvider = new AllMcpToolProvider();
             McpTransport transport = mcpProvider.createTransport();
             McpClient mcpClient = mcpProvider.createMcpClient(transport);
             Thread.sleep(2000);
@@ -109,7 +110,7 @@ public class BurpMcpMappingExample {
         System.out.println("\n=== 示例 3: 工具过滤 + 名称映射 ===");
         
         try {
-            BurpMcpToolProvider mcpProvider = new BurpMcpToolProvider();
+            AllMcpToolProvider mcpProvider = new AllMcpToolProvider();
             McpTransport transport = mcpProvider.createTransport();
             McpClient mcpClient = mcpProvider.createMcpClient(transport);
             Thread.sleep(2000);
@@ -156,7 +157,7 @@ public class BurpMcpMappingExample {
         System.out.println("\n=== 示例 4: 工具规范映射（修改工具描述） ===");
         
         try {
-            BurpMcpToolProvider mcpProvider = new BurpMcpToolProvider();
+            AllMcpToolProvider mcpProvider = new AllMcpToolProvider();
             McpTransport transport = mcpProvider.createTransport();
             McpClient mcpClient = mcpProvider.createMcpClient(transport);
             Thread.sleep(2000);
@@ -208,7 +209,7 @@ public class BurpMcpMappingExample {
         System.out.println("\n=== 示例 5: 在 AI Service 中使用映射后的工具 ===");
         
         try {
-            BurpMcpToolProvider mcpProvider = new BurpMcpToolProvider();
+            AllMcpToolProvider mcpProvider = new AllMcpToolProvider();
             McpTransport transport = mcpProvider.createTransport();
             McpClient mcpClient = mcpProvider.createMcpClient(transport);
             Thread.sleep(2000);
@@ -256,7 +257,7 @@ public class BurpMcpMappingExample {
         System.out.println("========================================\n");
         
         // 注意：运行示例前请确保 Burp MCP Server 正在运行
-        // 默认地址: http://localhost:9876/sse
+        // 默认地址: http://127.0.0.1:9876/sse
         
         // 运行示例（注释掉不需要的示例）
         // example1_FullMapping();
@@ -266,7 +267,7 @@ public class BurpMcpMappingExample {
         // example5_UseWithAIService();
         
         System.out.println("\n提示：取消注释上面的示例方法来运行它们");
-        System.out.println("确保 Burp MCP Server 正在运行（http://localhost:9876/sse）");
+        System.out.println("确保 Burp MCP Server 正在运行（http://127.0.0.1:9876/sse）");
     }
 }
 

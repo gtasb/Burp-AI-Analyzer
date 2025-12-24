@@ -4,15 +4,16 @@ import burp.api.montoya.MontoyaApi;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.loader.FileSystemDocumentLoader;
 import dev.langchain4j.data.segment.TextSegment;
-import dev.langchain4j.model.embedding.EmbeddingModel;
-import dev.langchain4j.model.embedding.onnx.OnnxEmbeddingModel;
-import dev.langchain4j.model.embedding.onnx.PoolingMode;
-import dev.langchain4j.model.embedding.onnx.allminilml6v2.AllMiniLmL6V2EmbeddingModel;
-import dev.langchain4j.rag.content.retriever.ContentRetriever;
-import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
-import dev.langchain4j.store.embedding.EmbeddingStore;
-import dev.langchain4j.store.embedding.EmbeddingStoreIngestor;
-import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
+// 默认 RAG 功能暂时禁用，改用 RAG MCP
+// import dev.langchain4j.model.embedding.EmbeddingModel;
+// import dev.langchain4j.model.embedding.onnx.OnnxEmbeddingModel;
+// import dev.langchain4j.model.embedding.onnx.PoolingMode;
+// import dev.langchain4j.model.embedding.onnx.allminilml6v2.AllMiniLmL6V2EmbeddingModel;
+// import dev.langchain4j.rag.content.retriever.ContentRetriever;
+// import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
+// import dev.langchain4j.store.embedding.EmbeddingStore;
+// import dev.langchain4j.store.embedding.EmbeddingStoreIngestor;
+// import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -28,6 +29,8 @@ import java.util.List;
 /**
  * 负责将 RAG 文档加载并构建可复用的 ContentRetriever（基于 Easy RAG 流程）。
  * 文档会在初始化时一次性向量化，并常驻内存供后续 Assistant 复用。
+ * 
+ * 注意：默认 RAG 功能暂时禁用，改用 RAG MCP
  */
 public class RagContentManager {
 
@@ -35,9 +38,9 @@ public class RagContentManager {
 
     private MontoyaApi api;
     private List<Document> documents;
-    private ContentRetriever contentRetriever;
-    private EmbeddingStore<TextSegment> embeddingStore;
-    private EmbeddingModel embeddingModel;
+    // private ContentRetriever contentRetriever; // 默认 RAG 暂时禁用
+    // private EmbeddingStore<TextSegment> embeddingStore; // 默认 RAG 暂时禁用
+    // private EmbeddingModel embeddingModel; // 默认 RAG 暂时禁用
     private final PathMatcher pathMatcher = FileSystems.getDefault().getPathMatcher(DEFAULT_GLOB);
 
     public RagContentManager(MontoyaApi api) {
@@ -60,67 +63,69 @@ public class RagContentManager {
         }
 
         // 尝试使用向量检索，失败时回退到简单关键词检索
-        if (!tryInitEmbeddingRetriever(loadedDocuments)) {
-            logInfo("向量检索初始化失败，回退到简单关键词检索");
-            contentRetriever = new SimpleDocumentContentRetriever(loadedDocuments, 5);
-            logInfo("RAG 内容检索器已创建（关键词检索，回退模式）");
-        }
+/*         if (!tryInitEmbeddingRetriever(loadedDocuments)) {
+            logInfo("向量检索初始化失败，使用RagMcpServer创建内容检索器");
+            
+            if (!ragMcpServer.initRagMcpServer(normalizedPath)) {
+                logError("RagMcpServer初始化失败");
+                return false;
+            }
+            contentRetriever = ragMcpServer.createToolProvider(ragMcpServer.getMcpClient());
+            logInfo("RAG 内容检索器已创建（RagMcpServer）");
+            return true;
+        } */
 
         documents = loadedDocuments;
         return true;
     }
 
-    /**
-     * 尝试初始化基于向量的内容检索器
-     * @return 初始化成功返回 true，失败返回 false
-     */
-    private boolean tryInitEmbeddingRetriever(List<Document> loadedDocuments) {
-        try {
-/*             embeddingModel = new OnnxEmbeddingModel(
-                    "E:\\HackTools\\develop\\all-minilm-l6-v2.onnx",
-                    "E:\\HackTools\\develop\\all-minilm-l6-v2-tokenizer.json",
-                    PoolingMode.MEAN
-            ); */
-            embeddingModel = new AllMiniLmL6V2EmbeddingModel();
-            embeddingStore = new InMemoryEmbeddingStore<>();
-            EmbeddingStoreIngestor ingestor = EmbeddingStoreIngestor.builder()
-                    .embeddingModel(embeddingModel)
-                    .embeddingStore(embeddingStore)
-                    .build();
-            ingestor.ingest(loadedDocuments);
-
-            contentRetriever = EmbeddingStoreContentRetriever.builder()
-                    .embeddingStore(embeddingStore)
-                    .embeddingModel(embeddingModel)
-                    .maxResults(5)
-                    .minScore(0.0)
-                    .build();
-
-            logInfo("RAG 内容检索器已创建（向量检索）");
-            return true;
-        } catch (Exception e) {
-            logError("向量检索初始化失败: " + e.getMessage());
-            // 清理可能部分初始化的资源
-            embeddingModel = null;
-            embeddingStore = null;
-            contentRetriever = null;
-            return false;
-        }
-    }
+    // 默认 RAG 功能暂时禁用，改用 RAG MCP
+    // /**
+    //  * 尝试初始化基于向量的内容检索器
+    //  * @return 初始化成功返回 true，失败返回 false
+    //  */
+    // private boolean tryInitEmbeddingRetriever(List<Document> loadedDocuments) {
+    //     try {
+    //         embeddingModel = new AllMiniLmL6V2EmbeddingModel();
+    //         embeddingStore = new InMemoryEmbeddingStore<>();
+    //         EmbeddingStoreIngestor ingestor = EmbeddingStoreIngestor.builder()
+    //                 .embeddingModel(embeddingModel)
+    //                 .embeddingStore(embeddingStore)
+    //                 .build();
+    //         ingestor.ingest(loadedDocuments);
+    //
+    //         contentRetriever = EmbeddingStoreContentRetriever.builder()
+    //                 .embeddingStore(embeddingStore)
+    //                 .embeddingModel(embeddingModel)
+    //                 .maxResults(5)
+    //                 .minScore(0.0)
+    //                 .build();
+    //
+    //         logInfo("RAG 内容检索器已创建（向量检索）");
+    //         return true;
+    //     } catch (Exception e) {
+    //         logError("向量检索初始化失败: " + e.getMessage());
+    //         embeddingModel = null;
+    //         embeddingStore = null;
+    //         contentRetriever = null;
+    //         return false;
+    //     }
+    // }
 
     public boolean isReady() {
-        return contentRetriever != null;
+        return false; // 默认 RAG 暂时禁用
+        // return contentRetriever != null;
     }
 
-    public ContentRetriever getContentRetriever() {
-        return contentRetriever;
-    }
+    // public ContentRetriever getContentRetriever() {
+    //     return contentRetriever;
+    // }
 
     public void clear() {
         documents = null;
-        contentRetriever = null;
-        embeddingStore = null;
-        embeddingModel = null;
+        // contentRetriever = null; // 默认 RAG 暂时禁用
+        // embeddingStore = null;
+        // embeddingModel = null;
     }
 
     private List<Document> loadDocuments(String normalizedPath) {

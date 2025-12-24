@@ -333,7 +333,7 @@ public class ChatPanel extends JPanel {
                         currentRequest,
                         finalMessage,
                         chunk -> {
-                            api.logging().logToOutput("[ChatPanel] 收到内容chunk: " + (chunk.length() > 100 ? chunk.substring(0, 100) + "..." : chunk));
+                            //api.logging().logToOutput("[ChatPanel] 收到内容chunk: " + (chunk.length() > 100 ? chunk.substring(0, 100) + "..." : chunk));
                             // 将chunk添加到缓冲区
                             fullResponse.append(chunk);
                             

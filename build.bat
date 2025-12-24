@@ -15,7 +15,7 @@ echo ================================
 echo.
 
 REM Set Java 21 path
-set "JAVA_HOME=E:\jdk-21.0.9"
+set "JAVA_HOME=C:\Program Files\Java\jdk-21"
 if not exist "%JAVA_HOME%\bin\java.exe" (
     echo ERROR: Java not found at %JAVA_HOME%
     echo Please check JAVA_HOME path in build.bat
@@ -24,7 +24,7 @@ if not exist "%JAVA_HOME%\bin\java.exe" (
 )
 
 REM Set Maven path
-set "MAVEN_HOME=E:\IntelliJ IDEA 2025.2.3\plugins\maven\lib\maven3"
+set "MAVEN_HOME=C:\apache-maven-3.6.3"
 set "MAVEN_BIN=%MAVEN_HOME%\bin\mvn.cmd"
 
 REM Set PATH to use Java 21 and Maven

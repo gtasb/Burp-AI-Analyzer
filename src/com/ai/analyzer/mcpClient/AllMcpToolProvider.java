@@ -4,20 +4,26 @@ import dev.langchain4j.mcp.client.McpClient;
 import dev.langchain4j.mcp.client.DefaultMcpClient;
 import dev.langchain4j.mcp.client.transport.McpTransport;
 import dev.langchain4j.mcp.client.transport.http.HttpMcpTransport;
+//import dev.langchain4j.mcp.client.transport.http.StreamableHttpMcpTransport;
+import dev.langchain4j.mcp.client.transport.http.StreamableHttpMcpTransport;
+import dev.langchain4j.mcp.client.transport.stdio.StdioMcpTransport;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 import dev.langchain4j.mcp.McpToolProvider;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.BiFunction;
 
 
-public class BurpMcpToolProvider {
+public class AllMcpToolProvider {
 
     private McpTransport transport;
     private McpClient mcpClient;
 
+    
     /**
-     * 创建 Legacy HTTP Transport（用于 Burp MCP Server）
+     * 创建 Legacy HTTP Transport（用于 Burp MCP Server 和 Chrome MCP）
      * 根据 curl 测试：Burp MCP Server 使用 SSE (Server-Sent Events) 协议
      * GET /sse 返回 SSE 流，服务器会提供动态的 /message?sessionId=xxx 端点
      * 注意：HttpMcpTransport 虽然已弃用，但这是唯一能连接 Burp MCP Server 的方式
@@ -26,12 +32,34 @@ public class BurpMcpToolProvider {
      * @return McpTransport 实例
      */
     @SuppressWarnings("deprecation")
-    public McpTransport createTransport(String sseUrl) {
+    public McpTransport createHttpTransport(String sseUrl) {
         return new HttpMcpTransport.Builder()
-                .sseUrl(sseUrl)   // Burp MCP Server SSE endpoint
+                .sseUrl(sseUrl)   // MCP Server SSE endpoint
                 .logRequests(true)  // 在日志中查看请求流量
                 .logResponses(true)  // 在日志中查看响应流量
                 .build();
+    }
+
+
+    /**
+     * 创建 Streamable HTTP Transport（用于 Chrome MCP）
+     * @param httpUrl MCP 服务器的 HTTP 端点 URL
+     * @return McpTransport 实例
+     */
+    public McpTransport createStreamableHttpTransport(String httpUrl) {
+        return new StreamableHttpMcpTransport.Builder()
+                .url(httpUrl)
+                .build();
+    }
+    
+    /**
+     * 创建 Legacy HTTP Transport（兼容旧方法名）
+     * @param sseUrl MCP 服务器的 SSE 端点 URL
+     * @return McpTransport 实例
+     */
+    @SuppressWarnings("deprecation")
+    public McpTransport createTransport(String sseUrl) {
+        return createHttpTransport(sseUrl);
     }
     
     /**
@@ -40,54 +68,128 @@ public class BurpMcpToolProvider {
      */
     @SuppressWarnings("deprecation")
     public McpTransport createTransport() {
-        return createTransport("http://127.0.0.1:9876/sse");
+        return createHttpTransport("http://127.0.0.1:9876/sse");
     }
 
-    public McpClient createMcpClient(McpTransport transport) {
-        return new DefaultMcpClient.Builder()
-                .key("BurpMCPClient")  // 设置客户端标识
-                .transport(transport)
-                .cacheToolList(true)  // 启用工具列表缓存
+    /**
+     * 创建 Stdio Transport（用于 RAG MCP Server）
+     * 参考文档: https://docs.langchain4j.dev/tutorials/mcp/#mcp-transport
+     * 
+     * @param command 命令列表，例如 ["uvx", "rag-mcp-server", "--knowledge-base", "path"]
+     * @return McpTransport 实例
+     */
+    public McpTransport createStdioTransport(List<String> command) {
+        return new StdioMcpTransport.Builder()
+                .command(command)
+                .logEvents(true)  // 启用日志以便调试
                 .build();
+    }
+
+    /**
+     * 创建 RAG MCP 的 Stdio Transport
+     * @param knowledgeBasePath 知识库路径
+     * @return McpTransport 实例
+     */
+    public McpTransport createRagMcpTransport(String knowledgeBasePath) {
+        List<String> command = new ArrayList<>();
+        command.add("uvx");
+        command.add("rag-mcp-server");
+        command.add("--knowledge-base");
+        command.add(knowledgeBasePath);
+        command.add("--embedding-model");
+        command.add("all-MiniLM-L6-v2");
+        command.add("--chunk-size");
+        command.add("1000");
+        command.add("--chunk-overlap");
+        command.add("100");
+        command.add("--top-k");
+        command.add("3");
+        return createStdioTransport(command);
+    }
+
+    /**
+     * 创建 MCP 客户端（带自定义 key）
+     * @param transport MCP 传输
+     * @param clientKey 客户端标识（用于区分多个客户端）
+     * @return McpClient 实例
+     */
+    public McpClient createMcpClient(McpTransport transport, String clientKey) {
+        return new DefaultMcpClient.Builder()
+                .key(clientKey)
+                .transport(transport)
+                .cacheToolList(true)
+                .build();
+    }
+
+    /**
+     * 创建 MCP 客户端（默认 Burp 客户端）
+     * @param transport MCP 传输
+     * @return McpClient 实例
+     */
+    public McpClient createMcpClient(McpTransport transport) {
+        return createMcpClient(transport, "BurpMCPClient");
     }
 
     /**
      * 创建 MCP 工具提供者（不带映射和过滤）
      */
-    public McpToolProvider createToolProvider(McpClient mcpClient) {
-        return createToolProviderWithMapping(mcpClient, null, (String[]) null);
+    public McpToolProvider createToolProvider(List<McpClient> mcpClients) {
+        return createToolProviderWithMapping(mcpClients, null, (String[]) null);
     }
 
     /**
      * 创建 MCP 工具提供者（带工具名称过滤）
-     * @param mcpClient MCP 客户端
+     * @param mcpClients MCP 客户端列表
+     * @param filterToolNames 要过滤的工具名称
+     * @return MCP 工具提供者
+     */
+    public McpToolProvider createToolProvider(List<McpClient> mcpClients, String ... filterToolNames) {
+        return createToolProviderWithMapping(mcpClients, null, filterToolNames);
+    }
+
+    /**
+     * 创建 MCP 工具提供者（单个客户端，带工具名称过滤）
+     * @param mcpClient 单个 MCP 客户端
      * @param filterToolNames 要过滤的工具名称
      * @return MCP 工具提供者
      */
     public McpToolProvider createToolProvider(McpClient mcpClient, String ... filterToolNames) {
-        return createToolProviderWithMapping(mcpClient, null, filterToolNames);
+        return createToolProviderWithMapping(List.of(mcpClient), null, filterToolNames);
     }
     
     /**
      * 创建 MCP 工具提供者（带映射配置）
-     * @param mcpClient MCP 客户端
+     * @param mcpClients MCP 客户端列表
      * @param mappingConfig 映射配置（可为 null，表示不使用映射）
      * @return MCP 工具提供者
      */
-    public McpToolProvider createToolProviderWithMapping(McpClient mcpClient, McpToolMappingConfig mappingConfig) {
-        return createToolProviderWithMapping(mcpClient, mappingConfig, (String[]) null);
+    public McpToolProvider createToolProviderWithMapping(List<McpClient> mcpClients, McpToolMappingConfig mappingConfig) {
+        return createToolProviderWithMapping(mcpClients, mappingConfig, (String[]) null);
     }
-    
+
     /**
-     * 创建 MCP 工具提供者（带映射配置和工具名称过滤）
-     * @param mcpClient MCP 客户端
+     * 创建 MCP 工具提供者（单个客户端，带映射配置和工具名称过滤）
+     * @param mcpClient 单个 MCP 客户端
      * @param mappingConfig 映射配置（可为 null，表示不使用映射）
      * @param filterToolNames 要过滤的工具名称（可选）
      * @return MCP 工具提供者
      */
     public McpToolProvider createToolProviderWithMapping(McpClient mcpClient, McpToolMappingConfig mappingConfig, String ... filterToolNames) {
+        return createToolProviderWithMapping(List.of(mcpClient), mappingConfig, filterToolNames);
+    }
+    
+    /**
+     * 创建 MCP 工具提供者（带映射配置和工具名称过滤）
+     * 支持多个 MCP 客户端，参考文档: https://docs.langchain4j.dev/tutorials/mcp/#mcp-tool-provider
+     * 
+     * @param mcpClients MCP 客户端列表
+     * @param mappingConfig 映射配置（可为 null，表示不使用映射）
+     * @param filterToolNames 要过滤的工具名称（可选）
+     * @return MCP 工具提供者
+     */
+    public McpToolProvider createToolProviderWithMapping(List<McpClient> mcpClients, McpToolMappingConfig mappingConfig, String ... filterToolNames) {
         var builder = dev.langchain4j.mcp.McpToolProvider.builder()
-                .mcpClients(mcpClient);
+                .mcpClients(mcpClients);
         
         // 如果提供了映射配置，应用工具规范映射
         // 注意：不能同时设置 toolNameMapper 和 toolSpecificationMapper
@@ -103,6 +205,30 @@ public class BurpMcpToolProvider {
         }
         
         // 如果提供了工具名称过滤，应用过滤
+        if (filterToolNames != null && filterToolNames.length > 0) {
+            builder.filterToolNames(filterToolNames);
+        }
+        
+        return builder.build();
+    }
+
+    /**
+     * 创建组合的 MCP 工具提供者（多个客户端）
+     * 根据 LangChain4j 文档：一个 McpToolProvider 可以同时使用多个客户端
+     * 
+     * @param mcpClients 多个 MCP 客户端
+     * @param filterToolNames 要过滤的工具名称（可选）
+     * @return MCP 工具提供者
+     */
+    public McpToolProvider createCombinedToolProvider(List<McpClient> mcpClients, String ... filterToolNames) {
+        if (mcpClients == null || mcpClients.isEmpty()) {
+            return null;
+        }
+        
+        var builder = McpToolProvider.builder()
+                .mcpClients(mcpClients)
+                .failIfOneServerFails(false);  // 一个服务器失败不影响其他服务器
+        
         if (filterToolNames != null && filterToolNames.length > 0) {
             builder.filterToolNames(filterToolNames);
         }
@@ -133,96 +259,5 @@ public class BurpMcpToolProvider {
         return schema.required().contains(paramName);
     }
 
-    /*
-    public static void main(String[] args) {
-        BurpMcpToolProvider mcpProvider = new BurpMcpToolProvider();
 
-        try {
-            System.out.println("=== 开始连接 MCP 服务器 ===");
-
-            // 创建 transport
-            System.out.println("1. 创建 Transport...");
-            mcpProvider.transport = mcpProvider.createTransport();
-            if (mcpProvider.transport == null) {
-                throw new IllegalStateException("Transport creation failed - returned null");
-            }
-            System.out.println("   Transport 创建成功: http://127.0.0.1:9876/sse");
-
-            // 创建 mcpClient
-            System.out.println("2. 创建 MCP Client...");
-            mcpProvider.mcpClient = mcpProvider.createMcpClient(mcpProvider.transport);
-            if (mcpProvider.mcpClient == null) {
-                throw new IllegalStateException("MCP Client creation failed - returned null");
-            }
-            System.out.println("   MCP Client 创建成功");
-
-            // 等待连接建立
-            System.out.println("3. 等待连接稳定...");
-            Thread.sleep(2000);
-
-            // 创建 toolProvider
-            System.out.println("4. 创建 Tool Provider...");
-            McpToolProvider toolProvider = mcpProvider.createToolProvider(mcpProvider.mcpClient);
-            if (toolProvider == null) {
-                throw new IllegalStateException("Tool Provider creation failed - returned null");
-            }
-            System.out.println("   Tool Provider 创建成功");
-
-            // 获取工具列表
-            System.out.println("5. 获取可用工具列表...");
-            List<ToolSpecification> tools = mcpProvider.mcpClient.listTools();
-            
-            System.out.println("\n=== Burp MCP Server 可用工具列表 ===");
-            System.out.println("工具总数: " + tools.size());
-            System.out.println();
-            
-            // 循环打印每个工具的详细信息
-            if (tools.isEmpty()) {
-                System.out.println("警告: 未找到任何工具！");
-                System.out.println("可能的原因：");
-                System.out.println("1. Burp MCP Server 尚未注册任何工具");
-                System.out.println("2. 服务器配置问题");
-            } else {
-                for (int i = 0; i < tools.size(); i++) {
-                    ToolSpecification tool = tools.get(i);
-                    System.out.println("工具 #" + (i + 1) + ":");
-                    System.out.println("  名称: " + tool.name());
-                    System.out.println("  描述: " + (tool.description() != null ? tool.description() : "(无描述)"));
-                    
-                    // 打印参数信息
-                    if (tool.parameters() != null) {
-                        JsonObjectSchema params = tool.parameters();
-                        if (params.properties() != null && !params.properties().isEmpty()) {
-                            System.out.println("  参数:");
-                            params.properties().forEach((paramName, paramSchema) -> {
-                                System.out.println("    - " + paramName + ": " + 
-                                    getSchemaType(paramSchema) + 
-                                    (isRequired(params, paramName) ? " (必需)" : " (可选)"));
-                            });
-                        } else {
-                            System.out.println("  参数: (无参数)");
-                        }
-                    } else {
-                        System.out.println("  参数: (无参数)");
-                    }
-                    System.out.println();
-                }
-            }
-            
-            System.out.println("=== 工具列表获取完成 ===");
-
-        } catch (Exception e) {
-            System.err.println("错误: " + e.getMessage());
-            e.printStackTrace();
-        } finally {
-            // 清理资源
-            try {
-                if (mcpProvider.mcpClient != null) {
-                    mcpProvider.mcpClient.close();
-                }
-            } catch (Exception e) {
-                System.err.println("关闭连接时出错: " + e.getMessage());
-            }
-        }
-    } */
 }

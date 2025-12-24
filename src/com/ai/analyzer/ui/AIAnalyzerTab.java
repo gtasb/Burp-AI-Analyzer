@@ -9,10 +9,14 @@ import com.ai.analyzer.utils.MarkdownRenderer;
 // import com.example.ai.analyzer.Tools.ToolExecutor;
 
 import javax.swing.*;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import javax.swing.table.DefaultTableModel;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.StyledDocument;
 import java.awt.*;
+import java.io.FileOutputStream;
+import java.io.ObjectOutputStream;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -32,9 +36,15 @@ public class AIAnalyzerTab extends JPanel {
     private JCheckBox enableThinkingCheckBox;
     private JCheckBox enableSearchCheckBox;
     private JCheckBox enableMcpCheckBox;
-    private JTextField mcpUrlField;
-    private JCheckBox enableRagCheckBox;
-    private JTextField ragDocumentsPathField;
+    private JTextField BurpMcpUrlField;
+    private JCheckBox enableRagMcpCheckBox;
+    // private JTextField ragMcpUrlField; // RAG MCP 地址暂时隐藏
+    private JTextField ragMcpDocumentsPathField;
+    private JCheckBox enableChromeMcpCheckBox;
+    private JTextField chromeMcpUrlField;
+    // 默认 RAG 功能暂时禁用，改用 RAG MCP
+    // private JCheckBox enableRagCheckBox;
+    // private JTextField ragDocumentsPathField;
     private JTable requestListTable;
     private DefaultTableModel requestTableModel;
     private HttpRequestEditor requestEditor;
@@ -198,134 +208,288 @@ public class AIAnalyzerTab extends JPanel {
         JSeparator mcpSeparator = new JSeparator();
         apiConfigPanel.add(mcpSeparator, gbc);
         
-        // MCP 工具调用开关
+        // Burp MCP 工具调用开关
         gbc.gridx = 0;
         gbc.gridy = 4;
         gbc.gridwidth = 1;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        apiConfigPanel.add(new JLabel("启用 MCP 工具:"), gbc);
+        apiConfigPanel.add(new JLabel("启用 Burp MCP 工具:"), gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
-        enableMcpCheckBox = new JCheckBox("启用 MCP 工具调用", false);
+        enableMcpCheckBox = new JCheckBox("启用 Burp MCP 工具调用", false);
         enableMcpCheckBox.addActionListener(e -> {
             boolean enabled = enableMcpCheckBox.isSelected();
-            mcpUrlField.setEnabled(enabled);
+            BurpMcpUrlField.setEnabled(enabled);
             apiClient.setEnableMcp(enabled);
-            if (enabled && !mcpUrlField.getText().trim().isEmpty()) {
-                apiClient.setMcpUrl(mcpUrlField.getText().trim());
+            if (enabled && !BurpMcpUrlField.getText().trim().isEmpty()) {
+                apiClient.setBurpMcpUrl(BurpMcpUrlField.getText().trim());
             }
         });
         apiConfigPanel.add(enableMcpCheckBox, gbc);
         
-        // MCP URL
+        // Burp MCP 地址
         gbc.gridx = 0;
         gbc.gridy = 5;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        apiConfigPanel.add(new JLabel("MCP 地址:"), gbc);
+        apiConfigPanel.add(new JLabel("Burp MCP 地址:"), gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
-        mcpUrlField = new JTextField("http://localhost:9876/sse", 30);
-        mcpUrlField.setEnabled(false); // 默认禁用，只有启用 MCP 时才可用
-        mcpUrlField.addActionListener(e -> {
+        BurpMcpUrlField = new JTextField("http://127.0.0.1:9876/sse", 30);
+        BurpMcpUrlField.setEnabled(false); // 默认禁用，只有启用 MCP 时才可用
+        BurpMcpUrlField.addActionListener(e -> {
             if (enableMcpCheckBox.isSelected()) {
-                apiClient.setMcpUrl(mcpUrlField.getText().trim());
+                apiClient.setBurpMcpUrl(BurpMcpUrlField.getText().trim());
             }
         });
-        mcpUrlField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+        BurpMcpUrlField.getDocument().addDocumentListener(new DocumentListener() {
             @Override
-            public void insertUpdate(javax.swing.event.DocumentEvent e) {
-                updateMcpUrl();
+            public void insertUpdate(DocumentEvent e) {
+                updateBurpMcpUrl();
             }
             @Override
-            public void removeUpdate(javax.swing.event.DocumentEvent e) {
-                updateMcpUrl();
+            public void removeUpdate(DocumentEvent e) {
+                updateBurpMcpUrl();
             }
             @Override
-            public void changedUpdate(javax.swing.event.DocumentEvent e) {
-                updateMcpUrl();
+            public void changedUpdate(DocumentEvent e) {
+                updateBurpMcpUrl();
             }
-            private void updateMcpUrl() {
-                if (enableMcpCheckBox.isSelected() && !mcpUrlField.getText().trim().isEmpty()) {
-                    apiClient.setMcpUrl(mcpUrlField.getText().trim());
+            private void updateBurpMcpUrl() {
+                if (enableMcpCheckBox.isSelected() && !BurpMcpUrlField.getText().trim().isEmpty()) {
+                    apiClient.setBurpMcpUrl(BurpMcpUrlField.getText().trim());
                 }
             }
         });
-        apiConfigPanel.add(mcpUrlField, gbc);
-        
-        // RAG 配置分隔线
+        apiConfigPanel.add(BurpMcpUrlField, gbc);
+
+        // RAG MCP 工具调用开关
         gbc.gridx = 0;
         gbc.gridy = 6;
+        gbc.gridwidth = 1;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        apiConfigPanel.add(new JLabel("启用 RAG MCP 工具:"), gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        enableRagMcpCheckBox = new JCheckBox("启用 RAG MCP 工具调用", false);
+        enableRagMcpCheckBox.addActionListener(e -> {
+            boolean enabled = enableRagMcpCheckBox.isSelected();
+            // ragMcpUrlField.setEnabled(enabled); // RAG MCP 地址暂时隐藏
+            ragMcpDocumentsPathField.setEnabled(enabled);
+            apiClient.setEnableRagMcp(enabled);
+            if (enabled) {
+                // if (!ragMcpUrlField.getText().trim().isEmpty()) { // RAG MCP 地址暂时隐藏
+                //     apiClient.setRagMcpUrl(ragMcpUrlField.getText().trim());
+                // }
+                if (!ragMcpDocumentsPathField.getText().trim().isEmpty()) {
+                    apiClient.setRagMcpDocumentsPath(ragMcpDocumentsPathField.getText().trim());
+                }
+            }
+        });
+        apiConfigPanel.add(enableRagMcpCheckBox, gbc);
+        
+        // RAG MCP 地址输入框暂时隐藏
+        // // RAG MCP 命令
+        // gbc.gridx = 0;
+        // gbc.gridy = 7;
+        // gbc.fill = GridBagConstraints.NONE;
+        // gbc.weightx = 0;
+        // apiConfigPanel.add(new JLabel("RAG MCP 地址:"), gbc);
+        // gbc.gridx = 1;
+        // gbc.fill = GridBagConstraints.HORIZONTAL;
+        // gbc.weightx = 1.0;
+        // ragMcpUrlField = new JTextField(" ", 30);
+        // ragMcpUrlField.setEnabled(false); // 默认禁用，只有启用 RAG MCP 时才可用
+        // ragMcpUrlField.addActionListener(e -> {
+        //     if (enableRagMcpCheckBox.isSelected()) {
+        //         apiClient.setRagMcpUrl(ragMcpUrlField.getText().trim());
+        //     }
+        // });
+        // ragMcpUrlField.getDocument().addDocumentListener(new DocumentListener() {
+        //     @Override
+        //     public void insertUpdate(DocumentEvent e) {
+        //         updateRagMcpUrl();
+        //     }
+        //     @Override
+        //     public void removeUpdate(DocumentEvent e) {
+        //         updateRagMcpUrl();
+        //     }
+        //     @Override
+        //     public void changedUpdate(DocumentEvent e) {
+        //         updateRagMcpUrl();
+        //     }
+        //     private void updateRagMcpUrl() {
+        //         if (enableRagMcpCheckBox.isSelected() && !ragMcpUrlField.getText().trim().isEmpty()) {
+        //             apiClient.setRagMcpUrl(ragMcpUrlField.getText().trim());
+        //         }
+        //     }
+        // });
+        // apiConfigPanel.add(ragMcpUrlField, gbc);
+
+        // RAG MCP 文档路径
+        gbc.gridx = 0;
+        gbc.gridy = 7;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        apiConfigPanel.add(new JLabel("RAG MCP 文档路径:"), gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        ragMcpDocumentsPathField = new JTextField("", 30);
+        ragMcpDocumentsPathField.setEnabled(true); // 默认启用
+        ragMcpDocumentsPathField.setToolTipText("指定 RAG MCP 知识库文档目录路径");
+        ragMcpDocumentsPathField.addActionListener(e -> {
+            if (enableRagMcpCheckBox.isSelected()) {
+                apiClient.setRagMcpDocumentsPath(ragMcpDocumentsPathField.getText().trim());
+            }
+        });
+        ragMcpDocumentsPathField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                updateRagMcpDocumentsPath();
+            }
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                updateRagMcpDocumentsPath();
+            }
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                updateRagMcpDocumentsPath();
+            }
+            private void updateRagMcpDocumentsPath() {
+                if (enableRagMcpCheckBox.isSelected() && !ragMcpDocumentsPathField.getText().trim().isEmpty()) {
+                    apiClient.setRagMcpDocumentsPath(ragMcpDocumentsPathField.getText().trim());
+                }
+            }
+        });
+        apiConfigPanel.add(ragMcpDocumentsPathField, gbc);
+
+        // Chrome MCP 工具调用开关
+        gbc.gridx = 0;
+        gbc.gridy = 8;
+        gbc.gridwidth = 1;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        apiConfigPanel.add(new JLabel("启用 Chrome MCP 工具:"), gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        enableChromeMcpCheckBox = new JCheckBox("启用 Chrome MCP 工具调用", false);
+        enableChromeMcpCheckBox.addActionListener(e -> {
+            boolean enabled = enableChromeMcpCheckBox.isSelected();
+            chromeMcpUrlField.setEnabled(enabled);
+            apiClient.setEnableChromeMcp(enabled);
+            if (enabled && !chromeMcpUrlField.getText().trim().isEmpty()) {
+                apiClient.setChromeMcpUrl(chromeMcpUrlField.getText().trim());
+            }
+        });
+        apiConfigPanel.add(enableChromeMcpCheckBox, gbc);
+
+        // Chrome MCP 地址
+        gbc.gridx = 0;
+        gbc.gridy = 9;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        apiConfigPanel.add(new JLabel("Chrome MCP 地址:"), gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        chromeMcpUrlField = new JTextField(" ", 30);
+        chromeMcpUrlField.setEnabled(false); // 默认禁用，只有启用 Chrome MCP 时才可用
+        chromeMcpUrlField.addActionListener(e -> {
+            if (enableChromeMcpCheckBox.isSelected()) {
+                apiClient.setChromeMcpUrl(chromeMcpUrlField.getText().trim());
+            }
+        });
+        chromeMcpUrlField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                updateChromeMcpUrl();
+            }
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                updateChromeMcpUrl();
+            }
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                updateChromeMcpUrl();
+            }
+            private void updateChromeMcpUrl() {
+                if (enableChromeMcpCheckBox.isSelected() && !chromeMcpUrlField.getText().trim().isEmpty()) {
+                    apiClient.setChromeMcpUrl(chromeMcpUrlField.getText().trim());
+                }
+            }
+        });
+        apiConfigPanel.add(chromeMcpUrlField, gbc);
+
+        // RAG 配置分隔线
+        gbc.gridx = 0;
+        gbc.gridy = 10;
         gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
         JSeparator ragSeparator = new JSeparator();
         apiConfigPanel.add(ragSeparator, gbc);
         
-        // RAG 工具调用开关
-        gbc.gridx = 0;
-        gbc.gridy = 7;
-        gbc.gridwidth = 1;
-        gbc.fill = GridBagConstraints.NONE;
-        gbc.weightx = 0;
-        apiConfigPanel.add(new JLabel("启用 RAG:"), gbc);
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
-        enableRagCheckBox = new JCheckBox("启用 RAG（检索增强生成）", false);
-        enableRagCheckBox.addActionListener(e -> {
-            boolean enabled = enableRagCheckBox.isSelected();
-            ragDocumentsPathField.setEnabled(enabled);
-            apiClient.setEnableRag(enabled);
-            if (enabled && !ragDocumentsPathField.getText().trim().isEmpty()) {
-                apiClient.setRagDocumentsPath(ragDocumentsPathField.getText().trim());
-            }
-        });
-        apiConfigPanel.add(enableRagCheckBox, gbc);
-        
-        // RAG 文档路径
-        gbc.gridx = 0;
-        gbc.gridy = 8;
-        gbc.fill = GridBagConstraints.NONE;
-        gbc.weightx = 0;
-        apiConfigPanel.add(new JLabel("RAG 文档路径:"), gbc);
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
-        ragDocumentsPathField = new JTextField("", 30);
-        ragDocumentsPathField.setEnabled(false); // 默认禁用，只有启用 RAG 时才可用
-        ragDocumentsPathField.addActionListener(e -> {
-            if (enableRagCheckBox.isSelected()) {
-                apiClient.setRagDocumentsPath(ragDocumentsPathField.getText().trim());
-            }
-        });
-        ragDocumentsPathField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
-            @Override
-            public void insertUpdate(javax.swing.event.DocumentEvent e) {
-                updateRagDocumentsPath();
-            }
-            @Override
-            public void removeUpdate(javax.swing.event.DocumentEvent e) {
-                updateRagDocumentsPath();
-            }
-            @Override
-            public void changedUpdate(javax.swing.event.DocumentEvent e) {
-                updateRagDocumentsPath();
-            }
-            private void updateRagDocumentsPath() {
-                if (enableRagCheckBox.isSelected() && !ragDocumentsPathField.getText().trim().isEmpty()) {
-                    apiClient.setRagDocumentsPath(ragDocumentsPathField.getText().trim());
-                }
-            }
-        });
-        apiConfigPanel.add(ragDocumentsPathField, gbc);
+        // ========== 默认 RAG 功能暂时禁用，改用 RAG MCP ==========
+        // // RAG 工具调用开关
+        // gbc.gridx = 0;
+        // gbc.gridy = 12;
+        // gbc.gridwidth = 1;
+        // gbc.fill = GridBagConstraints.NONE;
+        // gbc.weightx = 0;
+        // apiConfigPanel.add(new JLabel("启用 RAG:"), gbc);
+        // gbc.gridx = 1;
+        // gbc.fill = GridBagConstraints.HORIZONTAL;
+        // gbc.weightx = 1.0;
+        // enableRagCheckBox = new JCheckBox("启用 RAG（检索增强生成）", false);
+        // enableRagCheckBox.addActionListener(e -> {
+        //     boolean enabled = enableRagCheckBox.isSelected();
+        //     ragDocumentsPathField.setEnabled(enabled);
+        //     apiClient.setEnableRag(enabled);
+        //     if (enabled && !ragDocumentsPathField.getText().trim().isEmpty()) {
+        //         apiClient.setRagDocumentsPath(ragDocumentsPathField.getText().trim());
+        //     }
+        // });
+        // apiConfigPanel.add(enableRagCheckBox, gbc);
+        // 
+        // // RAG 文档路径
+        // gbc.gridx = 0;
+        // gbc.gridy = 13;
+        // gbc.fill = GridBagConstraints.NONE;
+        // gbc.weightx = 0;
+        // apiConfigPanel.add(new JLabel("RAG 文档路径:"), gbc);
+        // gbc.gridx = 1;
+        // gbc.fill = GridBagConstraints.HORIZONTAL;
+        // gbc.weightx = 1.0;
+        // ragDocumentsPathField = new JTextField("", 30);
+        // ragDocumentsPathField.setEnabled(true);
+        // ragDocumentsPathField.addActionListener(e -> {
+        //     if (enableRagCheckBox.isSelected()) {
+        //         apiClient.setRagDocumentsPath(ragDocumentsPathField.getText().trim());
+        //     }
+        // });
+        // ragDocumentsPathField.getDocument().addDocumentListener(new DocumentListener() {
+        //     @Override public void insertUpdate(DocumentEvent e) { updateRagDocumentsPath(); }
+        //     @Override public void removeUpdate(DocumentEvent e) { updateRagDocumentsPath(); }
+        //     @Override public void changedUpdate(DocumentEvent e) { updateRagDocumentsPath(); }
+        //     private void updateRagDocumentsPath() {
+        //         if (enableRagCheckBox.isSelected() && !ragDocumentsPathField.getText().trim().isEmpty()) {
+        //             apiClient.setRagDocumentsPath(ragDocumentsPathField.getText().trim());
+        //         }
+        //     }
+        // });
+        // apiConfigPanel.add(ragDocumentsPathField, gbc);
+        // ========== 默认 RAG 功能暂时禁用结束 ==========
         
         // 设置按钮
         gbc.gridx = 0;
-        gbc.gridy = 9;
+        gbc.gridy = 11; // 调整 gridy，因为上面的 RAG MCP 地址配置被注释掉了
         gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -353,7 +517,7 @@ public class AIAnalyzerTab extends JPanel {
                         "• API Key: 从阿里云 DashScope 获取的 API 密钥\n" +
                         "• Model: 使用的模型名称（如 qwen-max, qwen-plus 等）\n" +
                         "• 启用 MCP 工具: 启用后 AI 可以调用 Burp Suite 的 MCP 工具\n" +
-                        "• MCP 地址: Burp MCP Server 的 SSE 端点地址（默认: http://localhost:9876/sse）\n" +
+                        "• Burp MCP 地址: Burp MCP Server 的 SSE 端点地址（默认: http://127.0.0.1:9876/sse）\n" +
                         "• 启用 RAG: 启用检索增强生成，AI 可以从指定文档目录中检索相关信息\n" +
                         "• RAG 文档路径: 包含文档的目录路径（支持 PDF、Word、HTML 等格式，会递归加载子目录）\n" +
                         "\n提示：配置修改后会自动应用到 API 客户端，无需重启插件。\n" +
@@ -814,12 +978,17 @@ public class AIAnalyzerTab extends JPanel {
                 enableThinkingCheckBox.isSelected(),
                 enableSearchCheckBox.isSelected(),
                 enableMcpCheckBox.isSelected(),
-                mcpUrlField.getText().trim(),
-                enableRagCheckBox.isSelected(),
-                ragDocumentsPathField.getText().trim()
+                BurpMcpUrlField.getText().trim(),
+                enableRagMcpCheckBox.isSelected(),
+                "", // ragMcpUrlField.getText().trim(), // RAG MCP 地址暂时隐藏
+                ragMcpDocumentsPathField.getText().trim(),
+                enableChromeMcpCheckBox.isSelected(),
+                chromeMcpUrlField.getText().trim(),
+                false, // enableRag 暂时禁用
+                ""    // ragDocumentsPath 暂时禁用
             );
 
-            java.io.ObjectOutputStream oos = new java.io.ObjectOutputStream(new java.io.FileOutputStream("ai_analyzer_settings.dat"));
+            ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream("ai_analyzer_settings.dat"));
             oos.writeObject(settings);
             oos.close();
 
@@ -885,12 +1054,28 @@ public class AIAnalyzerTab extends JPanel {
         userPromptArea.setText(settings.getUserPrompt());
         enableThinkingCheckBox.setSelected(settings.isEnableThinking());
         enableSearchCheckBox.setSelected(settings.isEnableSearch());
+        
+        // Burp MCP 配置
         enableMcpCheckBox.setSelected(settings.isEnableMcp());
-        mcpUrlField.setText(settings.getMcpUrl());
-        mcpUrlField.setEnabled(settings.isEnableMcp());
-        enableRagCheckBox.setSelected(settings.isEnableRag());
-        ragDocumentsPathField.setText(settings.getRagDocumentsPath());
-        ragDocumentsPathField.setEnabled(settings.isEnableRag());
+        BurpMcpUrlField.setText(settings.getMcpUrl());
+        BurpMcpUrlField.setEnabled(settings.isEnableMcp());
+        
+        // RAG MCP 配置
+        enableRagMcpCheckBox.setSelected(settings.isEnableRagMcp());
+        // ragMcpUrlField.setText(settings.getRagMcpUrl()); // RAG MCP 地址暂时隐藏
+        // ragMcpUrlField.setEnabled(settings.isEnableRagMcp());
+        ragMcpDocumentsPathField.setText(settings.getRagMcpDocumentsPath());
+        ragMcpDocumentsPathField.setEnabled(settings.isEnableRagMcp());
+        
+        // Chrome MCP 配置
+        enableChromeMcpCheckBox.setSelected(settings.isEnableChromeMcp());
+        chromeMcpUrlField.setText(settings.getChromeMcpUrl());
+        chromeMcpUrlField.setEnabled(settings.isEnableChromeMcp());
+        
+        // 默认 RAG 配置暂时禁用
+        // enableRagCheckBox.setSelected(settings.isEnableRag());
+        // ragDocumentsPathField.setText(settings.getRagDocumentsPath());
+        // ragDocumentsPathField.setEnabled(settings.isEnableRag());
         
         // 更新API客户端配置
         apiClient.setApiUrl(settings.getApiUrl());
@@ -899,10 +1084,15 @@ public class AIAnalyzerTab extends JPanel {
         apiClient.setEnableThinking(settings.isEnableThinking());
         apiClient.setEnableSearch(settings.isEnableSearch());
         apiClient.setEnableMcp(settings.isEnableMcp());
-        apiClient.setMcpUrl(settings.getMcpUrl());
-        apiClient.setEnableRag(settings.isEnableRag());
-        apiClient.setRagDocumentsPath(settings.getRagDocumentsPath());
-        apiClient.ensureRagInitialized();
+        apiClient.setBurpMcpUrl(settings.getMcpUrl());
+        apiClient.setEnableRagMcp(settings.isEnableRagMcp());
+        apiClient.setRagMcpUrl(settings.getRagMcpUrl());
+        apiClient.setRagMcpDocumentsPath(settings.getRagMcpDocumentsPath());
+        apiClient.setEnableChromeMcp(settings.isEnableChromeMcp());
+        apiClient.setChromeMcpUrl(settings.getChromeMcpUrl());
+        // apiClient.setEnableRag(settings.isEnableRag()); // 默认 RAG 暂时禁用
+        // apiClient.setRagDocumentsPath(settings.getRagDocumentsPath()); // 默认 RAG 暂时禁用
+        // apiClient.ensureRagInitialized(); // 默认 RAG 暂时禁用
     }
     
     /**

@@ -1,10 +1,10 @@
 package com.ai.analyzer.api;
 
 import com.ai.analyzer.Agent.Assistant;
-import com.ai.analyzer.mcpClient.BurpMcpToolProvider;
+import com.ai.analyzer.mcpClient.AllMcpToolProvider;
 import com.ai.analyzer.mcpClient.McpToolMappingConfig;
 import com.ai.analyzer.mcpClient.ToolExecutionFormatter;
-import com.ai.analyzer.rag.RagContentManager;
+// import com.ai.analyzer.rag.RagContentManager; // 默认 RAG 暂时禁用
 import com.ai.analyzer.utils.RequestSourceDetector;
 import burp.api.montoya.http.message.HttpRequestResponse;
 import java.util.concurrent.CompletableFuture;
@@ -12,11 +12,13 @@ import java.util.function.Consumer;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.ObjectInputStream;
+import java.util.ArrayList;
 import java.util.List;
 import com.ai.analyzer.model.PluginSettings;
 import burp.api.montoya.MontoyaApi;
 import dev.langchain4j.model.chat.response.PartialResponse;
-import dev.langchain4j.service.StreamingHandle;
+import dev.langchain4j.model.chat.response.StreamingHandle;
+import dev.langchain4j.model.chat.response.PartialResponseContext;
 import dev.langchain4j.community.model.dashscope.QwenChatRequestParameters;
 import dev.langchain4j.mcp.client.McpClient;
 import dev.langchain4j.mcp.McpToolProvider;
@@ -32,7 +34,6 @@ import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.tool.BeforeToolExecution;
 import dev.langchain4j.service.tool.ToolExecution;
 import dev.langchain4j.community.model.dashscope.QwenStreamingChatModel;
-import dev.langchain4j.service.PartialResponseContext; 
 import lombok.Getter;
 
 
@@ -57,27 +58,39 @@ public class QianwenApiClient {
     @Getter
     private boolean enableSearch; // 是否启用搜索
     @Getter
-    private boolean enableMcp = false; // 是否启用 MCP 工具调用
+    private boolean enableMcp = false; // 是否启用 Burp MCP 工具调用
     @Getter
-    private String mcpUrl = "http://localhost:9876/sse"; // MCP 服务器地址
+    private String BurpMcpUrl = "http://127.0.0.1:9876/sse"; // Burp MCP 服务器地址
     @Getter
-    private boolean enableRag = false; // 是否启用 RAG
+    private boolean enableRagMcp = false; // 是否启用 RAG MCP 工具调用
     @Getter
-    private String ragDocumentsPath = ""; // RAG 文档路径
+    private String ragMcpUrl = ""; // RAG MCP 服务器地址（stdio 模式不使用）
+    @Getter
+    private String ragMcpDocumentsPath = ""; // RAG MCP 知识库文档路径
+    @Getter
+    private boolean enableChromeMcp = false; // 是否启用 Chrome MCP 工具调用
+    @Getter
+    private String chromeMcpUrl = ""; // Chrome MCP 服务器地址
+    // 默认 RAG 功能暂时禁用，改用 RAG MCP
+    // @Getter
+    // private boolean enableRag = false; // 是否启用 RAG
+    // @Getter
+    // private String ragDocumentsPath = ""; // RAG 文档路径
     private boolean isFirstInitialization = true; // 是否是第一次初始化
     private boolean needsReinitialization = false; // 标记是否需要重新初始化（延迟初始化，避免频繁重建）
     private Assistant assistant; // 共享的 Assistant 实例，用于保持上下文
     private McpToolProvider mcpToolProvider; // MCP 工具提供者（共享实例）
-    private RagContentManager ragContentManager;
+    // private RagContentManager ragContentManager; // 默认 RAG 功能暂时禁用
     private MessageWindowChatMemory chatMemory; // 共享的聊天记忆，用于保持上下文（即使 Assistant 重新创建也保留）
     private volatile TokenStream currentTokenStream; // 当前活动的 TokenStream，用于取消流式输出
     private volatile StreamingHandle streamingHandle; // 流式句柄，用于正确取消流
 
     public void setApi(MontoyaApi api) {
         this.api = api;
-        if (ragContentManager != null) {
-            ragContentManager.updateApi(api);
-        }
+        // 默认 RAG 暂时禁用
+        // if (ragContentManager != null) {
+        //     ragContentManager.updateApi(api);
+        // }
     }
 
     /**
@@ -182,7 +195,7 @@ public class QianwenApiClient {
                     // 使返回结果中包含搜索信息的来源
                     //.enableSource(true)
                     // 强制开启互联网搜索（根据用户设置）
-                    .forcedSearch(enableSearch)
+                    //.forcedSearch(enableSearch)
                     // 开启角标标注
                     //.enableCitation(true)
                     // 设置角标标注样式为[ref_i]
@@ -290,44 +303,114 @@ public class QianwenApiClient {
     private void ensureAssistantInitialized() {
         // 如果 assistant 为 null，创建新的实例（使用最新的 chatModel）
         if (assistant == null) {
-            // 如果启用了 MCP，获取或创建 MCP 工具提供者（带映射配置）
-            if (enableMcp && mcpToolProvider == null) {
+            // 收集所有启用的 MCP 客户端
+            // 参考文档: https://docs.langchain4j.dev/tutorials/mcp/#mcp-tool-provider
+            // 一个 McpToolProvider 可以同时使用多个客户端
+            if ((enableMcp || enableRagMcp || enableChromeMcp) && mcpToolProvider == null) {
                 try {
-                    BurpMcpToolProvider mcpProviderHelper = new BurpMcpToolProvider();
-                    // 使用配置的 MCP URL
-                    String mcpUrlValue = (this.mcpUrl != null && !this.mcpUrl.trim().isEmpty()) 
-                        ? this.mcpUrl.trim() 
-                        : "http://localhost:9876/sse";
-                    // 直接调用方法（类已重命名，不再有冲突）
-                    McpTransport transport = mcpProviderHelper.createTransport(mcpUrlValue);
-                    McpClient mcpClient = mcpProviderHelper.createMcpClient(transport);
+                    AllMcpToolProvider mcpProviderHelper = new AllMcpToolProvider();
+                    List<McpClient> allMcpClients = new ArrayList<>();
+                    List<String> allFilterTools = new ArrayList<>();
+                    McpToolMappingConfig mappingConfig = null;
+                    
+                    // 1. Burp MCP 客户端
+                    if (enableMcp) {
+                        try {
+                            String burpMcpUrlValue = (this.BurpMcpUrl != null && !this.BurpMcpUrl.trim().isEmpty()) 
+                                ? this.BurpMcpUrl.trim() 
+                                : "http://127.0.0.1:9876/sse";
+                            McpTransport burpTransport = mcpProviderHelper.createHttpTransport(burpMcpUrlValue);
+                            McpClient burpMcpClient = mcpProviderHelper.createMcpClient(burpTransport, "BurpMCPClient");
+                            allMcpClients.add(burpMcpClient);
+                            
+                            // Burp MCP 工具过滤
+                            allFilterTools.addAll(List.of(
+                                "send_http1_request", "send_http2_request", 
+                                "get_proxy_http_history", "get_proxy_http_history_regex",
+                                "get_proxy_websocket_history", "get_proxy_websocket_history_regex", 
+                                "get_scanner_issues", "set_task_execution_engine_state",
+                                "get_active_editor_contents", "set_active_editor_contents",
+                                "create_repeater_tab", "send_to_intruder"
+                            ));
+                            
+                            // Burp MCP 工具映射配置
+                            mappingConfig = McpToolMappingConfig.createBurpMapping();
+                            
+                            if (api != null) {
+                                api.logging().logToOutput("[QianwenApiClient] Burp MCP 客户端已添加，地址: " + burpMcpUrlValue);
+                            }
+                        } catch (Exception e) {
+                            if (api != null) {
+                                api.logging().logToOutput("[QianwenApiClient] Burp MCP 客户端初始化失败: " + e.getMessage());
+                            }
+                        }
+                    }
+                    
+                    // 2. RAG MCP 客户端（使用 stdio 传输）
+                    if (enableRagMcp && ragMcpDocumentsPath != null && !ragMcpDocumentsPath.trim().isEmpty()) {
+                        try {
+                            McpTransport ragTransport = mcpProviderHelper.createRagMcpTransport(ragMcpDocumentsPath.trim());
+                            McpClient ragMcpClient = mcpProviderHelper.createMcpClient(ragTransport, "RagMCPClient");
+                            allMcpClients.add(ragMcpClient);
+                            
+                            // RAG MCP 只允许 semantic_search 工具
+                            allFilterTools.add("semantic_search");
+                            
+                            if (api != null) {
+                                api.logging().logToOutput("[QianwenApiClient] RAG MCP 客户端已添加，知识库路径: " + ragMcpDocumentsPath);
+                            }
+                        } catch (Exception e) {
+                            if (api != null) {
+                                api.logging().logToOutput("[QianwenApiClient] RAG MCP 客户端初始化失败: " + e.getMessage());
+                            }
+                        }
+                    }
+                    
+                    // 3. Chrome MCP 客户端（使用 Streamable HTTP 传输）
+                    if (enableChromeMcp && chromeMcpUrl != null && !chromeMcpUrl.trim().isEmpty()) {
+                        try {
+                            McpTransport chromeTransport = mcpProviderHelper.createHttpTransport(chromeMcpUrl.trim());
+                            McpClient chromeMcpClient = mcpProviderHelper.createMcpClient(chromeTransport, "ChromeMCPClient");
+                            allMcpClients.add(chromeMcpClient);
+                            
+                            // Chrome MCP 可以使用所有工具，不添加过滤
+                            // 如需过滤，可在此添加: allFilterTools.addAll(List.of(...));
+                            
+                            if (api != null) {
+                                api.logging().logToOutput("[QianwenApiClient] Chrome MCP 客户端已添加，地址: " + chromeMcpUrl);
+                            }
+                        } catch (Exception e) {
+                            if (api != null) {
+                                api.logging().logToOutput("[QianwenApiClient] Chrome MCP 客户端初始化失败: " + e.getMessage());
+                            }
+                        }
+                    }
+                    
                     // 等待连接稳定
+                    if (!allMcpClients.isEmpty()) {
                     Thread.sleep(1000);
                     
-                    // 创建 Burp MCP 工具映射配置（包含中文名称和描述映射）
-                    McpToolMappingConfig mappingConfig = McpToolMappingConfig.createBurpMapping();
-                    
-                    // 使用映射配置创建 Tool Provider
-                    // 只保留 create_repeater_tab 和 send_to_intruder 工具
-                    //mcpToolProvider = mcpProviderHelper.createToolProviderWithMapping(mcpClient, mappingConfig, 
-                    //"create_repeater_tab", "send_to_intruder");
-                    mcpToolProvider = mcpProviderHelper.createToolProviderWithMapping(mcpClient, mappingConfig,
-                    "send_http1_request", "send_http2_request", "get_proxy_http_history", "get_proxy_http_history_regex",
-                    "get_proxy_websocket_history", "get_proxy_websocket_history_regex", "get_scanner_issues", "set_task_execution_engine_state",
-                    "get_active_editor_contents","set_active_editor_contents");    
+                        // 创建组合的 Tool Provider
+                        String[] filterToolsArray = allFilterTools.isEmpty() ? null : allFilterTools.toArray(new String[0]);
+                        mcpToolProvider = mcpProviderHelper.createToolProviderWithMapping(
+                            allMcpClients, 
+                            mappingConfig, 
+                            filterToolsArray
+                        );
 
                     if (api != null) {
-                        api.logging().logToOutput("[QianwenApiClient] MCP 工具提供者初始化成功（已应用工具名称和描述映射，地址: " + mcpUrl + "）");
+                            api.logging().logToOutput("[QianwenApiClient] MCP 工具提供者初始化成功，已添加 " + allMcpClients.size() + " 个 MCP 客户端");
+                        }
                     }
                 } catch (Exception e) {
                     // MCP 服务器不可用，不影响主要功能
                     if (api != null) {
-                        api.logging().logToOutput("[QianwenApiClient] MCP 工具提供者初始化失败（MCP 服务器可能未运行，地址: " + mcpUrl + "）: " + e.getMessage());
+                        api.logging().logToOutput("[QianwenApiClient] MCP 工具提供者初始化失败: " + e.getMessage());
                     }
                     mcpToolProvider = null;
                 }
-            } else if (!enableMcp) {
-                // 如果禁用了 MCP，确保 mcpToolProvider 为 null
+            } else if (!enableMcp && !enableRagMcp && !enableChromeMcp) {
+                // 如果所有 MCP 都禁用了，确保 mcpToolProvider 为 null
                 mcpToolProvider = null;
             }
             
@@ -352,18 +435,19 @@ public class QianwenApiClient {
                 }
             }
             
+            // 默认 RAG 功能暂时禁用，改用 RAG MCP
             // 如果启用了 RAG，添加 ContentRetriever（使用缓存实例）
-            if (enableRag) {
-                ensureRagInitialized();
-                if (ragContentManager != null && ragContentManager.isReady()) {
-                    assistantBuilder.contentRetriever(ragContentManager.getContentRetriever());
-                    if (api != null) {
-                        api.logging().logToOutput("[QianwenApiClient] 已启用 RAG 内容检索");
-                    }
-                } else if (api != null) {
-                    api.logging().logToOutput("[QianwenApiClient] 警告: RAG 已启用但内容检索器尚未就绪");
-                }
-            }
+            // if (enableRag) {
+            //     ensureRagInitialized();
+            //     if (ragContentManager != null && ragContentManager.isReady()) {
+            //         assistantBuilder.contentRetriever(ragContentManager.getContentRetriever());
+            //         if (api != null) {
+            //             api.logging().logToOutput("[QianwenApiClient] 已启用 RAG 内容检索");
+            //         }
+            //     } else if (api != null) {
+            //         api.logging().logToOutput("[QianwenApiClient] 警告: RAG 已启用但内容检索器尚未就绪");
+            //     }
+            // }
             
             assistant = assistantBuilder.build();
             if (api != null) {
@@ -452,8 +536,8 @@ public class QianwenApiClient {
                     ? settings.getModel() : defaultModel;
                 this.enableThinking = settings.isEnableThinking();
                 this.enableSearch = settings.isEnableSearch();
-                this.enableRag = settings.isEnableRag();
-                this.ragDocumentsPath = settings.getRagDocumentsPath() != null ? settings.getRagDocumentsPath() : "";
+                // this.enableRag = settings.isEnableRag(); // 默认 RAG 暂时禁用
+                // this.ragDocumentsPath = settings.getRagDocumentsPath() != null ? settings.getRagDocumentsPath() : "";
                 return;
             }
         }
@@ -471,8 +555,8 @@ public class QianwenApiClient {
                     ? settings.getModel() : defaultModel;
                 this.enableThinking = settings.isEnableThinking();
                 this.enableSearch = settings.isEnableSearch();
-                this.enableRag = settings.isEnableRag();
-                this.ragDocumentsPath = settings.getRagDocumentsPath() != null ? settings.getRagDocumentsPath() : "";
+                // this.enableRag = settings.isEnableRag(); // 默认 RAG 暂时禁用
+                // this.ragDocumentsPath = settings.getRagDocumentsPath() != null ? settings.getRagDocumentsPath() : "";
                 return;
             }
         }
@@ -483,22 +567,23 @@ public class QianwenApiClient {
         this.model = defaultModel;
         this.enableThinking = false;
         this.enableSearch = false;
-        this.enableRag = false;
-        this.ragDocumentsPath = "";
+        // this.enableRag = false; // 默认 RAG 暂时禁用
+        // this.ragDocumentsPath = "";
     }
 
-    /**
-     * 在需要时初始化 RAG（例如 UI 完成加载配置后）
-     */
-    public void ensureRagInitialized() {
-        if (!enableRag) {
-            return;
-        }
-        RagContentManager manager = getOrCreateRagContentManager();
-        if (!manager.isReady()) {
-            manager.load(ragDocumentsPath);
-        }
-    }
+    // 默认 RAG 功能暂时禁用，改用 RAG MCP
+    // /**
+    //  * 在需要时初始化 RAG（例如 UI 完成加载配置后）
+    //  */
+    // public void ensureRagInitialized() {
+    //     if (!enableRag) {
+    //         return;
+    //     }
+    //     RagContentManager manager = getOrCreateRagContentManager();
+    //     if (!manager.isReady()) {
+    //         manager.load(ragDocumentsPath);
+    //     }
+    // }
     
     /**
      * 从指定文件加载设置
@@ -576,109 +661,180 @@ public class QianwenApiClient {
     }
     
     /**
-     * 设置 MCP 服务器地址
+     * 设置 Burp MCP 服务器地址
      * 如果地址改变，需要重新初始化 MCP 工具提供者
      */
-    public void setMcpUrl(String mcpUrl) {
+    public void setBurpMcpUrl(String mcpUrl) {
         if (mcpUrl == null || mcpUrl.trim().isEmpty()) {
-            mcpUrl = "http://localhost:9876/sse";
+            mcpUrl = "http://127.0.0.1:9876/sse";
         }
-        if (!this.mcpUrl.equals(mcpUrl.trim())) {
-            this.mcpUrl = mcpUrl.trim();
+        if (!this.BurpMcpUrl.equals(mcpUrl.trim())) {
+            this.BurpMcpUrl = mcpUrl.trim();
             // 如果已启用 MCP，清空 mcpToolProvider，下次使用时重新创建
             if (enableMcp) {
                 mcpToolProvider = null;
                 assistant = null; // 清空 Assistant，下次使用时重新创建
                 if (api != null) {
-                    api.logging().logToOutput("[QianwenApiClient] MCP 地址已更新: " + mcpUrl);
+                    api.logging().logToOutput("[QianwenApiClient] Burp MCP 地址已更新: " + mcpUrl);
                 }
             }
         }
     }
     
     /**
-     * 设置是否启用 RAG
-     * 如果启用状态改变，需要重新初始化 RAG 和 Assistant
+     * 设置是否启用 RAG MCP 工具调用
+     * 如果启用状态改变，需要重新初始化 Assistant
      */
-    public void setEnableRag(boolean enableRag) {
-        if (this.enableRag != enableRag) {
-            this.enableRag = enableRag;
-            // 旧逻辑：使用 RagProvider 管理 RAG
-            /*
-            if (enableRag) {
-                initializeRagProvider();
-            } else {
-                if (ragProvider != null) {
-                    ragProvider.clear();
-                    ragProvider = null;
-                }
-            }
-            */
-            // 新逻辑：直接维护内存向量存储
-            if (enableRag) {
-                loadRagContent();
-            } else {
-                clearRagContentManager();
-            }
-            // 清空 Assistant，下次使用时重新创建（会根据新的 enableRag 状态决定是否启用 RAG）
+    public void setEnableRagMcp(boolean enableRagMcp) {
+        if (this.enableRagMcp != enableRagMcp) {
+            this.enableRagMcp = enableRagMcp;
+            // 清空 Assistant，下次使用时重新创建
             assistant = null;
             if (api != null) {
-                api.logging().logToOutput("[QianwenApiClient] RAG 已" + (enableRag ? "启用" : "禁用"));
+                api.logging().logToOutput("[QianwenApiClient] RAG MCP 工具调用已" + (enableRagMcp ? "启用" : "禁用"));
             }
         }
     }
     
     /**
-     * 设置 RAG 文档路径
-     * 如果路径改变且已启用 RAG，需要重新加载文档
+     * 设置 RAG MCP 服务器地址
+     * 如果地址改变，需要重新初始化
      */
-    public void setRagDocumentsPath(String ragDocumentsPath) {
-        if (ragDocumentsPath == null) {
-            ragDocumentsPath = "";
-        }
-        if (!this.ragDocumentsPath.equals(ragDocumentsPath.trim())) {
-            this.ragDocumentsPath = ragDocumentsPath.trim();
-            // 如果已启用 RAG，重新加载文档
-            if (enableRag) {
-                loadRagContent();
-                // 清空 Assistant，下次使用时重新创建
-                assistant = null;
-                if (api != null) {
-                    api.logging().logToOutput("[QianwenApiClient] RAG 文档路径已更新: " + ragDocumentsPath);
+    public void setRagMcpUrl(String ragMcpUrl) {
+        if (ragMcpUrl == null || ragMcpUrl.trim().isEmpty()) {
+            ragMcpUrl = " ";
                 }
-            } else {
-                clearRagContentManager();
+        if (!this.ragMcpUrl.equals(ragMcpUrl.trim())) {
+            this.ragMcpUrl = ragMcpUrl.trim();
+            if (enableRagMcp) {
+                assistant = null; // 清空 Assistant，下次使用时重新创建
+            if (api != null) {
+                    api.logging().logToOutput("[QianwenApiClient] RAG MCP 地址已更新: " + ragMcpUrl);
+                }
             }
         }
     }
     
-    /*
-     * 旧版实现：使用 RagProvider 进行文档加载和向量化
-     * private void initializeRagProvider() { ... }
+    /**
+     * 设置 RAG MCP 知识库文档路径
+     * 如果路径改变，需要重新初始化
      */
+    public void setRagMcpDocumentsPath(String ragMcpDocumentsPath) {
+        if (ragMcpDocumentsPath == null) {
+            ragMcpDocumentsPath = "";
+        }
+        if (!this.ragMcpDocumentsPath.equals(ragMcpDocumentsPath.trim())) {
+            this.ragMcpDocumentsPath = ragMcpDocumentsPath.trim();
+            if (enableRagMcp) {
+                assistant = null; // 清空 Assistant，下次使用时重新创建
+                if (api != null) {
+                    api.logging().logToOutput("[QianwenApiClient] RAG MCP 文档路径已更新: " + ragMcpDocumentsPath);
+                }
+            }
+        }
+    }
     
-    private void loadRagContent() {
-        if (!enableRag) {
-            clearRagContentManager();
-            return;
-        }
-        getOrCreateRagContentManager().load(ragDocumentsPath);
-    }
-
-    private RagContentManager getOrCreateRagContentManager() {
-        if (ragContentManager == null) {
-            ragContentManager = new RagContentManager(api);
-        } else {
-            ragContentManager.updateApi(api);
-        }
-        return ragContentManager;
-    }
-
-    private void clearRagContentManager() {
-        if (ragContentManager != null) {
-            ragContentManager.clear();
+    /**
+     * 设置是否启用 Chrome MCP 工具调用
+     * 如果启用状态改变，需要重新初始化 Assistant
+     */
+    public void setEnableChromeMcp(boolean enableChromeMcp) {
+        if (this.enableChromeMcp != enableChromeMcp) {
+            this.enableChromeMcp = enableChromeMcp;
+            // 清空 Assistant，下次使用时重新创建
+            assistant = null;
+            if (api != null) {
+                api.logging().logToOutput("[QianwenApiClient] Chrome MCP 工具调用已" + (enableChromeMcp ? "启用" : "禁用"));
+            }
         }
     }
+    
+    /**
+     * 设置 Chrome MCP 服务器地址
+     * 如果地址改变，需要重新初始化
+     */
+    public void setChromeMcpUrl(String chromeMcpUrl) {
+        if (chromeMcpUrl == null || chromeMcpUrl.trim().isEmpty()) {
+            chromeMcpUrl = " ";
+        }
+        if (!this.chromeMcpUrl.equals(chromeMcpUrl.trim())) {
+            this.chromeMcpUrl = chromeMcpUrl.trim();
+            if (enableChromeMcp) {
+                assistant = null; // 清空 Assistant，下次使用时重新创建
+                if (api != null) {
+                    api.logging().logToOutput("[QianwenApiClient] Chrome MCP 地址已更新: " + chromeMcpUrl);
+                }
+            }
+        }
+    }
+    
+    // ========== 默认 RAG 功能暂时禁用，改用 RAG MCP ==========
+    // /**
+    //  * 设置是否启用 RAG
+    //  * 如果启用状态改变，需要重新初始化 RAG 和 Assistant
+    //  */
+    // public void setEnableRag(boolean enableRag) {
+    //     if (this.enableRag != enableRag) {
+    //         this.enableRag = enableRag;
+    //         // 新逻辑：直接维护内存向量存储
+    //         if (enableRag) {
+    //             loadRagContent();
+    //         } else {
+    //             clearRagContentManager();
+    //         }
+    //         // 清空 Assistant，下次使用时重新创建
+    //         assistant = null;
+    //         if (api != null) {
+    //             api.logging().logToOutput("[QianwenApiClient] RAG 已" + (enableRag ? "启用" : "禁用"));
+    //         }
+    //     }
+    // }
+    // 
+    // /**
+    //  * 设置 RAG 文档路径
+    //  * 如果路径改变且已启用 RAG，需要重新加载文档
+    //  */
+    // public void setRagDocumentsPath(String ragDocumentsPath) {
+    //     if (ragDocumentsPath == null) {
+    //         ragDocumentsPath = "";
+    //     }
+    //     if (!this.ragDocumentsPath.equals(ragDocumentsPath.trim())) {
+    //         this.ragDocumentsPath = ragDocumentsPath.trim();
+    //         if (enableRag) {
+    //             loadRagContent();
+    //             assistant = null;
+    //             if (api != null) {
+    //                 api.logging().logToOutput("[QianwenApiClient] RAG 文档路径已更新: " + ragDocumentsPath);
+    //             }
+    //         } else {
+    //             clearRagContentManager();
+    //         }
+    //     }
+    // }
+    // 
+    // private void loadRagContent() {
+    //     if (!enableRag) {
+    //         clearRagContentManager();
+    //         return;
+    //     }
+    //     getOrCreateRagContentManager().load(ragDocumentsPath);
+    // }
+    //
+    // private RagContentManager getOrCreateRagContentManager() {
+    //     if (ragContentManager == null) {
+    //         ragContentManager = new RagContentManager(api);
+    //     } else {
+    //         ragContentManager.updateApi(api);
+    //     }
+    //     return ragContentManager;
+    // }
+    //
+    // private void clearRagContentManager() {
+    //     if (ragContentManager != null) {
+    //         ragContentManager.clear();
+    //     }
+    // }
+    // ========== 默认 RAG 功能暂时禁用结束 ==========
 
 
     // 流式输出方法 - 使用LangChain4j（带请求来源检测）
@@ -713,12 +869,24 @@ public class QianwenApiClient {
         }
 
         // 构建系统消息
-        String systemContent = "你是一个专业的Web安全测试专家，擅长分析HTTP请求和响应中的潜在漏洞，也能直接进行渗透测试。\n\n"
-            + "工作要求：\n"
+        String systemContent = "你是一个专业的Web安全测试专家，擅长分析HTTP请求和响应中的潜在漏洞，也能直接进行渗透测试。\n"
+            + "**工作要求**：\n"
             + "只输出可能存在的owasp top 10或中危及以上安全风险，不要输出低危和无风险的项，并且给出对风险点的渗透测试建议，根据上下文信息，辅助渗透测试工程师继续进行渗透测试；\n"
             //+ "你只有在用户主动请求你使用提供的工具来调用Burp Suite的功能时，才能使用提供的工具来调用Burp Suite的功能，\n"
             + "可以以markdown格式输出，但不要输出代码表格格式，不要输出'---'；\n"
-            + "格式简洁，突出重点，不要冗长描述。";
+            + "格式简洁，突出重点，不要冗长描述。\n";
+
+        if (enableMcp || enableRagMcp || enableChromeMcp) {
+            systemContent += "**重要：关于工具的使用**:\n";
+            if (enableRagMcp){
+                systemContent += "**semantic_search**工具可以用于搜索知识库中的内容，当你觉得自己的回答可能出现幻觉时，可以调用这个工具进行搜索；";
+            }
+            if (enableMcp){
+                systemContent +=
+                "**create_repeater_tab**或**send_to_intruder**这两个工具必须在使用**send_http1_request**或**send_http2_request**发送HTTP请求后才能使用且必须使用，用于让渗透测试工程师手动验证测试结果，以及进一步的测试；"
+                + "无论结果，把你上一步发送的HTTP请求内容作为参数，发给**create_repeater_tab**；如果需要批量测试payload，发给**send_to_intruder**（这两个工具你都无需关心调用结果，只能用于渗透测试工程师手工修改和测试）。";
+            }
+        }
 
         SystemMessage systemMessage = new SystemMessage(systemContent);
         String userContent = buildAnalysisContent(httpRequest, userPrompt, sourceInfo);
@@ -765,27 +933,24 @@ public class QianwenApiClient {
                         String text = partialResponse != null ? partialResponse.text() : null;
                         if (text != null && !text.isEmpty()) {
                             onChunk.accept(text);
-                            contentChunkCount[0]++;
-                        }
+                        contentChunkCount[0]++;
+                    }
                     })
                     // 可选：处理思考过程
                     .onPartialThinking((PartialThinking partialThinking) -> {
                         logDebug("Thinking: " + partialThinking);
                     })
-                    // 处理中间响应（工具执行后的 AI 继续输出）
-                    // 这是关键：当工具执行完成后，AI 会基于工具结果继续输出
-                    // 我们需要从中间响应中提取文本内容并传递给 UI
+                    // 处理中间响应（工具执行后的完整响应对象）
+                    // 注意：不要在这里调用 onChunk.accept()！
+                    // 因为 onPartialResponseWithContext 已经会流式输出这些内容
+                    // 如果在这里也输出，会导致内容重复显示
                     .onIntermediateResponse((ChatResponse intermediateResponse) -> {
-                        logDebug("Intermediate response received");
-                        // 检查中间响应是否包含文本内容（工具执行后的 AI 继续输出）
+                        logDebug("Intermediate response received (仅用于日志，不输出到UI)");
+                        // 仅记录日志，不输出到 UI
                         if (intermediateResponse != null && intermediateResponse.aiMessage() != null) {
                             String text = intermediateResponse.aiMessage().text();
                             if (text != null && !text.isEmpty()) {
-                                // 将中间响应的文本内容传递给 UI
-                                // 这样 AI 在工具执行后继续输出的内容能够实时显示
-                                onChunk.accept(text);
-                                contentChunkCount[0]++;
-                                logDebug("Intermediate response text: " + (text.length() > 100 ? text.substring(0, 100) + "..." : text));
+                                logDebug("Intermediate response text length: " + text.length() + " chars");
                             }
                         }
                     })
