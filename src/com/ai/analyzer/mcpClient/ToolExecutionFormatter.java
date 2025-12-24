@@ -2,17 +2,30 @@ package com.ai.analyzer.mcpClient;
 
 import dev.langchain4j.service.tool.BeforeToolExecution;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonElement;
+import java.util.Map;
+import java.util.LinkedHashMap;
 
 /**
  * 工具执行信息格式化器
- * 用于将工具执行信息格式化为Markdown格式的灰体小字，显示在UI中
+ * 类似 Cursor 风格：简洁、醒目、显示关键参数
  */
 public class ToolExecutionFormatter {
     
+    private static final Gson gson = new GsonBuilder().create();
+    
+    // 参数值最大显示长度
+    private static final int MAX_PARAM_VALUE_LENGTH = 60;
+    // 最多显示的参数数量
+    private static final int MAX_PARAMS_TO_SHOW = 4;
+    
     /**
-     * 格式化工具执行信息为Markdown格式的灰体小字
+     * 格式化工具执行信息
      * @param beforeToolExecution 工具执行前的上下文
-     * @return 格式化后的Markdown字符串，如果格式化失败则返回null
+     * @return 格式化后的字符串，如果格式化失败则返回null
      */
     public static String formatToolExecutionInfo(BeforeToolExecution beforeToolExecution) {
         if (beforeToolExecution == null) {
@@ -22,19 +35,19 @@ public class ToolExecutionFormatter {
         try {
             ToolExecutionRequest request = beforeToolExecution.request();
             if (request == null) {
-                return createToolInfoMarkdown("正在执行工具...");
+                return createToolBlock("unknown", null);
             }
             
             String toolName = extractToolName(request);
+            String arguments = extractArguments(request);
             
             if (toolName == null || toolName.isEmpty()) {
-                return createToolInfoMarkdown("正在执行工具...");
+                toolName = "unknown";
             }
             
-            return createToolInfoMarkdown(toolName);
+            return createToolBlock(toolName, arguments);
         } catch (Exception e) {
-            // 格式化失败，返回默认信息
-            return createToolInfoMarkdown("正在执行工具...");
+            return createToolBlock("error", null);
         }
     }
     
@@ -43,14 +56,22 @@ public class ToolExecutionFormatter {
      */
     private static String extractToolName(ToolExecutionRequest request) {
         try {
-            // ToolExecutionRequest 应该有 name() 方法
             return request.name();
         } catch (Exception e) {
-            // 如果失败，尝试从 toString() 中提取
             return extractToolNameFromString(request.toString());
         }
     }
     
+    /**
+     * 从 ToolExecutionRequest 中提取参数
+     */
+    private static String extractArguments(ToolExecutionRequest request) {
+        try {
+            return request.arguments();
+        } catch (Exception e) {
+            return null;
+        }
+    }
     
     /**
      * 从字符串中提取工具名称（fallback方法）
@@ -60,7 +81,6 @@ public class ToolExecutionFormatter {
             return null;
         }
         
-        // 尝试从 "toolName=xxx" 格式中提取
         int start = str.indexOf("toolName=");
         if (start >= 0) {
             start += "toolName=".length();
@@ -77,32 +97,122 @@ public class ToolExecutionFormatter {
     }
     
     /**
-     * 创建工具信息的Markdown格式
-     * 使用特殊标记 [TOOL] 让 MarkdownRenderer 识别并应用醒目样式
-     * 只显示工具名称，不显示参数（保持简洁）
+     * 创建工具执行块
+     * 格式: [TOOL_BLOCK]工具名|参数摘要[/TOOL_BLOCK]
      */
-    private static String createToolInfoMarkdown(String toolName) {
-        // 转义Markdown特殊字符
-        String escapedName = escapeMarkdown(toolName);
-        // 使用特殊的标记格式，让 MarkdownRenderer 可以识别并应用特殊样式
-        // 格式: [TOOL]工具名称[/TOOL]
-        return "[TOOL]⚡ 正在执行工具: " + escapedName + "[/TOOL]\n\n";
+    private static String createToolBlock(String toolName, String arguments) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("[TOOL_BLOCK]");
+        sb.append(toolName);
+        sb.append("|");
+        sb.append(formatArgsSummary(arguments));
+        sb.append("[/TOOL_BLOCK]\n");
+        return sb.toString();
     }
     
     /**
-     * Markdown转义，防止特殊字符被解析
-     * 注意：工具名称在代码块（反引号）中，所以不需要转义下划线
+     * 格式化参数摘要 - 提取关键参数，简洁显示
      */
-    private static String escapeMarkdown(String text) {
-        if (text == null) {
+    private static String formatArgsSummary(String arguments) {
+        if (arguments == null || arguments.isEmpty()) {
             return "";
         }
-        // 转义Markdown特殊字符
-        // 注意：下划线 _ 在代码块中不需要转义，所以不转义它
-        // 反引号 ` 需要转义，因为它是代码块的边界
-        return text.replace("\\", "\\\\")
-                   .replace("`", "\\`");
+        
+        try {
+            JsonObject json = gson.fromJson(arguments, JsonObject.class);
+            Map<String, String> keyParams = new LinkedHashMap<>();
+            
+            // 优先显示的关键参数
+            String[] priorityKeys = {
+                "targetHostname", "host", "url", "endpoint",  // 目标相关
+                "method", "path",                              // 请求相关
+                "count", "offset", "limit",                    // 数量相关
+                "tabName", "name",                             // 名称相关
+                "content"                                      // 内容（最后，因为通常很长）
+            };
+            
+            // 先添加优先参数
+            for (String key : priorityKeys) {
+                if (json.has(key) && keyParams.size() < MAX_PARAMS_TO_SHOW) {
+                    String value = formatParamValue(json.get(key));
+                    if (value != null && !value.isEmpty()) {
+                        keyParams.put(key, value);
+                    }
+                }
+            }
+            
+            // 如果还有空间，添加其他参数
+            for (Map.Entry<String, JsonElement> entry : json.entrySet()) {
+                if (keyParams.size() >= MAX_PARAMS_TO_SHOW) break;
+                String key = entry.getKey();
+                if (!keyParams.containsKey(key)) {
+                    String value = formatParamValue(entry.getValue());
+                    if (value != null && !value.isEmpty()) {
+                        keyParams.put(key, value);
+                    }
+                }
+            }
+            
+            if (keyParams.isEmpty()) {
+                return "";
+            }
+            
+            // 构建参数字符串 - 每个参数一行
+            StringBuilder result = new StringBuilder();
+            for (Map.Entry<String, String> entry : keyParams.entrySet()) {
+                result.append(entry.getKey()).append("=").append(entry.getValue()).append("\n");
+            }
+            
+            // 如果原始 JSON 有更多参数，添加省略号
+            if (json.size() > keyParams.size()) {
+                result.append("...\n");
+            }
+            
+            return result.toString().trim();
+        } catch (Exception e) {
+            // JSON 解析失败，返回截断的原始字符串
+            return truncateString(arguments, MAX_PARAM_VALUE_LENGTH);
+        }
     }
     
+    /**
+     * 格式化单个参数值
+     */
+    private static String formatParamValue(JsonElement element) {
+        if (element == null || element.isJsonNull()) {
+            return null;
+        }
+        
+        String value;
+        if (element.isJsonPrimitive()) {
+            value = element.getAsString();
+        } else {
+            value = element.toString();
+        }
+        
+        // 对于 content 类型的长值，特殊处理
+        if (value.contains("HTTP/1.1") || value.contains("<?xml")) {
+            // HTTP 请求内容，只提取第一行
+            int newlineIdx = value.indexOf('\n');
+            if (newlineIdx > 0) {
+                value = value.substring(0, Math.min(newlineIdx, 50)) + "...";
+            }
+        }
+        
+        return truncateString(value, MAX_PARAM_VALUE_LENGTH);
+    }
+    
+    /**
+     * 截断字符串
+     */
+    private static String truncateString(String str, int maxLength) {
+        if (str == null) return "";
+        // 移除换行符
+        str = str.replace("\n", " ").replace("\r", "");
+        if (str.length() <= maxLength) {
+            return str;
+        }
+        return str.substring(0, maxLength - 3) + "...";
+    }
 }
 

@@ -20,8 +20,13 @@ public class MarkdownRenderer {
     private static final Color LIST_COLOR = new Color(44, 62, 80);       // 深灰 - 列表
     private static final Color LINK_COLOR = new Color(41, 128, 185);     // 蓝色 - 链接
     
-    // 工具执行信息 - 灰色斜体小字
-    private static final Color TOOL_EXEC_COLOR = new Color(127, 140, 141); // 灰色
+    // 工具执行块样式 - 类似 Cursor 风格
+    private static final Color TOOL_BLOCK_BG = new Color(243, 244, 246);     // 浅灰背景 #f3f4f6
+    private static final Color TOOL_BLOCK_BORDER = new Color(209, 213, 219); // 边框色 #d1d5db
+    private static final Color TOOL_NAME_COLOR = new Color(79, 70, 229);     // 靛蓝色工具名 #4f46e5
+    private static final Color TOOL_PARAM_KEY_COLOR = new Color(107, 114, 128); // 灰色参数名 #6b7280
+    private static final Color TOOL_PARAM_VAL_COLOR = new Color(55, 65, 81);    // 深灰参数值 #374151
+    private static final Color TOOL_ICON_COLOR = new Color(16, 185, 129);       // 绿色图标 #10b981
 
     /**
      * 渲染Markdown到JTextPane的末尾（不清空现有内容）
@@ -36,6 +41,7 @@ public class MarkdownRenderer {
         StyleConstants.setFontSize(regular, 13);
         StyleConstants.setForeground(regular, new Color(51, 51, 51));
         StyleConstants.setBackground(regular, Color.WHITE);
+        StyleConstants.setLineSpacing(regular, 0.3f);  // 行距：30% 额外间距
 
         // 一级标题 - 红色粗体（高危/风险）
         Style header1 = getOrCreateStyle(doc, "header1", regular);
@@ -350,47 +356,163 @@ public class MarkdownRenderer {
     }
     
     /**
-     * 渲染文本，检测并特殊处理工具执行标记 [TOOL]...[/TOOL]
+     * 渲染文本，检测并特殊处理工具执行标记
+     * 支持两种格式：
+     * - [TOOL]...[/TOOL] - 旧格式，简单文本
+     * - [TOOL_BLOCK]工具名|参数[/TOOL_BLOCK] - 新格式，带参数
      */
     private static void renderTextWithToolMarker(StyledDocument doc, String text, Style regular) throws BadLocationException {
         if (text == null || text.isEmpty()) return;
         
         int pos = 0;
         while (pos < text.length()) {
+            // 查找两种标记
+            int toolBlockStart = text.indexOf("[TOOL_BLOCK]", pos);
             int toolStart = text.indexOf("[TOOL]", pos);
             
-            if (toolStart < 0) {
+            // 确定哪个标记先出现
+            int nextMarkerStart = -1;
+            boolean isBlockFormat = false;
+            
+            if (toolBlockStart >= 0 && (toolStart < 0 || toolBlockStart < toolStart)) {
+                nextMarkerStart = toolBlockStart;
+                isBlockFormat = true;
+            } else if (toolStart >= 0) {
+                nextMarkerStart = toolStart;
+                isBlockFormat = false;
+            }
+            
+            if (nextMarkerStart < 0) {
                 // 没有更多工具标记，渲染剩余文本
                 doc.insertString(doc.getLength(), text.substring(pos), regular);
                 break;
             }
             
             // 先渲染标记前的普通文本
-            if (toolStart > pos) {
-                doc.insertString(doc.getLength(), text.substring(pos, toolStart), regular);
+            if (nextMarkerStart > pos) {
+                doc.insertString(doc.getLength(), text.substring(pos, nextMarkerStart), regular);
             }
             
-            int toolEnd = text.indexOf("[/TOOL]", toolStart);
-            if (toolEnd < 0) {
-                // 没有找到结束标记，将其作为普通文本渲染
-                doc.insertString(doc.getLength(), text.substring(toolStart), regular);
-                break;
+            if (isBlockFormat) {
+                // 处理 [TOOL_BLOCK]工具名|参数[/TOOL_BLOCK] 格式
+                int toolEnd = text.indexOf("[/TOOL_BLOCK]", nextMarkerStart);
+                if (toolEnd < 0) {
+                    doc.insertString(doc.getLength(), text.substring(nextMarkerStart), regular);
+                    break;
+                }
+                
+                String toolContent = text.substring(nextMarkerStart + 12, toolEnd); // 12 = "[TOOL_BLOCK]".length()
+                renderToolBlock(doc, toolContent, regular);
+                pos = toolEnd + 13; // 13 = "[/TOOL_BLOCK]".length()
+            } else {
+                // 处理旧的 [TOOL]...[/TOOL] 格式
+                int toolEnd = text.indexOf("[/TOOL]", nextMarkerStart);
+                if (toolEnd < 0) {
+                    doc.insertString(doc.getLength(), text.substring(nextMarkerStart), regular);
+                    break;
+                }
+                
+                String toolContent = text.substring(nextMarkerStart + 6, toolEnd);
+                // 使用新样式渲染旧格式
+                renderToolBlockSimple(doc, toolContent, regular);
+                pos = toolEnd + 7;
             }
-            
-            // 提取工具信息内容
-            String toolContent = text.substring(toolStart + 6, toolEnd); // 6 = "[TOOL]".length()
-            
-            // 灰色斜体小字样式 - 低调但可见
-            Style toolStyle = doc.addStyle("toolExec", regular);
-            StyleConstants.setForeground(toolStyle, TOOL_EXEC_COLOR);
-            StyleConstants.setItalic(toolStyle, true);
-            StyleConstants.setFontSize(toolStyle, 11);
-            
-            // 渲染工具执行信息
-            doc.insertString(doc.getLength(), toolContent, toolStyle);
-            
-            pos = toolEnd + 7; // 7 = "[/TOOL]".length()
         }
+    }
+    
+    /**
+     * 渲染工具执行块 - 类似 Cursor 风格
+     * 格式: 工具名（独立一行）+ 每个参数一行
+     */
+    private static void renderToolBlock(StyledDocument doc, String content, Style regular) throws BadLocationException {
+        String[] parts = content.split("\\|", 2);
+        String toolName = parts[0];
+        String params = parts.length > 1 ? parts[1] : "";
+        
+        // 创建样式
+        Style blockBgStyle = doc.addStyle("toolBlockBg", regular);
+        StyleConstants.setBackground(blockBgStyle, TOOL_BLOCK_BG);
+        
+        Style iconStyle = doc.addStyle("toolIcon", blockBgStyle);
+        StyleConstants.setForeground(iconStyle, TOOL_ICON_COLOR);
+        StyleConstants.setFontSize(iconStyle, 13);
+        StyleConstants.setBold(iconStyle, true);
+        StyleConstants.setBackground(iconStyle, TOOL_BLOCK_BG);
+        
+        Style nameStyle = doc.addStyle("toolName", blockBgStyle);
+        StyleConstants.setForeground(nameStyle, TOOL_NAME_COLOR);
+        StyleConstants.setFontFamily(nameStyle, "Consolas");
+        StyleConstants.setFontSize(nameStyle, 13);
+        StyleConstants.setBold(nameStyle, true);
+        StyleConstants.setBackground(nameStyle, TOOL_BLOCK_BG);
+        
+        Style paramKeyStyle = doc.addStyle("toolParamKey", blockBgStyle);
+        StyleConstants.setForeground(paramKeyStyle, TOOL_PARAM_KEY_COLOR);
+        StyleConstants.setFontFamily(paramKeyStyle, "Consolas");
+        StyleConstants.setFontSize(paramKeyStyle, 11);
+        StyleConstants.setBackground(paramKeyStyle, TOOL_BLOCK_BG);
+        
+        // 参数值样式 - 使用支持中文的字体
+        Style paramValStyle = doc.addStyle("toolParamVal", blockBgStyle);
+        StyleConstants.setForeground(paramValStyle, TOOL_PARAM_VAL_COLOR);
+        StyleConstants.setFontFamily(paramValStyle, "Microsoft YaHei");
+        StyleConstants.setFontSize(paramValStyle, 11);
+        StyleConstants.setBackground(paramValStyle, TOOL_BLOCK_BG);
+        
+        // 渲染：▶ 工具名（独立一行）
+        doc.insertString(doc.getLength(), "▶ ", iconStyle);
+        doc.insertString(doc.getLength(), toolName, nameStyle);
+        doc.insertString(doc.getLength(), "\n", blockBgStyle);
+        
+        // 如果有参数，每个参数一行
+        if (!params.isEmpty()) {
+            renderToolParams(doc, params, paramKeyStyle, paramValStyle, blockBgStyle);
+        }
+    }
+    
+    /**
+     * 渲染工具参数 - 每个参数一行
+     */
+    private static void renderToolParams(StyledDocument doc, String params, 
+            Style keyStyle, Style valStyle, Style bgStyle) throws BadLocationException {
+        // 解析参数 - 按换行分割
+        String[] paramLines = params.split("\n");
+        
+        for (String line : paramLines) {
+            line = line.trim();
+            if (line.isEmpty()) continue;
+            
+            // 缩进
+            doc.insertString(doc.getLength(), "   ", bgStyle);
+            
+            int eqIdx = line.indexOf('=');
+            if (eqIdx > 0) {
+                String key = line.substring(0, eqIdx);
+                String val = line.substring(eqIdx + 1);
+                
+                doc.insertString(doc.getLength(), key, keyStyle);
+                doc.insertString(doc.getLength(), "=", keyStyle);
+                doc.insertString(doc.getLength(), val, valStyle);
+            } else {
+                // 没有等号（如 "..."），整个作为值显示
+                doc.insertString(doc.getLength(), line, valStyle);
+            }
+            doc.insertString(doc.getLength(), "\n", bgStyle);
+        }
+    }
+    
+    /**
+     * 简单渲染工具块（用于旧格式兼容）
+     */
+    private static void renderToolBlockSimple(StyledDocument doc, String content, Style regular) throws BadLocationException {
+        Style blockStyle = doc.addStyle("toolBlockSimple", regular);
+        StyleConstants.setBackground(blockStyle, TOOL_BLOCK_BG);
+        StyleConstants.setForeground(blockStyle, TOOL_NAME_COLOR);
+        StyleConstants.setFontFamily(blockStyle, "Consolas");
+        StyleConstants.setFontSize(blockStyle, 12);
+        StyleConstants.setBold(blockStyle, true);
+        
+        doc.insertString(doc.getLength(), "▶ " + content + "\n", blockStyle);
     }
     
     /**
@@ -414,6 +536,7 @@ public class MarkdownRenderer {
             StyleConstants.setFontSize(regular, 13);
             StyleConstants.setForeground(regular, new Color(51, 51, 51));
             StyleConstants.setBackground(regular, Color.WHITE);
+            StyleConstants.setLineSpacing(regular, 0.3f);  // 行距：30% 额外间距
 
             // 一级标题 - 红色粗体
             Style header1 = getOrCreateStyle(doc, "header1", regular);
