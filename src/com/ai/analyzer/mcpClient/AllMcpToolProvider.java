@@ -23,7 +23,7 @@ public class AllMcpToolProvider {
 
     
     /**
-     * 创建 Legacy HTTP Transport（用于 Burp MCP Server 和 Chrome MCP）
+     * 创建 Legacy HTTP Transport（用于 Burp MCP Server）
      * 根据 curl 测试：Burp MCP Server 使用 SSE (Server-Sent Events) 协议
      * GET /sse 返回 SSE 流，服务器会提供动态的 /message?sessionId=xxx 端点
      * 注意：HttpMcpTransport 虽然已弃用，但这是唯一能连接 Burp MCP Server 的方式
@@ -37,6 +37,7 @@ public class AllMcpToolProvider {
                 .sseUrl(sseUrl)   // MCP Server SSE endpoint
                 .logRequests(true)  // 在日志中查看请求流量
                 .logResponses(true)  // 在日志中查看响应流量
+                .timeout(java.time.Duration.ofSeconds(30))  // 设置超时时间到 30 秒
                 .build();
     }
 
@@ -49,6 +50,7 @@ public class AllMcpToolProvider {
     public McpTransport createStreamableHttpTransport(String httpUrl) {
         return new StreamableHttpMcpTransport.Builder()
                 .url(httpUrl)
+                .timeout(java.time.Duration.ofSeconds(30))  // 设置超时时间到 30 秒
                 .build();
     }
     
@@ -92,6 +94,14 @@ public class AllMcpToolProvider {
      */
     public McpTransport createRagMcpTransport(String knowledgeBasePath) {
         List<String> command = new ArrayList<>();
+        
+        // Windows 系统需要通过 cmd 来执行 uvx
+        String os = System.getProperty("os.name").toLowerCase();
+        if (os.contains("win")) {
+            command.add("cmd");
+            command.add("/c");
+        }
+        
         command.add("uvx");
         command.add("rag-mcp-server");
         command.add("--knowledge-base");

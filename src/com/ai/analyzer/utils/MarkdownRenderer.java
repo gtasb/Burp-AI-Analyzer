@@ -475,8 +475,8 @@ public class MarkdownRenderer {
      */
     private static void renderToolParams(StyledDocument doc, String params, 
             Style keyStyle, Style valStyle, Style bgStyle) throws BadLocationException {
-        // 解析参数 - 按换行分割
-        String[] paramLines = params.split("\n");
+        // 解析参数 - 按 ||| 分隔符分割（避免换行符破坏 Markdown 解析）
+        String[] paramLines = params.split("\\|\\|\\|");
         
         for (String line : paramLines) {
             line = line.trim();

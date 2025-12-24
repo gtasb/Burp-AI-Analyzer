@@ -369,7 +369,7 @@ public class QianwenApiClient {
                     // 3. Chrome MCP 客户端（使用 Streamable HTTP 传输）
                     if (enableChromeMcp && chromeMcpUrl != null && !chromeMcpUrl.trim().isEmpty()) {
                         try {
-                            McpTransport chromeTransport = mcpProviderHelper.createHttpTransport(chromeMcpUrl.trim());
+                            McpTransport chromeTransport = mcpProviderHelper.createStreamableHttpTransport(chromeMcpUrl.trim());
                             McpClient chromeMcpClient = mcpProviderHelper.createMcpClient(chromeTransport, "ChromeMCPClient");
                             allMcpClients.add(chromeMcpClient);
                             
@@ -871,6 +871,7 @@ public class QianwenApiClient {
         // 构建系统消息
         String systemContent = "你是一个专业的Web安全测试专家，擅长分析HTTP请求和响应中的潜在漏洞，也能直接进行渗透测试。\n"
             + "**工作要求**：\n"
+            + "你需要先对HTTP请求和响应进行分析，"
             + "只输出可能存在的owasp top 10或中危及以上安全风险，不要输出低危和无风险的项，并且给出对风险点的渗透测试建议，根据上下文信息，辅助渗透测试工程师继续进行渗透测试；\n"
             //+ "你只有在用户主动请求你使用提供的工具来调用Burp Suite的功能时，才能使用提供的工具来调用Burp Suite的功能，\n"
             + "可以以markdown格式输出，但不要输出代码表格格式，不要输出'---'；\n"
@@ -940,20 +941,7 @@ public class QianwenApiClient {
                     .onPartialThinking((PartialThinking partialThinking) -> {
                         logDebug("Thinking: " + partialThinking);
                     })
-                    // 处理中间响应（工具执行后的完整响应对象）
-                    // 注意：不要在这里调用 onChunk.accept()！
-                    // 因为 onPartialResponseWithContext 已经会流式输出这些内容
-                    // 如果在这里也输出，会导致内容重复显示
-                    .onIntermediateResponse((ChatResponse intermediateResponse) -> {
-                        logDebug("Intermediate response received (仅用于日志，不输出到UI)");
-                        // 仅记录日志，不输出到 UI
-                        if (intermediateResponse != null && intermediateResponse.aiMessage() != null) {
-                            String text = intermediateResponse.aiMessage().text();
-                            if (text != null && !text.isEmpty()) {
-                                logDebug("Intermediate response text length: " + text.length() + " chars");
-                            }
-                        }
-                    })
+                    // 注意：移除了 onIntermediateResponse 回调，避免可能的重复输出问题
                     // 工具执行前的回调
                     .beforeToolExecution((BeforeToolExecution beforeToolExecution) -> {
                         logDebug("Before tool execution: " + beforeToolExecution);

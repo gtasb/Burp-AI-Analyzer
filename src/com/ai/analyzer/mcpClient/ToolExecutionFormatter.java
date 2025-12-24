@@ -157,18 +157,21 @@ public class ToolExecutionFormatter {
                 return "";
             }
             
-            // 构建参数字符串 - 每个参数一行
+            // 构建参数字符串 - 使用 ||| 作为分隔符（避免换行符破坏 Markdown 解析）
             StringBuilder result = new StringBuilder();
+            boolean first = true;
             for (Map.Entry<String, String> entry : keyParams.entrySet()) {
-                result.append(entry.getKey()).append("=").append(entry.getValue()).append("\n");
+                if (!first) result.append("|||");
+                result.append(entry.getKey()).append("=").append(entry.getValue());
+                first = false;
             }
             
             // 如果原始 JSON 有更多参数，添加省略号
             if (json.size() > keyParams.size()) {
-                result.append("...\n");
+                result.append("|||...");
             }
             
-            return result.toString().trim();
+            return result.toString();
         } catch (Exception e) {
             // JSON 解析失败，返回截断的原始字符串
             return truncateString(arguments, MAX_PARAM_VALUE_LENGTH);
