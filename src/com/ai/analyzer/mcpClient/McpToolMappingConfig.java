@@ -198,13 +198,21 @@ public class McpToolMappingConfig {
         Map<String, String> descriptionMappings = new HashMap<>();
         
         // HTTP 请求功能
-        descriptionMappings.put("send_http1_request", "发送 HTTP/1.1 请求到指定目标并返回响应。用于测试和验证漏洞。\n" +
+        descriptionMappings.put("send_http1_request", "发送 HTTP/1.1 请求到指定目标并返回响应。\n" +
+                "【使用时机】：\n" +
+                "- 分析发现高/中危漏洞后，需要验证漏洞是否存在\n" +
+                "- 用户要求测试特定的 payload\n" +
+                "- 需要探测接口响应特征\n" +
+                "【决策条件】：\n" +
+                "- 已识别出可测试的风险点（如SQL注入、XSS、命令注入等）\n" +
+                "- 目标主机、端口、协议信息明确\n" +
+                "【强制后续】：调用后必须调用 create_repeater_tab\n" +
                 "参数：\n" +
                 "- content: 完整的 HTTP 请求内容（包括请求行、请求头和请求体）\n" + 
                 "- targetHostname: 目标主机名（域名或 IP 地址）\n" +
                 "- targetPort: 目标端口号（如 80, 443, 8080 等）\n" +
                 "- usesHttps: 是否使用 HTTPS 协议（true/false）\n" +
-                "注意：请求内容会自动将 \\n 转换为 \\r\\n 以符合 HTTP 标准。");
+                "注意：请求内容中的 \\n 会自动转换为 \\r\\n。");
 
         descriptionMappings.put("send_http2_request", "发送 HTTP/2 请求到指定目标并返回响应。支持 HTTP/2 协议特性（如伪头部字段）。\n" +
                 "参数：\n" +
@@ -216,33 +224,21 @@ public class McpToolMappingConfig {
                 "- usesHttps: 是否使用 HTTPS 协议（true/false）\n" +
                 "注意：不要将头部字段传递给 body 参数。伪头部字段会自动添加 : 前缀。");
 
-        descriptionMappings.put("create_repeater_tab", "在 Burp Repeater 中创建新标签页，用于手动修改和重放请求。\n" + 
-                "此工具必须在使用 send_http1_request 或 send_http2_request 发送HTTP请求后才能使用，用于手动验证测试结果，以及进一步的测试。\n" +
-                "此工具只能用于用户手工修改和发送请求，因此你无需关心此工具的返回结果。\n" +
-                "优先级：\n" + 
-                "低于 send_http1_request 和 send_http2_request，因为 create_repeater_tab 是手动创建标签页，而 send_http1_request 和 send_http2_request 是直接发送请求。\n" +
-                "可以搭配 get_active_editor_contents 使用，获取当前活动消息编辑器的内容，然后使用 set_active_editor_contents 设置请求内容。\n" +
-                "参数：\n" +
-                "- content: 完整的 HTTP 请求内容（包括请求行、请求头和请求体）\n" +
-                "- targetHostname: 目标主机名（域名或 IP 地址）\n" +
-                "- targetPort: 目标端口号（如 80, 443, 8080 等）\n" +
-                "- usesHttps: 是否使用 HTTPS 协议（true/false）\n" +
-                "- tabName: 标签页名称（可选，建议使用中文命名）\n" +
-                "注意：确保请求内容使用正确的回车符（\\r\\n）。");
+        descriptionMappings.put("create_repeater_tab", "【辅助工具 - 异步执行】将请求发送到 Burp Repeater。\n" +
+                "【特性】：异步执行，立即返回，无需等待或分析返回结果。\n" +
+                "【使用时机】：\n" +
+                "- 发现重要漏洞，需要用户手动验证时\n" +
+                "- 用户明确要求将请求发送到 Repeater\n" +
+                "【注意】：这是可选工具，不是必须调用。\n" +
+                "参数：content(HTTP请求), targetHostname, targetPort, usesHttps, tabName(可选)");
 
-        descriptionMappings.put("send_to_intruder", "将 HTTP 请求发送到 Burp Intruder，用于批量爆破和模糊测试。\n" +
-                "此工具必须在使用 send_http1_request 或 send_http2_request 发送HTTP请求后才能使用，用于手动验证测试结果，以及进一步的测试。\n" +
-                "此工具只能用于用户手工修改和批量测试payload，因此你无需关心此工具的返回结果。\n" +
-                "优先级：\n" + 
-                "低于 send_http1_request 和 send_http2_request，因为 send_to_intruder 需要手动配置 payload 位置。\n" +
-                "可以搭配 get_active_editor_contents 使用，获取当前活动消息编辑器的内容，然后使用 set_active_editor_contents 设置请求内容。\n" +
-                "参数：\n" +
-                "- content: 完整的 HTTP 请求内容（包括请求行、请求头和请求体）\n" +
-                "- targetHostname: 目标主机名（域名或 IP 地址）\n" +
-                "- targetPort: 目标端口号（如 80, 443, 8080 等）\n" +
-                "- usesHttps: 是否使用 HTTPS 协议（true/false）\n" +
-                "- tabName: 标签页名称（可选，建议使用中文命名）\n" +
-                "注意：确保请求内容使用正确的回车符（\\r\\n）。");
+        descriptionMappings.put("send_to_intruder", "【辅助工具 - 异步执行】将请求发送到 Burp Intruder。\n" +
+                "【特性】：异步执行，立即返回，无需等待或分析返回结果。\n" +
+                "【使用时机】：\n" +
+                "- 需要批量 fuzz 测试时（如爆破、模糊测试）\n" +
+                "- 用户明确要求发送到 Intruder\n" +
+                "【注意】：这是可选工具，不是必须调用。\n" +
+                "参数：content(HTTP请求), targetHostname, targetPort, usesHttps, tabName(可选)");
         
         // 编码/解码工具
         descriptionMappings.put("url_encode", "对字符串进行 URL 编码，将特殊字符转换为 URL 安全格式。\n" +
@@ -279,24 +275,37 @@ public class McpToolMappingConfig {
                 "注意：设置前请先使用 output_user_options 导出当前配置以了解架构。需要启用配置编辑功能。");
         
         // 代理功能
-        descriptionMappings.put("get_proxy_http_history", "获取 Burp Proxy 的 HTTP 请求历史记录（支持分页）。\n" + 
+        descriptionMappings.put("get_proxy_http_history", "获取 Burp Proxy 的 HTTP 请求历史记录（支持分页）。\n" +
+                "【使用时机】：\n" +
+                "- 用户要求查看/分析代理历史中的请求\n" +
+                "- 当前没有关联请求，需要获取历史请求进行分析\n" +
+                "- 需要获取更多上下文信息（如同一接口的其他请求）\n" +
+                "【决策条件】：\n" +
+                "- 用户提到'历史'、'之前的请求'、'最近的请求'等关键词\n" +
+                "- 分析需要更多请求样本\n" +
                 "参数：\n" +
-                "- count: 返回的记录数量（整数）。表示本次请求返回多少条记录。\n" +
-                "- offset: 起始索引（整数，从 0 开始）。表示跳过前面的多少条记录，从Burp Proxy的HTTP请求历史记录的第 offset 条记录开始返回。\n" +
+                "- count: 返回的记录数量（建议10-20条）\n" +
+                "- offset: 起始索引（从0开始，用于分页）\n" +
                 "分页示例：\n" +
-                "  - offset=0, count=10: 返回第 1-10 条记录\n" +
-                "  - offset=10, count=10: 返回第 11-20 条记录\n" +
-                "  - offset=20, count=10: 返回第 21-30 条记录\n" +
-                "注意：如果 offset 超出总记录数，返回 \"Reached end of items\"。返回的 JSON 内容如果超过 5000 字符会被截断。");
-        descriptionMappings.put("get_proxy_http_history_regex", "使用正则表达式过滤并获取代理 HTTP 历史记录（支持分页）。\n" +
+                "  - offset=0, count=10: 返回最新10条记录\n" +
+                "  - offset=10, count=10: 返回第11-20条记录\n" +
+                "注意：返回内容超过5000字符会被截断。");
+        descriptionMappings.put("get_proxy_http_history_regex", "按关键词/正则过滤并获取代理历史记录。\n" +
+                "【使用时机】：\n" +
+                "- 需要查找特定接口（如登录、上传、API等）的请求\n" +
+                "- 用户提到特定的关键词或路径\n" +
+                "- 需要定向分析某类请求\n" +
+                "【决策条件】：\n" +
+                "- 用户提到具体的接口名、路径、或关键词\n" +
+                "- 比 get_proxy_http_history 更精准，优先使用此工具进行定向搜索\n" +
                 "参数：\n" +
-                "- regex: 正则表达式（字符串），用于过滤历史记录，例如：\".*login.*\" 用于过滤包含 login 的记录\n" +
-                "- count: 返回的记录数量（整数）。表示本次请求返回多少条匹配的记录。\n" +
-                "- offset: 起始索引（整数，从 0 开始）。表示跳过前面的多少条匹配记录，从第 offset 条匹配记录开始返回。\n" +
-                "分页示例：\n" +
-                "  - offset=0, count=10: 返回匹配的前 10 条记录\n" +
-                "  - offset=10, count=10: 返回匹配的第 11-20 条记录\n" +
-                "注意：如果 offset 超出匹配记录数，返回 \"Reached end of items\"。返回的 JSON 内容如果超过 5000 字符会被截断。");
+                "- regex: 正则表达式（如 \".*login.*\"、\".*api/user.*\"）\n" +
+                "- count: 返回数量（建议10条）\n" +
+                "- offset: 起始索引（从0开始）\n" +
+                "常用 regex 示例：\n" +
+                "  - \".*login.*\": 查找登录相关请求\n" +
+                "  - \".*upload.*\": 查找上传相关请求\n" +
+                "  - \".*api.*\": 查找API接口请求");
         descriptionMappings.put("get_proxy_websocket_history", "获取 Burp Proxy 的 WebSocket 消息历史记录（支持分页）。\n" +
                 "参数：\n" +
                 "- count: 返回的记录数量（整数）。表示本次请求返回多少条记录。\n" +

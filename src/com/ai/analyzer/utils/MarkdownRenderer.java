@@ -87,15 +87,83 @@ public class MarkdownRenderer {
         StyleConstants.setForeground(link, LINK_COLOR);
         StyleConstants.setUnderline(link, true);
 
-        // 使用CommonMark解析
-        Parser parser = Parser.builder().build();
-        Node document = parser.parse(markdown);
-        
-        // 渲染AST到StyledDocument
+        // 预处理：提取工具块，避免 Markdown 解析器破坏 | 字符
         try {
-            renderNode(doc, document, regular, bold, italic, code, link, header1, header2, header3, list);
+            renderWithToolBlocks(doc, markdown, regular, bold, italic, code, link, header1, header2, header3, list);
         } catch (BadLocationException e) {
             e.printStackTrace();
+        }
+    }
+    
+    /**
+     * 预处理并渲染文本，先提取工具块单独渲染，避免 Markdown 解析器破坏
+     */
+    private static void renderWithToolBlocks(StyledDocument doc, String markdown, 
+            Style regular, Style bold, Style italic, Style code, Style link,
+            Style header1, Style header2, Style header3, Style list) throws BadLocationException {
+        
+        if (markdown == null || markdown.isEmpty()) return;
+        
+        Parser parser = Parser.builder().build();
+        int pos = 0;
+        
+        while (pos < markdown.length()) {
+            // 查找 [TOOL_BLOCK] 和 [TOOL] 标记
+            int toolBlockStart = markdown.indexOf("[TOOL_BLOCK]", pos);
+            int toolStart = markdown.indexOf("[TOOL]", pos);
+            
+            // 确定哪个先出现
+            int nextStart = -1;
+            boolean isBlockFormat = false;
+            
+            if (toolBlockStart >= 0 && (toolStart < 0 || toolBlockStart < toolStart)) {
+                nextStart = toolBlockStart;
+                isBlockFormat = true;
+            } else if (toolStart >= 0) {
+                nextStart = toolStart;
+                isBlockFormat = false;
+            }
+            
+            if (nextStart < 0) {
+                // 没有更多工具块，渲染剩余的 Markdown
+                String remaining = markdown.substring(pos);
+                if (!remaining.isEmpty()) {
+                    Node document = parser.parse(remaining);
+                    renderNode(doc, document, regular, bold, italic, code, link, header1, header2, header3, list);
+                }
+                break;
+            }
+            
+            // 先渲染工具块之前的 Markdown 内容
+            if (nextStart > pos) {
+                String beforeTool = markdown.substring(pos, nextStart);
+                if (!beforeTool.isEmpty()) {
+                    Node document = parser.parse(beforeTool);
+                    renderNode(doc, document, regular, bold, italic, code, link, header1, header2, header3, list);
+                }
+            }
+            
+            // 渲染工具块
+            if (isBlockFormat) {
+                int toolEnd = markdown.indexOf("[/TOOL_BLOCK]", nextStart);
+                if (toolEnd < 0) {
+                    // 未闭合的标记，作为普通文本
+                    doc.insertString(doc.getLength(), markdown.substring(nextStart), regular);
+                    break;
+                }
+                String toolContent = markdown.substring(nextStart + 12, toolEnd); // 12 = "[TOOL_BLOCK]".length()
+                renderToolBlock(doc, toolContent, regular);
+                pos = toolEnd + 13; // 13 = "[/TOOL_BLOCK]".length()
+            } else {
+                int toolEnd = markdown.indexOf("[/TOOL]", nextStart);
+                if (toolEnd < 0) {
+                    doc.insertString(doc.getLength(), markdown.substring(nextStart), regular);
+                    break;
+                }
+                String toolContent = markdown.substring(nextStart + 6, toolEnd); // 6 = "[TOOL]".length()
+                renderToolBlockSimple(doc, toolContent, regular);
+                pos = toolEnd + 7; // 7 = "[/TOOL]".length()
+            }
         }
     }
     
@@ -582,13 +650,9 @@ public class MarkdownRenderer {
             StyleConstants.setForeground(link, LINK_COLOR);
             StyleConstants.setUnderline(link, true);
 
-            // 使用CommonMark解析（尝试解析，如果失败则使用纯文本）
+            // 预处理：提取工具块，避免 Markdown 解析器破坏 | 字符
             try {
-                Parser parser = Parser.builder().build();
-                Node document = parser.parse(markdown);
-                
-                // 渲染AST到StyledDocument
-                renderNode(doc, document, regular, bold, italic, code, link, header1, header2, header3, list);
+                renderWithToolBlocks(doc, markdown, regular, bold, italic, code, link, header1, header2, header3, list);
             } catch (Exception e) {
                 // 如果解析失败（比如不完整的Markdown），先用纯文本显示
                 doc.insertString(doc.getLength(), markdown, regular);

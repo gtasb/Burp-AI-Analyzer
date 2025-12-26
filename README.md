@@ -29,6 +29,7 @@
 | AI 框架 | LangChain4j |
 | 大模型 | 通义千问 (qwen-max) |
 | 工具协议 | Model Context Protocol (MCP) |
+| RAG | rag-mcp-server |
 | GUI | Swing |
 
 ## 📦 快速开始
@@ -62,6 +63,27 @@ mvn clean package
 2. 选择 `发送到AI分析`
 3. 输入分析提示词，点击 `开始分析`
 
+## RAG MCP
+
+RAG MCP 是一个本地知识库，用于存储和检索安全文档。
+
+1. 安装RAG MCP Server
+
+使用uvx（推荐）
+```bash
+# Install with uvx (comes with uv)
+uvx rag-mcp-server
+```
+
+使用pip（需要配置好环境变量）
+```bash
+pip install rag-mcp-server
+```
+
+2. 配置 RAG MCP
+
+文档我们用的是PayloadsAllTheThings
+
 ## 🔗 获取 API Key
 
 1. 访问 [阿里云 DashScope 控制台](https://dashscope.console.aliyun.com/)
@@ -71,27 +93,9 @@ mvn clean package
 
 ## 🌟 使用示例
 
-### SQL 注入检测
-```
-提示词：分析这个请求中是否存在 SQL 注入漏洞，给出测试 payload
 
-AI 分析结果：
-✓ 发现注入点：id 参数
-✓ 数据库类型：MySQL
-✓ 推荐 payload: ' OR '1'='1, 1' UNION SELECT NULL--
-✓ WAF 绕过：使用 /**/ 注释、URL 编码
-```
 
-### XSS 漏洞分析
-```
-提示词：检查 XSS 攻击面
 
-AI 分析结果：
-✓ 输入点：search 参数
-✓ 输出上下文：HTML 标签内
-✓ 推荐 payload: <script>alert(1)</script>
-✓ 需测试 CSP 绕过
-```
 
 ### MCP 自动化测试
 ```

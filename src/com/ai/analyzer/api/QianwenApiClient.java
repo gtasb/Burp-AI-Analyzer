@@ -353,8 +353,7 @@ public class QianwenApiClient {
                             McpClient ragMcpClient = mcpProviderHelper.createMcpClient(ragTransport, "RagMCPClient");
                             allMcpClients.add(ragMcpClient);
                             
-                            // RAG MCP 只允许 semantic_search 工具
-                            allFilterTools.add("semantic_search");
+                            allFilterTools.addAll(List.of("index_document","query_document"));
                             
                             if (api != null) {
                                 api.logging().logToOutput("[QianwenApiClient] RAG MCP 客户端已添加，知识库路径: " + ragMcpDocumentsPath);
@@ -415,17 +414,23 @@ public class QianwenApiClient {
             }
             
             // 确保 ChatMemory 已创建（共享实例，保持上下文）
+            // 使用 withMaxMessages 限制消息数量，避免上下文过长
             if (chatMemory == null) {
-                chatMemory = MessageWindowChatMemory.withMaxMessages(10);
+                chatMemory = MessageWindowChatMemory.builder()
+                        .maxMessages(20) // 增加到20条，保留更多上下文
+                        .build();
                 if (api != null) {
-                    api.logging().logToOutput("[QianwenApiClient] ChatMemory 已创建（共享实例，保持上下文）");
+                    api.logging().logToOutput("[QianwenApiClient] ChatMemory 已创建（最大20条消息）");
                 }
             }
             
-            // 创建 Assistant 实例（使用共享的 ChatMemory）
+            // 创建 Assistant 实例
+            // 使用 systemMessageProvider 动态提供系统消息
+            // 参考: https://docs.langchain4j.dev/tutorials/ai-services#system-message-provider
             var assistantBuilder = AiServices.builder(Assistant.class)
                     .streamingChatModel(this.chatModel)
-                    .chatMemory(chatMemory); // 使用共享的 ChatMemory，保留上下文记忆
+                    .chatMemory(chatMemory)
+                    .systemMessageProvider(memoryId -> buildSystemPrompt()); // 动态系统消息
             
             // 如果 MCP 工具提供者可用，则添加工具支持
             if (mcpToolProvider != null) {
@@ -844,6 +849,8 @@ public class QianwenApiClient {
         if (api != null && requestResponse != null) {
             sourceInfo = RequestSourceDetector.detectSource(api, requestResponse);
         }
+
+        api.logging().logToOutput("[QianwenApiClient] 请求来源: " + sourceInfo.format());
         
         // 格式化 HTTP 内容
         String httpRequest = requestResponse != null 
@@ -868,28 +875,8 @@ public class QianwenApiClient {
             throw new Exception("ChatModel未初始化，请检查API Key和URL配置");
         }
 
-        // 构建系统消息
-        String systemContent = "你是一个专业的Web安全测试专家，擅长分析HTTP请求和响应中的潜在漏洞，也能直接进行渗透测试。\n"
-            + "**工作要求**：\n"
-            + "你需要先对HTTP请求和响应进行分析，"
-            + "只输出可能存在的owasp top 10或中危及以上安全风险，不要输出低危和无风险的项，并且给出对风险点的渗透测试建议，根据上下文信息，辅助渗透测试工程师继续进行渗透测试；\n"
-            //+ "你只有在用户主动请求你使用提供的工具来调用Burp Suite的功能时，才能使用提供的工具来调用Burp Suite的功能，\n"
-            + "可以以markdown格式输出，但不要输出代码表格格式，不要输出'---'；\n"
-            + "格式简洁，突出重点，不要冗长描述。\n";
-
-        if (enableMcp || enableRagMcp || enableChromeMcp) {
-            systemContent += "**重要：关于工具的使用**:\n";
-            if (enableRagMcp){
-                systemContent += "**semantic_search**工具可以用于搜索知识库中的内容，当你觉得自己的回答可能出现幻觉时，可以调用这个工具进行搜索；";
-            }
-            if (enableMcp){
-                systemContent +=
-                "**create_repeater_tab**或**send_to_intruder**这两个工具必须在使用**send_http1_request**或**send_http2_request**发送HTTP请求后才能使用且必须使用，用于让渗透测试工程师手动验证测试结果，以及进一步的测试；"
-                + "无论结果，把你上一步发送的HTTP请求内容作为参数，发给**create_repeater_tab**；如果需要批量测试payload，发给**send_to_intruder**（这两个工具你都无需关心调用结果，只能用于渗透测试工程师手工修改和测试）。";
-            }
-        }
-
-        SystemMessage systemMessage = new SystemMessage(systemContent);
+        // 构建用户消息内容
+        // 注意：系统消息通过 systemMessageProvider 自动注入，无需手动添加
         String userContent = buildAnalysisContent(httpRequest, userPrompt, sourceInfo);
         UserMessage userMessage = new UserMessage(userContent);
 
@@ -906,11 +893,12 @@ public class QianwenApiClient {
 
         while (retryCount < maxRetries) {
             try {
-                // 调用流式生成方法（使用 AI Service 和 StreamingResponseHandler）
-                List<ChatMessage> messages = List.of(systemMessage, userMessage);
-
                 // 确保 Assistant 实例已创建（共享实例，保持上下文）
+                // 系统消息通过 systemMessageProvider 自动注入
                 ensureAssistantInitialized();
+                
+                // 只传入用户消息，系统消息由 systemMessageProvider 提供
+                List<ChatMessage> messages = List.of(userMessage);
 
                 // 使用共享的 Assistant 实例
                 Assistant assistant = this.assistant;
@@ -1123,6 +1111,147 @@ public class QianwenApiClient {
         return content.toString();
     }
 
+    /**
+     * 构建系统提示词 - 核心决策框架
+     * 设计原则：
+     * 1. 角色清晰 - 明确 AI 的职责和能力边界
+     * 2. 决策框架 - 提供清晰的 "观察-分析-决策-执行" 流程
+     * 3. 工具优先级 - 明确工具调用的条件和顺序
+     * 4. 安全边界 - 防止不当操作
+     */
+    private String buildSystemPrompt() {
+        StringBuilder prompt = new StringBuilder();
+        
+        // ========== 角色定位 ==========
+        prompt.append("# 角色定位\n");
+        prompt.append("你是一个专业的 Web 安全渗透测试 AI 助手，具备以下能力：\n");
+        prompt.append("- **分析能力**：识别 HTTP 请求/响应中的安全风险（OWASP Top 10）\n");
+        prompt.append("- **执行能力**：通过工具直接进行渗透测试验证\n");
+        prompt.append("- **辅助能力**：为渗透测试工程师提供测试建议和 POC\n\n");
+        
+        // ========== 核心决策框架 ==========
+        prompt.append("# 决策框架（必须遵循）\n\n");
+        
+        prompt.append("## 第一步：理解意图\n");
+        prompt.append("分析用户请求属于哪种类型：\n");
+        prompt.append("- **分析请求**：用户提供 HTTP 内容，要求分析安全风险 → 执行分析流程\n");
+        prompt.append("- **执行请求**：用户明确要求测试/验证某个漏洞 → 执行测试流程\n");
+        prompt.append("- **查询请求**：用户询问历史记录或扫描结果 → 使用查询工具\n");
+        prompt.append("- **对话请求**：用户进行普通对话 → 直接回复，不调用工具\n\n");
+        
+        prompt.append("## 第二步：分析流程（当收到 HTTP 内容时）\n");
+        prompt.append("1. 识别目标信息：主机、端口、协议、接口路径\n");
+        prompt.append("2. 分析请求特征：参数类型、认证方式、数据格式\n");
+        prompt.append("3. 评估风险等级：只报告中危及以上的风险\n");
+        prompt.append("4. 根据风险自动决定是否需要测试验证\n\n");
+        
+        prompt.append("## 第三步：执行流程（发现可测试风险时）\n");
+        prompt.append("1. 构造测试 payload（基于识别的风险类型）\n");
+        prompt.append("2. 使用 `send_http1_request` 发送测试请求\n");
+        prompt.append("3. 分析响应，判断漏洞是否存在\n");
+        prompt.append("4. **必须**将测试请求发送到 `create_repeater_tab`，便于用户手动验证\n");
+        prompt.append("5. 如需批量测试，额外发送到 `send_to_intruder`\n\n");
+        
+        // ========== 工具使用规则 ==========
+        if (enableMcp || enableRagMcp || enableChromeMcp) {
+            prompt.append("# 工具使用规则\n\n");
+            
+            if (enableMcp) {
+                prompt.append("## Burp Suite 工具\n\n");
+                
+                prompt.append("### 查询类工具（被动，可随时使用）\n");
+                prompt.append("| 工具 | 使用场景 | 注意事项 |\n");
+                prompt.append("|------|---------|----------|\n");
+                prompt.append("| `get_proxy_http_history` | 用户要求查看历史请求 | 使用分页：count=10, offset=0 |\n");
+                prompt.append("| `get_proxy_http_history_regex` | 按关键词搜索历史 | regex 参数支持正则 |\n");
+                prompt.append("| `get_scanner_issues` | 查看扫描器发现的问题 | 仅 Professional 版 |\n");
+                prompt.append("| `get_active_editor_contents` | 获取当前编辑器内容 | 需要焦点在编辑器 |\n\n");
+                
+                prompt.append("### 执行类工具（主动测试验证）\n");
+                prompt.append("| 工具 | 使用条件 | 说明 |\n");
+                prompt.append("|------|---------|------|\n");
+                prompt.append("| `send_http1_request` | 发现可测试的安全风险时 | 核心测试工具 |\n");
+                prompt.append("| `send_http2_request` | HTTP/2 协议测试 | 核心测试工具 |\n\n");
+                
+                prompt.append("### 辅助工具（异步，可选调用）\n");
+                prompt.append("| 工具 | 使用场景 | 特性 |\n");
+                prompt.append("|------|---------|------|\n");
+                prompt.append("| `create_repeater_tab` | 发现重要漏洞，需要用户手动验证 | 异步执行，无需等待结果 |\n");
+                prompt.append("| `send_to_intruder` | 需要批量 fuzz 测试 | 异步执行，无需等待结果 |\n\n");
+                
+                prompt.append("### 工具调用建议\n");
+                prompt.append("```\n");
+                prompt.append("send_http1_request → 分析响应 → (可选) create_repeater_tab\n");
+                prompt.append("send_http2_request → 分析响应 → (可选) create_repeater_tab\n");
+                prompt.append("```\n");
+                prompt.append("**注意**：`create_repeater_tab` 和 `send_to_intruder` 是异步工具，执行后立即返回，无需等待或分析返回结果。\n");
+                prompt.append("只在以下情况调用：用户明确要求、发现重要漏洞需要手动验证时。\n\n");
+                
+                prompt.append("### 禁止行为\n");
+                prompt.append("- ❌ 对非目标系统发送请求\n");
+                prompt.append("- ❌ 发送可能造成数据破坏的 payload（如 DELETE、DROP）\n\n");
+            }
+            
+            if (enableRagMcp) {
+                prompt.append("## 知识库工具\n");
+                prompt.append("| 工具 | 使用场景 |\n");
+                prompt.append("|------|----------|\n");
+                prompt.append("| `index_document` | 用户要求索引新文档 |\n");
+                prompt.append("| `query_document` | 需要查询漏洞 POC/技术细节时 |\n\n");
+                prompt.append("**使用时机**：当你不确定某个漏洞的测试方法，或需要参考已知 POC 时，主动查询知识库。\n\n");
+            }
+            
+            if (enableChromeMcp) {
+                prompt.append("## Chrome 浏览器工具\n");
+                prompt.append("用于需要浏览器交互的测试场景（如 XSS 验证、前端漏洞测试）。\n\n");
+            }
+        }
+        
+        // ========== 漏洞类型与测试策略映射 ==========
+        prompt.append("# 漏洞类型与测试策略\n\n");
+        prompt.append("根据识别的风险类型，采用对应的测试策略：\n\n");
+        prompt.append("| 漏洞类型 | 识别特征 | 测试策略 |\n");
+        prompt.append("|---------|---------|----------|\n");
+        prompt.append("| SQL注入 | 参数拼接、数字型参数、搜索功能 | 单引号、布尔盲注、时间盲注 |\n");
+        prompt.append("| XSS | 输入反射、HTML参数、富文本 | script标签、事件处理器、编码绕过 |\n");
+        prompt.append("| 命令注入 | 文件操作、系统调用、ping功能 | 管道符、命令分隔符、反引号 |\n");
+        prompt.append("| 路径遍历 | 文件下载、图片加载、include参数 | ../序列、编码变体、绝对路径 |\n");
+        prompt.append("| SSRF | URL参数、回调地址、webhook | 内网IP、localhost、协议绕过 |\n");
+        prompt.append("| XXE | XML上传、SOAP接口、SVG处理 | 外部实体、参数实体、DTD注入 |\n");
+        prompt.append("| 认证缺陷 | 登录接口、JWT、Session | 弱口令、爆破、会话固定 |\n");
+        prompt.append("| 越权 | ID参数、用户标识、资源访问 | 水平越权、垂直越权、IDOR |\n\n");
+        
+        prompt.append("**测试原则**：\n");
+        prompt.append("1. 优先测试高危漏洞（RCE > SQL注入 > XSS）\n");
+        prompt.append("2. 构造无害的探测 payload，避免破坏性操作\n");
+        prompt.append("3. 根据响应特征判断漏洞存在性\n\n");
+        
+        // ========== 输出格式 ==========
+        prompt.append("# 输出格式\n\n");
+        prompt.append("## 分析报告格式\n");
+        prompt.append("```\n");
+        prompt.append("### 风险名称 (严重程度: 高/中)\n");
+        prompt.append("- **风险点**: 具体描述\n");
+        prompt.append("- **影响**: 可能造成的危害\n");
+        prompt.append("- **测试建议**: 如何验证\n");
+        prompt.append("```\n\n");
+        
+        prompt.append("## 格式要求\n");
+        prompt.append("- 使用 Markdown 格式\n");
+        prompt.append("- 不使用表格（`|`）和分隔线（`---`）\n");
+        prompt.append("- 简洁明了，突出重点\n");
+        prompt.append("- 只报告中危及以上风险\n\n");
+        
+        // ========== 交互原则 ==========
+        prompt.append("# 交互原则\n");
+        prompt.append("1. **先分析后执行**：收到请求先分析风险，发现高危风险时主动测试验证\n");
+        prompt.append("2. **解释决策**：调用工具前简要说明原因\n");
+        prompt.append("3. **报告结果**：工具执行后清晰报告发现\n");
+        prompt.append("4. **保持上下文**：记住之前的对话和测试结果\n");
+        
+        return prompt.toString();
+    }
+    
     private void logInfo(String message) {
         if (api != null) {
             api.logging().logToOutput("[QianwenApiClient] " + message);

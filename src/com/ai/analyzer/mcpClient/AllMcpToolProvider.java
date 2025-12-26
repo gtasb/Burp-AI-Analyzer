@@ -12,7 +12,9 @@ import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 import dev.langchain4j.mcp.McpToolProvider;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.BiFunction;
 
 
@@ -37,7 +39,7 @@ public class AllMcpToolProvider {
                 .sseUrl(sseUrl)   // MCP Server SSE endpoint
                 .logRequests(true)  // 在日志中查看请求流量
                 .logResponses(true)  // 在日志中查看响应流量
-                .timeout(java.time.Duration.ofSeconds(30))  // 设置超时时间到 30 秒
+                //.timeout(java.time.Duration.ofSeconds(30))  // 设置超时时间到 30 秒
                 .build();
     }
 
@@ -50,7 +52,7 @@ public class AllMcpToolProvider {
     public McpTransport createStreamableHttpTransport(String httpUrl) {
         return new StreamableHttpMcpTransport.Builder()
                 .url(httpUrl)
-                .timeout(java.time.Duration.ofSeconds(30))  // 设置超时时间到 30 秒
+                //.timeout(java.time.Duration.ofSeconds(30))  // 设置超时时间到 30 秒
                 .build();
     }
     
@@ -92,6 +94,12 @@ public class AllMcpToolProvider {
      * @param knowledgeBasePath 知识库路径
      * @return McpTransport 实例
      */
+    /**
+     * 创建 RAG MCP 的 Stdio Transport
+     * 与 Cursor mcp.json 配置保持一致：使用 uvx rag-mcp + PERSIST_DIRECTORY 环境变量
+     * @param knowledgeBasePath 知识库路径
+     * @return McpTransport 实例
+     */
     public McpTransport createRagMcpTransport(String knowledgeBasePath) {
         List<String> command = new ArrayList<>();
         
@@ -102,19 +110,29 @@ public class AllMcpToolProvider {
             command.add("/c");
         }
         
+        // 使用 rag-mcp（与 Cursor mcp.json 配置一致）
         command.add("uvx");
-        command.add("rag-mcp-server");
-        command.add("--knowledge-base");
-        command.add(knowledgeBasePath);
-        command.add("--embedding-model");
-        command.add("all-MiniLM-L6-v2");
-        command.add("--chunk-size");
-        command.add("1000");
-        command.add("--chunk-overlap");
-        command.add("100");
-        command.add("--top-k");
-        command.add("3");
-        return createStdioTransport(command);
+        command.add("rag-mcp");
+        
+        // 通过环境变量传递知识库路径
+        Map<String, String> env = new HashMap<>();
+        env.put("PERSIST_DIRECTORY", knowledgeBasePath);
+        
+        return createStdioTransportWithEnv(command, env);
+    }
+    
+    /**
+     * 创建带环境变量的 Stdio Transport
+     * @param command 命令列表
+     * @param environment 环境变量映射
+     * @return McpTransport 实例
+     */
+    public McpTransport createStdioTransportWithEnv(List<String> command, Map<String, String> environment) {
+        return new StdioMcpTransport.Builder()
+                .command(command)
+                .environment(environment)
+                .logEvents(true)
+                .build();
     }
 
     /**

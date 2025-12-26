@@ -290,14 +290,13 @@ public class ChatPanel extends JPanel {
                             contextBuilder.append("注意：当前只有请求信息，没有响应信息。\n\n");
                         }
                     } else {
-                        // 没有请求时，提示可以自由对话
-                        contextBuilder.append("当前没有关联的HTTP请求，你可以自由提问，我会尽力帮助你。\n");
-/*                         contextBuilder.append("你可以使用提供的工具来调用Burp Suite的功能，例如：\n");
-                        contextBuilder.append("- 获取代理历史记录\n");
-                        contextBuilder.append("- 获取扫描器发现的问题\n");
-                        contextBuilder.append("- 发送HTTP请求\n");
-                        contextBuilder.append("- 执行编码/解码操作\n");
-                        contextBuilder.append("- 生成随机字符串\n\n"); */
+                        // 没有请求时，提供上下文引导
+                        contextBuilder.append("【当前模式：自由对话】\n");
+                        contextBuilder.append("当前没有关联的HTTP请求。你可以：\n");
+                        contextBuilder.append("1. 使用 get_proxy_http_history 获取最近的代理历史，分析其中的请求\n");
+                        contextBuilder.append("2. 使用 get_proxy_http_history_regex 按关键词搜索特定请求\n");
+                        contextBuilder.append("3. 直接咨询安全测试相关问题\n");
+                        contextBuilder.append("4. 请求我帮你构造特定的测试 payload\n\n");
                     }
                     
                     // 注意：聊天历史由 LangChain4j 的 chatMemory 自动管理，不需要手动添加到上下文
