@@ -1173,23 +1173,34 @@ public class QianwenApiClient {
                 prompt.append("| `send_http1_request` | 发现可测试的安全风险时 | 核心测试工具 |\n");
                 prompt.append("| `send_http2_request` | HTTP/2 协议测试 | 核心测试工具 |\n\n");
                 
-                prompt.append("### 辅助工具（异步，可选调用）\n");
-                prompt.append("| 工具 | 使用场景 | 特性 |\n");
+                prompt.append("### 辅助工具（智能决策，按需调用）\n");
+                prompt.append("| 工具 | 调用条件 | 说明 |\n");
                 prompt.append("|------|---------|------|\n");
-                prompt.append("| `create_repeater_tab` | 发现重要漏洞，需要用户手动验证 | 异步执行，无需等待结果 |\n");
-                prompt.append("| `send_to_intruder` | 需要批量 fuzz 测试 | 异步执行，无需等待结果 |\n\n");
+                prompt.append("| `create_repeater_tab` | 见下方决策规则 | 发送到 Repeater 供人类验证 |\n");
+                prompt.append("| `send_to_intruder` | 需要批量 fuzz | 发送到 Intruder 批量测试 |\n\n");
                 
-                prompt.append("### 工具调用建议\n");
-                prompt.append("```\n");
-                prompt.append("send_http1_request → 分析响应 → (可选) create_repeater_tab\n");
-                prompt.append("send_http2_request → 分析响应 → (可选) create_repeater_tab\n");
-                prompt.append("```\n");
-                prompt.append("**注意**：`create_repeater_tab` 和 `send_to_intruder` 是异步工具，执行后立即返回，无需等待或分析返回结果。\n");
-                prompt.append("只在以下情况调用：用户明确要求、发现重要漏洞需要手动验证时。\n\n");
+                prompt.append("### `create_repeater_tab` 智能决策规则（重要）\n");
+                prompt.append("**原则：只有需要人类确认的请求才发送到 Repeater**\n\n");
+                prompt.append("| 测试结果 | 是否发送 | 原因 |\n");
+                prompt.append("|---------|---------|------|\n");
+                prompt.append("| ✅ 发现漏洞/成功POC | **必须发送** | 人类必须确认漏洞真实性 |\n");
+                prompt.append("| ⚠️ 疑似漏洞/不确定 | 建议发送 | 需要人类进一步分析判断 |\n");
+                prompt.append("| ❌ 确认无漏洞 | **不发送** | 减少噪音，避免浪费时间 |\n\n");
+                prompt.append("**示例**：\n");
+                prompt.append("- 响应包含 `root:x:0:0` → 发现文件读取漏洞 → **必须发送**\n");
+                prompt.append("- SQL 语法错误回显 → 可能存在注入 → **必须发送**\n");
+                prompt.append("- 返回正常业务响应，无异常 → 确认无漏洞 → **不发送**\n");
+                prompt.append("- 返回 403/404 → 无漏洞 → **不发送**\n\n");
+                
+                prompt.append("### 工具调用效率指南\n");
+                prompt.append("1. **获取历史记录**：合并关键词 `regex=\".*(login|api|upload).*\"`\n");
+                prompt.append("2. **测试流程**：`send_http1_request` → 分析响应 → 按决策规则决定是否调用 `create_repeater_tab`\n\n");
                 
                 prompt.append("### 禁止行为\n");
+                prompt.append("- ❌ 测试结果为【无漏洞】时仍发送到 Repeater\n");
+                prompt.append("- ❌ 串行调用多个相似的查询工具（应合并）\n");
                 prompt.append("- ❌ 对非目标系统发送请求\n");
-                prompt.append("- ❌ 发送可能造成数据破坏的 payload（如 DELETE、DROP）\n\n");
+                prompt.append("- ❌ 发送破坏性 payload（DELETE、DROP 等）\n\n");
             }
             
             if (enableRagMcp) {
@@ -1197,7 +1208,7 @@ public class QianwenApiClient {
                 prompt.append("| 工具 | 使用场景 |\n");
                 prompt.append("|------|----------|\n");
                 prompt.append("| `index_document` | 用户要求索引新文档 |\n");
-                prompt.append("| `query_document` | 需要查询漏洞 POC/技术细节时 |\n\n");
+                prompt.append("| `query_document` | 需要查询漏洞 POC/技术细节时，如果没找到相关知识库，则主动索引新文档 |\n\n");
                 prompt.append("**使用时机**：当你不确定某个漏洞的测试方法，或需要参考已知 POC 时，主动查询知识库。\n\n");
             }
             

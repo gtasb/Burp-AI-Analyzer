@@ -39,7 +39,7 @@ public class AllMcpToolProvider {
                 .sseUrl(sseUrl)   // MCP Server SSE endpoint
                 .logRequests(true)  // 在日志中查看请求流量
                 .logResponses(true)  // 在日志中查看响应流量
-                //.timeout(java.time.Duration.ofSeconds(30))  // 设置超时时间到 30 秒
+                .timeout(java.time.Duration.ofSeconds(60))  // 超时设置为 60 秒，给 HTTP 请求足够时间
                 .build();
     }
 
@@ -52,7 +52,7 @@ public class AllMcpToolProvider {
     public McpTransport createStreamableHttpTransport(String httpUrl) {
         return new StreamableHttpMcpTransport.Builder()
                 .url(httpUrl)
-                //.timeout(java.time.Duration.ofSeconds(30))  // 设置超时时间到 30 秒
+                .timeout(java.time.Duration.ofSeconds(60))  // 超时设置为 60 秒
                 .build();
     }
     

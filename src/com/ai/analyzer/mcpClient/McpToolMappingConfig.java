@@ -224,20 +224,19 @@ public class McpToolMappingConfig {
                 "- usesHttps: 是否使用 HTTPS 协议（true/false）\n" +
                 "注意：不要将头部字段传递给 body 参数。伪头部字段会自动添加 : 前缀。");
 
-        descriptionMappings.put("create_repeater_tab", "【辅助工具 - 异步执行】将请求发送到 Burp Repeater。\n" +
-                "【特性】：异步执行，立即返回，无需等待或分析返回结果。\n" +
-                "【使用时机】：\n" +
-                "- 发现重要漏洞，需要用户手动验证时\n" +
-                "- 用户明确要求将请求发送到 Repeater\n" +
-                "【注意】：这是可选工具，不是必须调用。\n" +
-                "参数：content(HTTP请求), targetHostname, targetPort, usesHttps, tabName(可选)");
+        descriptionMappings.put("create_repeater_tab", "【智能决策工具】将请求发送到 Burp Repeater 供人类验证。\n" +
+                "【调用决策规则 - 必须遵循】：\n" +
+                "- ✅ 发现漏洞/成功POC → **必须调用**（人类必须确认）\n" +
+                "- ⚠️ 疑似漏洞/不确定 → 建议调用（需人类判断）\n" +
+                "- ❌ 确认无漏洞 → **不调用**（减少噪音）\n" +
+                "【特性】：异步执行，无需等待返回结果。\n" +
+                "参数：content(HTTP请求), targetHostname, targetPort, usesHttps, tabName(建议用漏洞类型命名)");
 
-        descriptionMappings.put("send_to_intruder", "【辅助工具 - 异步执行】将请求发送到 Burp Intruder。\n" +
-                "【特性】：异步执行，立即返回，无需等待或分析返回结果。\n" +
+        descriptionMappings.put("send_to_intruder", "【辅助工具】将请求发送到 Burp Intruder 进行批量测试。\n" +
                 "【使用时机】：\n" +
-                "- 需要批量 fuzz 测试时（如爆破、模糊测试）\n" +
+                "- 需要批量 fuzz 测试（爆破、模糊测试）\n" +
                 "- 用户明确要求发送到 Intruder\n" +
-                "【注意】：这是可选工具，不是必须调用。\n" +
+                "【特性】：异步执行，无需等待返回结果。\n" +
                 "参数：content(HTTP请求), targetHostname, targetPort, usesHttps, tabName(可选)");
         
         // 编码/解码工具
@@ -275,37 +274,19 @@ public class McpToolMappingConfig {
                 "注意：设置前请先使用 output_user_options 导出当前配置以了解架构。需要启用配置编辑功能。");
         
         // 代理功能
-        descriptionMappings.put("get_proxy_http_history", "获取 Burp Proxy 的 HTTP 请求历史记录（支持分页）。\n" +
-                "【使用时机】：\n" +
-                "- 用户要求查看/分析代理历史中的请求\n" +
-                "- 当前没有关联请求，需要获取历史请求进行分析\n" +
-                "- 需要获取更多上下文信息（如同一接口的其他请求）\n" +
-                "【决策条件】：\n" +
-                "- 用户提到'历史'、'之前的请求'、'最近的请求'等关键词\n" +
-                "- 分析需要更多请求样本\n" +
-                "参数：\n" +
-                "- count: 返回的记录数量（建议10-20条）\n" +
-                "- offset: 起始索引（从0开始，用于分页）\n" +
-                "分页示例：\n" +
-                "  - offset=0, count=10: 返回最新10条记录\n" +
-                "  - offset=10, count=10: 返回第11-20条记录\n" +
-                "注意：返回内容超过5000字符会被截断。");
-        descriptionMappings.put("get_proxy_http_history_regex", "按关键词/正则过滤并获取代理历史记录。\n" +
-                "【使用时机】：\n" +
-                "- 需要查找特定接口（如登录、上传、API等）的请求\n" +
-                "- 用户提到特定的关键词或路径\n" +
-                "- 需要定向分析某类请求\n" +
-                "【决策条件】：\n" +
-                "- 用户提到具体的接口名、路径、或关键词\n" +
-                "- 比 get_proxy_http_history 更精准，优先使用此工具进行定向搜索\n" +
-                "参数：\n" +
-                "- regex: 正则表达式（如 \".*login.*\"、\".*api/user.*\"）\n" +
-                "- count: 返回数量（建议10条）\n" +
-                "- offset: 起始索引（从0开始）\n" +
-                "常用 regex 示例：\n" +
-                "  - \".*login.*\": 查找登录相关请求\n" +
-                "  - \".*upload.*\": 查找上传相关请求\n" +
-                "  - \".*api.*\": 查找API接口请求");
+        descriptionMappings.put("get_proxy_http_history", "【首选工具】获取 Burp Proxy 的 HTTP 请求历史记录。\n" +
+                "【优先使用此工具】：先用此工具获取概览，再决定是否需要正则过滤。\n" +
+                "参数：count(数量,建议20), offset(起始索引,默认0)\n" +
+                "注意：返回超过5000字符会被截断。");
+        descriptionMappings.put("get_proxy_http_history_regex", "按正则过滤获取代理历史（单次调用）。\n" +
+                "【效率警告】：每次调用都需要等待，请合并多个关键词到一个正则！\n" +
+                "【正确用法】：\n" +
+                "- 多关键词合并：regex=\".*(login|api|upload|admin).*\" （一次查询4个关键词）\n" +
+                "- 单关键词：regex=\".*login.*\"\n" +
+                "【错误用法】：\n" +
+                "- ❌ 分别调用4次查询 login、api、upload、admin\n" +
+                "- ❌ 使用通配符语法 *login*（应该用 .*login.*）\n" +
+                "参数：regex(正则), count(数量,建议10), offset(默认0)");
         descriptionMappings.put("get_proxy_websocket_history", "获取 Burp Proxy 的 WebSocket 消息历史记录（支持分页）。\n" +
                 "参数：\n" +
                 "- count: 返回的记录数量（整数）。表示本次请求返回多少条记录。\n" +
