@@ -16,6 +16,7 @@ public class PluginSettings implements Serializable {
     private boolean enableRagMcp = false; // 默认禁用 RAG MCP 工具调用
     private String ragMcpUrl = " "; // RAG MCP 服务器地址
     private String ragMcpDocumentsPath = ""; // RAG MCP 知识库文档路径
+    private boolean enableFileSystemAccess = false; // 默认禁用直接查找知识库
     private boolean enableChromeMcp = false; // 默认禁用 Chrome MCP 工具调用
     private String chromeMcpUrl = " "; // Chrome MCP 服务器地址
     private boolean enableRag = false; // 默认禁用 RAG
@@ -249,5 +250,13 @@ public class PluginSettings implements Serializable {
     
     public void setRagDocumentsPath(String ragDocumentsPath) {
         this.ragDocumentsPath = ragDocumentsPath;
+    }
+    
+    public boolean isEnableFileSystemAccess() {
+        return enableFileSystemAccess;
+    }
+    
+    public void setEnableFileSystemAccess(boolean enableFileSystemAccess) {
+        this.enableFileSystemAccess = enableFileSystemAccess;
     }
 }

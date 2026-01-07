@@ -40,6 +40,7 @@ public class AIAnalyzerTab extends JPanel {
     private JCheckBox enableRagMcpCheckBox;
     // private JTextField ragMcpUrlField; // RAG MCP 地址暂时隐藏
     private JTextField ragMcpDocumentsPathField;
+    private JCheckBox enableFileSystemAccessCheckBox; // 启用直接查找知识库
     private JCheckBox enableChromeMcpCheckBox;
     private JTextField chromeMcpUrlField;
     // 默认 RAG 功能暂时禁用，改用 RAG MCP
@@ -266,32 +267,47 @@ public class AIAnalyzerTab extends JPanel {
         });
         apiConfigPanel.add(BurpMcpUrlField, gbc);
 
-        // RAG MCP 工具调用开关
+        // 知识库检索工具开关（两个选项放同一行）
         gbc.gridx = 0;
         gbc.gridy = 6;
         gbc.gridwidth = 1;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        apiConfigPanel.add(new JLabel("启用 RAG MCP 工具:"), gbc);
+        apiConfigPanel.add(new JLabel("启用知识库检索工具:"), gbc);
+        
+        // 创建一个面板放两个 checkbox，左对齐无边距
+        JPanel knowledgeBasePanel = new JPanel();
+        knowledgeBasePanel.setLayout(new BoxLayout(knowledgeBasePanel, BoxLayout.X_AXIS));
+        
+        enableRagMcpCheckBox = new JCheckBox("RAG MCP（语义检索）", false);
+        enableRagMcpCheckBox.setToolTipText("通过 RAG MCP 服务进行语义检索（需要 uvx rag-mcp）");
+        enableRagMcpCheckBox.addActionListener(e -> {
+            boolean enabled = enableRagMcpCheckBox.isSelected();
+            ragMcpDocumentsPathField.setEnabled(enabled || enableFileSystemAccessCheckBox.isSelected());
+            apiClient.setEnableRagMcp(enabled);
+            if (enabled && !ragMcpDocumentsPathField.getText().trim().isEmpty()) {
+                apiClient.setRagMcpDocumentsPath(ragMcpDocumentsPathField.getText().trim());
+            }
+        });
+        knowledgeBasePanel.add(enableRagMcpCheckBox);
+        knowledgeBasePanel.add(Box.createHorizontalStrut(15)); // 间距
+        
+        enableFileSystemAccessCheckBox = new JCheckBox("直接查找（文件浏览）", false);
+        enableFileSystemAccessCheckBox.setToolTipText("让 AI 主动浏览、搜索、读取知识库文件（无需额外服务）");
+        enableFileSystemAccessCheckBox.addActionListener(e -> {
+            boolean enabled = enableFileSystemAccessCheckBox.isSelected();
+            ragMcpDocumentsPathField.setEnabled(enabled || enableRagMcpCheckBox.isSelected());
+            apiClient.setEnableFileSystemAccess(enabled);
+            if (enabled && !ragMcpDocumentsPathField.getText().trim().isEmpty()) {
+                apiClient.setRagMcpDocumentsPath(ragMcpDocumentsPathField.getText().trim());
+            }
+        });
+        knowledgeBasePanel.add(enableFileSystemAccessCheckBox);
+        
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
-        enableRagMcpCheckBox = new JCheckBox("启用 RAG MCP 工具调用", false);
-        enableRagMcpCheckBox.addActionListener(e -> {
-            boolean enabled = enableRagMcpCheckBox.isSelected();
-            // ragMcpUrlField.setEnabled(enabled); // RAG MCP 地址暂时隐藏
-            ragMcpDocumentsPathField.setEnabled(enabled);
-            apiClient.setEnableRagMcp(enabled);
-            if (enabled) {
-                // if (!ragMcpUrlField.getText().trim().isEmpty()) { // RAG MCP 地址暂时隐藏
-                //     apiClient.setRagMcpUrl(ragMcpUrlField.getText().trim());
-                // }
-                if (!ragMcpDocumentsPathField.getText().trim().isEmpty()) {
-                    apiClient.setRagMcpDocumentsPath(ragMcpDocumentsPathField.getText().trim());
-                }
-            }
-        });
-        apiConfigPanel.add(enableRagMcpCheckBox, gbc);
+        apiConfigPanel.add(knowledgeBasePanel, gbc);
         
         // RAG MCP 地址输入框暂时隐藏
         // // RAG MCP 命令
@@ -336,13 +352,13 @@ public class AIAnalyzerTab extends JPanel {
         gbc.gridy = 7;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        apiConfigPanel.add(new JLabel("RAG MCP 文档路径:"), gbc);
+        apiConfigPanel.add(new JLabel("知识库 文档路径:"), gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
         ragMcpDocumentsPathField = new JTextField("", 30);
         ragMcpDocumentsPathField.setEnabled(true); // 默认启用
-        ragMcpDocumentsPathField.setToolTipText("指定 RAG MCP 知识库文档目录路径");
+        ragMcpDocumentsPathField.setToolTipText("指定 知识库文档目录路径");
         ragMcpDocumentsPathField.addActionListener(e -> {
             if (enableRagMcpCheckBox.isSelected()) {
                 apiClient.setRagMcpDocumentsPath(ragMcpDocumentsPathField.getText().trim());
@@ -987,6 +1003,8 @@ public class AIAnalyzerTab extends JPanel {
                 false, // enableRag 暂时禁用
                 ""    // ragDocumentsPath 暂时禁用
             );
+            // 设置直接查找知识库选项
+            settings.setEnableFileSystemAccess(enableFileSystemAccessCheckBox.isSelected());
 
             ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream("ai_analyzer_settings.dat"));
             oos.writeObject(settings);
@@ -1072,6 +1090,11 @@ public class AIAnalyzerTab extends JPanel {
         chromeMcpUrlField.setText(settings.getChromeMcpUrl());
         chromeMcpUrlField.setEnabled(settings.isEnableChromeMcp());
         
+        // 直接查找知识库配置
+        enableFileSystemAccessCheckBox.setSelected(settings.isEnableFileSystemAccess());
+        // 如果 RAG MCP 或直接查找知识库任一启用，则启用文档路径输入框
+        ragMcpDocumentsPathField.setEnabled(settings.isEnableRagMcp() || settings.isEnableFileSystemAccess());
+        
         // 默认 RAG 配置暂时禁用
         // enableRagCheckBox.setSelected(settings.isEnableRag());
         // ragDocumentsPathField.setText(settings.getRagDocumentsPath());
@@ -1090,6 +1113,7 @@ public class AIAnalyzerTab extends JPanel {
         apiClient.setRagMcpDocumentsPath(settings.getRagMcpDocumentsPath());
         apiClient.setEnableChromeMcp(settings.isEnableChromeMcp());
         apiClient.setChromeMcpUrl(settings.getChromeMcpUrl());
+        apiClient.setEnableFileSystemAccess(settings.isEnableFileSystemAccess());
         // apiClient.setEnableRag(settings.isEnableRag()); // 默认 RAG 暂时禁用
         // apiClient.setRagDocumentsPath(settings.getRagDocumentsPath()); // 默认 RAG 暂时禁用
         // apiClient.ensureRagInitialized(); // 默认 RAG 暂时禁用

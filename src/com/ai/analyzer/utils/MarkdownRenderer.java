@@ -13,8 +13,8 @@ public class MarkdownRenderer {
     private static final Color HEADER3_COLOR = new Color(44, 62, 80);    // 深灰 - 三级标题
     private static final Color CODE_COLOR = new Color(192, 57, 43);      // 红色 - 行内代码
     private static final Color CODE_BG_COLOR = new Color(245, 245, 245); // 浅灰背景 - 代码背景
-    private static final Color CODE_BLOCK_BG = new Color(245, 245, 245); // 浅灰背景 - 代码块
-    private static final Color CODE_BLOCK_FG = new Color(44, 44, 44);    // 深灰/黑色字体 - 代码块
+    private static final Color CODE_BLOCK_BG = new Color(243, 244, 246);  // 浅灰背景 - 代码块（与工具块一致 #f3f4f6）
+    private static final Color CODE_BLOCK_FG = new Color(40, 40, 40);    // 深色文字 - 代码块
     private static final Color BOLD_COLOR = new Color(44, 62, 80);       // 深灰 - 粗体
     private static final Color ITALIC_COLOR = new Color(127, 140, 141);  // 灰色 - 斜体
     private static final Color LIST_COLOR = new Color(44, 62, 80);       // 深灰 - 列表
@@ -331,75 +331,35 @@ public class MarkdownRenderer {
     }
     
     /**
-     * 渲染代码块（使用深色背景，带内边距和换行处理）
+     * 渲染代码块（使用深色背景）
      */
     private static void renderFencedCodeBlock(StyledDocument doc, FencedCodeBlock codeBlock, Style code) throws BadLocationException {
         String literal = codeBlock.getLiteral();
         if (literal != null && !literal.isEmpty()) {
-            // 代码块样式
+            // 创建代码块样式（深色背景，浅色文字）
             Style codeBlockStyle = doc.addStyle("codeBlock", null);
             StyleConstants.setFontFamily(codeBlockStyle, "Consolas");
             StyleConstants.setFontSize(codeBlockStyle, 12);
             StyleConstants.setBackground(codeBlockStyle, CODE_BLOCK_BG);
             StyleConstants.setForeground(codeBlockStyle, CODE_BLOCK_FG);
             
-            // 语言标签样式（如果有）
-            String lang = codeBlock.getInfo();
-            Style langStyle = doc.addStyle("codeLang", null);
-            StyleConstants.setFontFamily(langStyle, "Consolas");
-            StyleConstants.setFontSize(langStyle, 10);
-            StyleConstants.setBackground(langStyle, CODE_BLOCK_BG);
-            StyleConstants.setForeground(langStyle, new Color(120, 120, 120)); // 中灰色
-            StyleConstants.setItalic(langStyle, true);
-            
-            // 顶部分隔 + 语言标签
+            // 添加代码块前的空行和标记
             doc.insertString(doc.getLength(), "\n", codeBlockStyle);
-            if (lang != null && !lang.isEmpty()) {
-                doc.insertString(doc.getLength(), "  " + lang + "\n", langStyle);
+            doc.insertString(doc.getLength(), literal, codeBlockStyle);
+            // 确保代码块后有换行
+            if (!literal.endsWith("\n")) {
+                doc.insertString(doc.getLength(), "\n", codeBlockStyle);
             }
-            
-            // 处理代码内容：添加左边距，处理长行换行
-            String[] lines = literal.split("\n", -1);
-            int maxLineWidth = 80; // 最大行宽
-            
-            for (int i = 0; i < lines.length; i++) {
-                String line = lines[i];
-                // 添加左边距（2空格）
-                doc.insertString(doc.getLength(), "  ", codeBlockStyle);
-                
-                // 如果行太长，进行软换行
-                if (line.length() > maxLineWidth) {
-                    int pos = 0;
-                    while (pos < line.length()) {
-                        int endPos = Math.min(pos + maxLineWidth, line.length());
-                        doc.insertString(doc.getLength(), line.substring(pos, endPos), codeBlockStyle);
-                        pos = endPos;
-                        if (pos < line.length()) {
-                            // 续行标记
-                            doc.insertString(doc.getLength(), "\n  ", codeBlockStyle);
-                        }
-                    }
-                } else {
-                    doc.insertString(doc.getLength(), line, codeBlockStyle);
-                }
-                
-                // 添加换行（除了最后一个空行）
-                if (i < lines.length - 1 || !line.isEmpty()) {
-                    doc.insertString(doc.getLength(), "\n", codeBlockStyle);
-                }
-            }
-            
-            // 底部分隔
-            doc.insertString(doc.getLength(), "\n", codeBlockStyle);
         }
     }
     
     /**
-     * 渲染缩进代码块（与围栏代码块样式一致）
+     * 渲染缩进代码块
      */
     private static void renderIndentedCodeBlock(StyledDocument doc, IndentedCodeBlock codeBlock, Style code) throws BadLocationException {
         String literal = codeBlock.getLiteral();
         if (literal != null && !literal.isEmpty()) {
+            // 使用与代码块相同的样式
             Style codeBlockStyle = doc.addStyle("indentedCodeBlock", null);
             StyleConstants.setFontFamily(codeBlockStyle, "Consolas");
             StyleConstants.setFontSize(codeBlockStyle, 12);
@@ -407,35 +367,10 @@ public class MarkdownRenderer {
             StyleConstants.setForeground(codeBlockStyle, CODE_BLOCK_FG);
             
             doc.insertString(doc.getLength(), "\n", codeBlockStyle);
-            
-            // 处理每行，添加左边距
-            String[] lines = literal.split("\n", -1);
-            int maxLineWidth = 80;
-            
-            for (int i = 0; i < lines.length; i++) {
-                String line = lines[i];
-                doc.insertString(doc.getLength(), "  ", codeBlockStyle);
-                
-                if (line.length() > maxLineWidth) {
-                    int pos = 0;
-                    while (pos < line.length()) {
-                        int endPos = Math.min(pos + maxLineWidth, line.length());
-                        doc.insertString(doc.getLength(), line.substring(pos, endPos), codeBlockStyle);
-                        pos = endPos;
-                        if (pos < line.length()) {
-                            doc.insertString(doc.getLength(), "\n  ", codeBlockStyle);
-                        }
-                    }
-                } else {
-                    doc.insertString(doc.getLength(), line, codeBlockStyle);
-                }
-                
-                if (i < lines.length - 1 || !line.isEmpty()) {
-                    doc.insertString(doc.getLength(), "\n", codeBlockStyle);
-                }
+            doc.insertString(doc.getLength(), literal, codeBlockStyle);
+            if (!literal.endsWith("\n")) {
+                doc.insertString(doc.getLength(), "\n", codeBlockStyle);
             }
-            
-            doc.insertString(doc.getLength(), "\n", codeBlockStyle);
         }
     }
     
