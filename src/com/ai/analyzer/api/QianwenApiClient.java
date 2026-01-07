@@ -71,6 +71,8 @@ public class QianwenApiClient {
     private boolean enableChromeMcp = false; // 是否启用 Chrome MCP 工具调用
     @Getter
     private String chromeMcpUrl = ""; // Chrome MCP 服务器地址
+    @Getter
+    private boolean enableFileSystemAccess = false; // 是否启用直接查找知识库（FileSystemAccess）
     // 默认 RAG 功能暂时禁用，改用 RAG MCP
     // @Getter
     // private boolean enableRag = false; // 是否启用 RAG
@@ -330,7 +332,7 @@ public class QianwenApiClient {
                                 "get_proxy_websocket_history", "get_proxy_websocket_history_regex", 
                                 "get_scanner_issues", "set_task_execution_engine_state",
                                 "get_active_editor_contents", "set_active_editor_contents",
-                                "create_repeater_tab", "send_to_intruder"
+                                "create_repeater_tab"//, "send_to_intruder"
                             ));
                             
                             // Burp MCP 工具映射配置
@@ -437,6 +439,26 @@ public class QianwenApiClient {
                 assistantBuilder.toolProvider(mcpToolProvider);
                 if (api != null) {
                     api.logging().logToOutput("[QianwenApiClient] 已启用 MCP 工具支持");
+                }
+            }
+            
+            // ========== 添加扩展工具 ==========
+            if (api != null) {
+                // 1. BurpExtTools - Intruder 批量 payload 支持（始终添加）
+                com.ai.analyzer.Tools.BurpExtTools burpExtTools = new com.ai.analyzer.Tools.BurpExtTools(api);
+                assistantBuilder.tools(burpExtTools);
+                api.logging().logToOutput("[QianwenApiClient] 已添加 BurpExtTools");
+                
+                // 2. FileSystemAccessTools - 让 AI 主动探索知识库（按需添加）
+                if (enableFileSystemAccess) {
+                    if (ragMcpDocumentsPath != null && !ragMcpDocumentsPath.isEmpty()) {
+                        com.ai.analyzer.Tools.FileSystemAccessTools fsaTools = new com.ai.analyzer.Tools.FileSystemAccessTools(api);
+                        fsaTools.setAllowedRootPath(ragMcpDocumentsPath);
+                        assistantBuilder.tools(fsaTools);
+                        api.logging().logToOutput("[QianwenApiClient] 已添加 FileSystemAccessTools (知识库: " + ragMcpDocumentsPath + ")");
+                    } else {
+                        api.logging().logToOutput("[QianwenApiClient] 警告: 直接查找知识库已启用但未配置路径");
+                    }
                 }
             }
             
@@ -769,6 +791,21 @@ public class QianwenApiClient {
                 if (api != null) {
                     api.logging().logToOutput("[QianwenApiClient] Chrome MCP 地址已更新: " + chromeMcpUrl);
                 }
+            }
+        }
+    }
+    
+    /**
+     * 设置是否启用直接查找知识库（FileSystemAccess）
+     * 启用后 AI 可以主动浏览、搜索、读取知识库文件
+     */
+    public void setEnableFileSystemAccess(boolean enableFileSystemAccess) {
+        if (this.enableFileSystemAccess != enableFileSystemAccess) {
+            this.enableFileSystemAccess = enableFileSystemAccess;
+            // 清空 Assistant，下次使用时重新创建
+            assistant = null;
+            if (api != null) {
+                api.logging().logToOutput("[QianwenApiClient] 直接查找知识库已" + (enableFileSystemAccess ? "启用" : "禁用"));
             }
         }
     }
@@ -1177,7 +1214,7 @@ public class QianwenApiClient {
                 prompt.append("| 工具 | 调用条件 | 说明 |\n");
                 prompt.append("|------|---------|------|\n");
                 prompt.append("| `create_repeater_tab` | 见下方决策规则 | 发送到 Repeater 供人类验证 |\n");
-                prompt.append("| `send_to_intruder` | 需要批量 fuzz | 发送到 Intruder 批量测试 |\n\n");
+                //prompt.append("| `send_to_intruder` | 需要批量 fuzz | 发送到 Intruder 批量测试 |\n\n");
                 
                 prompt.append("### `create_repeater_tab` 智能决策规则（重要）\n");
                 prompt.append("**原则：只有需要人类确认的请求才发送到 Repeater**\n\n");
@@ -1216,6 +1253,40 @@ public class QianwenApiClient {
                 prompt.append("## Chrome 浏览器工具\n");
                 prompt.append("用于需要浏览器交互的测试场景（如 XSS 验证、前端漏洞测试）。\n\n");
             }
+        }
+        
+        // ========== 扩展工具 ==========
+        prompt.append("## 扩展工具\n\n");
+        
+        // BurpExtTools - 始终可用
+        prompt.append("### Intruder 批量测试工具\n");
+        prompt.append("| 工具 | 使用场景 | 说明 |\n");
+        prompt.append("|------|---------|------|\n");
+        prompt.append("| `BurpExtTools_send_to_intruder` | 需要批量 fuzz 测试时 | AI 生成 payloads 并发送到 Intruder |\n\n");
+        prompt.append("**使用方法**：\n");
+        prompt.append("1. 在请求中用 `§` 标记插入点，例如：`id=§1§`\n");
+        prompt.append("2. 提供 payloads 数组，例如：`[\"' OR '1'='1\", \"admin'--\"]`\n");
+        prompt.append("3. AI 会自动将请求发送到 Intruder 并配置 payloads\n");
+        prompt.append("4. 用户只需在 Intruder 中选择 \"Extension-generated\" → \"AI Analyzer Payloads\" 即可开始攻击\n\n");
+        prompt.append("**适用场景**：SQL 注入批量测试、XSS fuzz、参数枚举、弱口令爆破等\n\n");
+        
+        // FileSystemAccessTools - 按需启用
+        if (enableFileSystemAccess && ragMcpDocumentsPath != null && !ragMcpDocumentsPath.isEmpty()) {
+            prompt.append("### 知识库探索工具\n");
+            prompt.append("**当前知识库路径**：`" + ragMcpDocumentsPath + "`\n\n");
+            prompt.append("| 工具 | 功能 | 使用场景 |\n");
+            prompt.append("|------|------|----------|\n");
+            prompt.append("| `FSA_list_directory` | 列出目录内容 | 探索知识库结构，了解有哪些文档 |\n");
+            prompt.append("| `FSA_read_file` | 读取文件内容 | 阅读 POC、漏洞详情、配置文件等 |\n");
+            prompt.append("| `FSA_find_files` | 按文件名搜索 | 快速定位文件，支持 `*.md`、`poc_*.py` 等通配符 |\n");
+            prompt.append("| `FSA_grep_search` | 在文件内容中搜索 | 查找特定漏洞、代码模式、关键词 |\n");
+            prompt.append("| `FSA_file_info` | 获取文件信息 | 查看文件大小、修改时间等 |\n\n");
+            prompt.append("**使用策略**：\n");
+            prompt.append("1. 先用 `FSA_list_directory` 或 `FSA_find_files` 了解知识库结构\n");
+            prompt.append("2. 用 `FSA_grep_search` 搜索相关漏洞或技术关键词\n");
+            prompt.append("3. 用 `FSA_read_file` 阅读具体的 POC 或文档\n");
+            prompt.append("4. 将知识库中的 payload 应用到实际测试中\n\n");
+            prompt.append("**最佳实践**：当你不确定某个漏洞的测试方法时，主动搜索知识库查找参考资料。\n\n");
         }
         
         // ========== 漏洞类型与测试策略映射 ==========
