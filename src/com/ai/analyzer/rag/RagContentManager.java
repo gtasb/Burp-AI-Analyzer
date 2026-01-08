@@ -144,7 +144,7 @@ public class RagContentManager {
 
     private void logError(String message) {
         if (api != null) {
-            api.logging().logToError("[QianwenApiClient] " + message);
+            api.logging().logToError("[AgentApiClient] " + message);
         }
     }
 

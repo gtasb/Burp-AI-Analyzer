@@ -1,9 +1,9 @@
 package com.ai.analyzer.ui;
 
 import burp.api.montoya.MontoyaApi;
+import com.ai.analyzer.api.AgentApiClient;
 import com.ai.analyzer.model.PluginSettings;
 import com.ai.analyzer.model.RequestData;
-import com.ai.analyzer.api.QianwenApiClient;
 import com.ai.analyzer.utils.MarkdownRenderer;
 // import com.example.ai.analyzer.Tools.ToolDefinitions;
 // import com.example.ai.analyzer.Tools.ToolExecutor;
@@ -27,7 +27,7 @@ import burp.api.montoya.ui.editor.HttpResponseEditor;
 
 public class AIAnalyzerTab extends JPanel {
     private final MontoyaApi api;
-    private final QianwenApiClient apiClient;
+    private final AgentApiClient apiClient;
     
     // UI组件
     private JTextField apiUrlField;
@@ -69,7 +69,7 @@ public class AIAnalyzerTab extends JPanel {
 
     public AIAnalyzerTab(MontoyaApi api) {
         this.api = api;
-        this.apiClient = new QianwenApiClient(
+        this.apiClient = new AgentApiClient(
             api,
             "https://dashscope.aliyuncs.com/api/v1",
             ""
@@ -1186,7 +1186,7 @@ public class AIAnalyzerTab extends JPanel {
      * 获取共享的 API Client 实例
      * 用于 Side Panel 等组件共享同一个实例，避免重复初始化
      */
-    public QianwenApiClient getApiClient() {
+    public AgentApiClient getApiClient() {
         return apiClient;
     }
 
@@ -1199,7 +1199,7 @@ public class AIAnalyzerTab extends JPanel {
      * 处理工具调用
      */
     /* Tools call 相关代码已注释
-    private void handleToolCall(QianwenApiClient.ToolCall toolCall) {
+    private void handleToolCall(AgentApiClient.ToolCall toolCall) {
         appendToResult("\n[系统] 正在调用工具: " + toolCall.getName() + "\n");
         api.logging().logToOutput("[AI分析器] 工具调用: " + toolCall.getName());
         api.logging().logToOutput("[AI分析器] 工具参数: " + toolCall.getArguments());

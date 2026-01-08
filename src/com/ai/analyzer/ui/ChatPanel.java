@@ -1,9 +1,8 @@
 package com.ai.analyzer.ui;
 
 import burp.api.montoya.MontoyaApi;
-import com.ai.analyzer.api.QianwenApiClient;
+import com.ai.analyzer.api.AgentApiClient;
 import com.ai.analyzer.utils.MarkdownRenderer;
-import com.ai.analyzer.utils.HttpFormatter;
 // import com.example.ai.analyzer.Tools.ToolDefinitions;
 // import com.example.ai.analyzer.Tools.ToolExecutor;
 
@@ -18,7 +17,7 @@ import burp.api.montoya.http.message.HttpRequestResponse;
 
 public class ChatPanel extends JPanel {
     private final MontoyaApi api;
-    private final QianwenApiClient apiClient;
+    private final AgentApiClient apiClient;
     private AIAnalyzerTab analyzerTab; // 保存analyzerTab引用，用于获取API配置
     private JTextPane chatArea;
     private JTextField inputField;
@@ -32,12 +31,12 @@ public class ChatPanel extends JPanel {
     private boolean isStreaming = false;
     private SwingWorker<Void, String> currentWorker;
     // private ToolExecutor toolExecutor;
-    // private List<QianwenApiClient.ToolCall> pendingToolCalls;
+    // private List<AgentApiClient.ToolCall> pendingToolCalls;
     private boolean debugEnabled = false;
     private JTextArea debugLogArea;
     private JScrollPane debugLogScrollPane;
 
-    public ChatPanel(MontoyaApi api, QianwenApiClient apiClient) {
+    public ChatPanel(MontoyaApi api, AgentApiClient apiClient) {
         this.api = api;
         this.apiClient = apiClient;
         this.chatHistory = new ArrayList<>();
@@ -543,7 +542,7 @@ public class ChatPanel extends JPanel {
      * 处理工具调用
      */
     /* Tools call 相关代码已注释
-    private void handleToolCall(QianwenApiClient.ToolCall toolCall) {
+    private void handleToolCall(AgentApiClient.ToolCall toolCall) {
         api.logging().logToOutput("[ChatPanel] ========== 收到工具调用 ==========");
         api.logging().logToOutput("[ChatPanel] 工具调用ID: " + toolCall.getId());
         api.logging().logToOutput("[ChatPanel] 工具名称: " + toolCall.getName());
@@ -599,7 +598,7 @@ public class ChatPanel extends JPanel {
         StringBuilder toolResults = new StringBuilder();
         toolResults.append("\n\n工具调用结果：\n");
         
-        for (QianwenApiClient.ToolCall toolCall : pendingToolCalls) {
+        for (AgentApiClient.ToolCall toolCall : pendingToolCalls) {
             String result = toolExecutor.executeTool(toolCall.getName(), toolCall.getArguments());
             toolResults.append("- ").append(toolCall.getName()).append(": ").append(result).append("\n");
         }
@@ -613,7 +612,7 @@ public class ChatPanel extends JPanel {
     }
     
     // 处理工具结果并继续对话
-    private void processToolResult(QianwenApiClient.ToolCall toolCall, String result) {
+    private void processToolResult(AgentApiClient.ToolCall toolCall, String result) {
         // 这里可以将工具结果发送回AI，让AI基于结果继续回答
         // 需要修改API调用逻辑以支持多轮对话
     }

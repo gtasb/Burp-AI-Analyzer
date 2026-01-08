@@ -26,7 +26,6 @@ import dev.langchain4j.mcp.client.transport.McpTransport;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.response.PartialThinking;
 import dev.langchain4j.data.message.ChatMessage;
-import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.model.chat.response.ChatResponse;
@@ -37,7 +36,7 @@ import dev.langchain4j.community.model.dashscope.QwenStreamingChatModel;
 import lombok.Getter;
 
 
-public class QianwenApiClient {
+public class AgentApiClient {
     @Getter
     private String apiKey;
     // 获取API配置的方法
@@ -98,7 +97,7 @@ public class QianwenApiClient {
     /**
      * 无参构造函数，自动从配置文件加载设置
      */
-    public QianwenApiClient() {
+    public AgentApiClient() {
         loadSettingsFromFile();
         initializeChatModel();
     }
@@ -106,7 +105,7 @@ public class QianwenApiClient {
     /**
      * 带参构造函数，如果参数为空则尝试从配置文件加载
      */
-    public QianwenApiClient(String apiUrl, String apiKey) {
+    public AgentApiClient(String apiUrl, String apiKey) {
         if ((apiUrl == null || apiUrl.trim().isEmpty()) || 
             (apiKey == null || apiKey.trim().isEmpty())) {
             // 参数为空，尝试从配置文件加载
@@ -121,7 +120,7 @@ public class QianwenApiClient {
     /**
      * 带 MontoyaApi 的构造函数
      */
-    public QianwenApiClient(MontoyaApi api, String apiUrl, String apiKey) {
+    public AgentApiClient(MontoyaApi api, String apiUrl, String apiKey) {
         this.api = api;
         if ((apiUrl == null || apiUrl.trim().isEmpty()) || 
             (apiKey == null || apiKey.trim().isEmpty())) {
@@ -140,7 +139,7 @@ public class QianwenApiClient {
     private void initializeChatModel() {
         if (apiKey == null || apiKey.trim().isEmpty()) {
             if (api != null) {
-                api.logging().logToOutput("[QianwenApiClient] 警告: API Key为空，无法初始化ChatModel");
+                api.logging().logToOutput("[AgentApiClient] 警告: API Key为空，无法初始化ChatModel");
             }
             return;
         }
@@ -177,16 +176,16 @@ public class QianwenApiClient {
                 baseUrl = "https://dashscope.aliyuncs.com/api/v1";
             }
             
-            String modelName = model != null && !model.trim().isEmpty() ? model : "qwen3-max";
+            String modelName = model != null && !model.trim().isEmpty() ? model : "qwen-max";
             
             // 只在第一次初始化时输出详细信息
             if (api != null && isFirstInitialization) {
-                api.logging().logToOutput("[QianwenApiClient] 初始化LangChain4j ChatModel");
-                api.logging().logToOutput("[QianwenApiClient] 原始API URL: " + apiUrl);
-                //api.logging().logToOutput("[QianwenApiClient] 处理后的BaseURL: " + baseUrl);
-                api.logging().logToOutput("[QianwenApiClient] Model: " + modelName);
-                api.logging().logToOutput("[QianwenApiClient] EnableThinking: " + enableThinking);
-                api.logging().logToOutput("[QianwenApiClient] EnableSearch: " + enableSearch);
+                api.logging().logToOutput("[AgentApiClient] 初始化LangChain4j ChatModel");
+                api.logging().logToOutput("[AgentApiClient] 原始API URL: " + apiUrl);
+                //api.logging().logToOutput("[AgentApiClient] 处理后的BaseURL: " + baseUrl);
+                api.logging().logToOutput("[AgentApiClient] Model: " + modelName);
+                api.logging().logToOutput("[AgentApiClient] EnableThinking: " + enableThinking);
+                api.logging().logToOutput("[AgentApiClient] EnableSearch: " + enableSearch);
             }
 
             // 使用类成员变量的值，确保每次初始化都使用最新的用户设置
@@ -227,12 +226,12 @@ public class QianwenApiClient {
                     
             // 只在第一次初始化时输出成功信息
             if (api != null && isFirstInitialization) {
-                api.logging().logToOutput("[QianwenApiClient] LangChain4j ChatModel初始化成功");
+                api.logging().logToOutput("[AgentApiClient] LangChain4j ChatModel初始化成功");
                 isFirstInitialization = false; // 标记已完成第一次初始化
             }
         } catch (Exception e) {
             if (api != null) {
-                api.logging().logToError("[QianwenApiClient] 初始化ChatModel失败: " + e.getMessage());
+                api.logging().logToError("[AgentApiClient] 初始化ChatModel失败: " + e.getMessage());
                 //e.printStackTrace();
             }
         }
@@ -269,8 +268,8 @@ public class QianwenApiClient {
         // Assistant 会在下次调用 ensureAssistantInitialized() 时自动创建
         // 新的 Assistant 会使用同一个 chatMemory 实例，从而保留上下文记忆
         if (api != null) {
-            api.logging().logToOutput("[QianwenApiClient] ChatModel 已更新，使用新的配置 (EnableThinking: " + enableThinking + ", EnableSearch: " + enableSearch + ")");
-            api.logging().logToOutput("[QianwenApiClient] Assistant 将在下次使用时使用新的 ChatModel（保留上下文记忆）");
+            api.logging().logToOutput("[AgentApiClient] ChatModel 已更新，使用新的配置 (EnableThinking: " + enableThinking + ", EnableSearch: " + enableSearch + ")");
+            api.logging().logToOutput("[AgentApiClient] Assistant 将在下次使用时使用新的 ChatModel（保留上下文记忆）");
         }
     }
     
@@ -292,7 +291,7 @@ public class QianwenApiClient {
             initializeChatModel();
             needsReinitialization = false;
             if (api != null) {
-                api.logging().logToOutput("[QianwenApiClient] ChatModel 已重新初始化，使用新的配置 (EnableThinking: " + enableThinking + ", EnableSearch: " + enableSearch + ")");
+                api.logging().logToOutput("[AgentApiClient] ChatModel 已重新初始化，使用新的配置 (EnableThinking: " + enableThinking + ", EnableSearch: " + enableSearch + ")");
             }
         }
     }
@@ -339,11 +338,11 @@ public class QianwenApiClient {
                             mappingConfig = McpToolMappingConfig.createBurpMapping();
                             
                             if (api != null) {
-                                api.logging().logToOutput("[QianwenApiClient] Burp MCP 客户端已添加，地址: " + burpMcpUrlValue);
+                                api.logging().logToOutput("[AgentApiClient] Burp MCP 客户端已添加，地址: " + burpMcpUrlValue);
                             }
                         } catch (Exception e) {
                             if (api != null) {
-                                api.logging().logToOutput("[QianwenApiClient] Burp MCP 客户端初始化失败: " + e.getMessage());
+                                api.logging().logToOutput("[AgentApiClient] Burp MCP 客户端初始化失败: " + e.getMessage());
                             }
                         }
                     }
@@ -358,11 +357,11 @@ public class QianwenApiClient {
                             allFilterTools.addAll(List.of("index_document","query_document"));
                             
                             if (api != null) {
-                                api.logging().logToOutput("[QianwenApiClient] RAG MCP 客户端已添加，知识库路径: " + ragMcpDocumentsPath);
+                                api.logging().logToOutput("[AgentApiClient] RAG MCP 客户端已添加，知识库路径: " + ragMcpDocumentsPath);
                             }
                         } catch (Exception e) {
                             if (api != null) {
-                                api.logging().logToOutput("[QianwenApiClient] RAG MCP 客户端初始化失败: " + e.getMessage());
+                                api.logging().logToOutput("[AgentApiClient] RAG MCP 客户端初始化失败: " + e.getMessage());
                             }
                         }
                     }
@@ -378,11 +377,11 @@ public class QianwenApiClient {
                             // 如需过滤，可在此添加: allFilterTools.addAll(List.of(...));
                             
                             if (api != null) {
-                                api.logging().logToOutput("[QianwenApiClient] Chrome MCP 客户端已添加，地址: " + chromeMcpUrl);
+                                api.logging().logToOutput("[AgentApiClient] Chrome MCP 客户端已添加，地址: " + chromeMcpUrl);
                             }
                         } catch (Exception e) {
                             if (api != null) {
-                                api.logging().logToOutput("[QianwenApiClient] Chrome MCP 客户端初始化失败: " + e.getMessage());
+                                api.logging().logToOutput("[AgentApiClient] Chrome MCP 客户端初始化失败: " + e.getMessage());
                             }
                         }
                     }
@@ -400,13 +399,13 @@ public class QianwenApiClient {
                         );
 
                     if (api != null) {
-                            api.logging().logToOutput("[QianwenApiClient] MCP 工具提供者初始化成功，已添加 " + allMcpClients.size() + " 个 MCP 客户端");
+                            api.logging().logToOutput("[AgentApiClient] MCP 工具提供者初始化成功，已添加 " + allMcpClients.size() + " 个 MCP 客户端");
                         }
                     }
                 } catch (Exception e) {
                     // MCP 服务器不可用，不影响主要功能
                     if (api != null) {
-                        api.logging().logToOutput("[QianwenApiClient] MCP 工具提供者初始化失败: " + e.getMessage());
+                        api.logging().logToOutput("[AgentApiClient] MCP 工具提供者初始化失败: " + e.getMessage());
                     }
                     mcpToolProvider = null;
                 }
@@ -422,7 +421,7 @@ public class QianwenApiClient {
                         .maxMessages(20) // 增加到20条，保留更多上下文
                         .build();
                 if (api != null) {
-                    api.logging().logToOutput("[QianwenApiClient] ChatMemory 已创建（最大20条消息）");
+                    api.logging().logToOutput("[AgentApiClient] ChatMemory 已创建（最大20条消息）");
                 }
             }
             
@@ -438,7 +437,7 @@ public class QianwenApiClient {
             if (mcpToolProvider != null) {
                 assistantBuilder.toolProvider(mcpToolProvider);
                 if (api != null) {
-                    api.logging().logToOutput("[QianwenApiClient] 已启用 MCP 工具支持");
+                    api.logging().logToOutput("[AgentApiClient] 已启用 MCP 工具支持");
                 }
             }
             
@@ -447,7 +446,7 @@ public class QianwenApiClient {
                 // 1. BurpExtTools - Intruder 批量 payload 支持（始终添加）
                 com.ai.analyzer.Tools.BurpExtTools burpExtTools = new com.ai.analyzer.Tools.BurpExtTools(api);
                 assistantBuilder.tools(burpExtTools);
-                api.logging().logToOutput("[QianwenApiClient] 已添加 BurpExtTools");
+                api.logging().logToOutput("[AgentApiClient] 已添加 BurpExtTools");
                 
                 // 2. FileSystemAccessTools - 让 AI 主动探索知识库（按需添加）
                 if (enableFileSystemAccess) {
@@ -455,9 +454,9 @@ public class QianwenApiClient {
                         com.ai.analyzer.Tools.FileSystemAccessTools fsaTools = new com.ai.analyzer.Tools.FileSystemAccessTools(api);
                         fsaTools.setAllowedRootPath(ragMcpDocumentsPath);
                         assistantBuilder.tools(fsaTools);
-                        api.logging().logToOutput("[QianwenApiClient] 已添加 FileSystemAccessTools (知识库: " + ragMcpDocumentsPath + ")");
+                        api.logging().logToOutput("[AgentApiClient] 已添加 FileSystemAccessTools (知识库: " + ragMcpDocumentsPath + ")");
                     } else {
-                        api.logging().logToOutput("[QianwenApiClient] 警告: 直接查找知识库已启用但未配置路径");
+                        api.logging().logToOutput("[AgentApiClient] 警告: 直接查找知识库已启用但未配置路径");
                     }
                 }
             }
@@ -469,16 +468,16 @@ public class QianwenApiClient {
             //     if (ragContentManager != null && ragContentManager.isReady()) {
             //         assistantBuilder.contentRetriever(ragContentManager.getContentRetriever());
             //         if (api != null) {
-            //             api.logging().logToOutput("[QianwenApiClient] 已启用 RAG 内容检索");
+            //             api.logging().logToOutput("[AgentApiClient] 已启用 RAG 内容检索");
             //         }
             //     } else if (api != null) {
-            //         api.logging().logToOutput("[QianwenApiClient] 警告: RAG 已启用但内容检索器尚未就绪");
+            //         api.logging().logToOutput("[AgentApiClient] 警告: RAG 已启用但内容检索器尚未就绪");
             //     }
             // }
             
             assistant = assistantBuilder.build();
             if (api != null) {
-                api.logging().logToOutput("[QianwenApiClient] Assistant 实例已创建（共享实例，保持上下文）");
+                api.logging().logToOutput("[AgentApiClient] Assistant 实例已创建（共享实例，保持上下文）");
             }
         }
     }
@@ -494,11 +493,11 @@ public class QianwenApiClient {
             try {
                 streamingHandle.cancel();
                 if (api != null) {
-                    api.logging().logToOutput("[QianwenApiClient] 流式输出已取消（通过 StreamingHandle）");
+                    api.logging().logToOutput("[AgentApiClient] 流式输出已取消（通过 StreamingHandle）");
                 }
             } catch (Exception e) {
                 if (api != null) {
-                    api.logging().logToError("[QianwenApiClient] 取消流式输出失败: " + e.getMessage());
+                    api.logging().logToError("[AgentApiClient] 取消流式输出失败: " + e.getMessage());
                 }
             } finally {
                 streamingHandle = null;
@@ -508,11 +507,11 @@ public class QianwenApiClient {
             // 兼容旧逻辑：如果 StreamingHandle 不可用，清空 TokenStream 引用
             currentTokenStream = null;
             if (api != null) {
-                api.logging().logToOutput("[QianwenApiClient] TokenStream 引用已清空");
+                api.logging().logToOutput("[AgentApiClient] TokenStream 引用已清空");
             }
         } else {
             if (api != null) {
-                api.logging().logToOutput("[QianwenApiClient] 没有活动的流式输出可以取消");
+                api.logging().logToOutput("[AgentApiClient] 没有活动的流式输出可以取消");
             }
         }
     }
@@ -534,7 +533,7 @@ public class QianwenApiClient {
             chatMemory = null; // 创建新的 ChatMemory 以清空记忆
         }
         if (api != null) {
-            api.logging().logToOutput("[QianwenApiClient] 聊天上下文已清空");
+            api.logging().logToOutput("[AgentApiClient] 聊天上下文已清空");
         }
     }
     
@@ -682,7 +681,7 @@ public class QianwenApiClient {
             // 清空 Assistant，下次使用时重新创建（会根据新的 enableMcp 状态决定是否启用 MCP）
             assistant = null;
             if (api != null) {
-                api.logging().logToOutput("[QianwenApiClient] MCP 工具调用已" + (enableMcp ? "启用" : "禁用"));
+                api.logging().logToOutput("[AgentApiClient] MCP 工具调用已" + (enableMcp ? "启用" : "禁用"));
             }
         }
     }
@@ -702,7 +701,7 @@ public class QianwenApiClient {
                 mcpToolProvider = null;
                 assistant = null; // 清空 Assistant，下次使用时重新创建
                 if (api != null) {
-                    api.logging().logToOutput("[QianwenApiClient] Burp MCP 地址已更新: " + mcpUrl);
+                    api.logging().logToOutput("[AgentApiClient] Burp MCP 地址已更新: " + mcpUrl);
                 }
             }
         }
@@ -718,7 +717,7 @@ public class QianwenApiClient {
             // 清空 Assistant，下次使用时重新创建
             assistant = null;
             if (api != null) {
-                api.logging().logToOutput("[QianwenApiClient] RAG MCP 工具调用已" + (enableRagMcp ? "启用" : "禁用"));
+                api.logging().logToOutput("[AgentApiClient] RAG MCP 工具调用已" + (enableRagMcp ? "启用" : "禁用"));
             }
         }
     }
@@ -736,7 +735,7 @@ public class QianwenApiClient {
             if (enableRagMcp) {
                 assistant = null; // 清空 Assistant，下次使用时重新创建
             if (api != null) {
-                    api.logging().logToOutput("[QianwenApiClient] RAG MCP 地址已更新: " + ragMcpUrl);
+                    api.logging().logToOutput("[AgentApiClient] RAG MCP 地址已更新: " + ragMcpUrl);
                 }
             }
         }
@@ -755,7 +754,7 @@ public class QianwenApiClient {
             if (enableRagMcp) {
                 assistant = null; // 清空 Assistant，下次使用时重新创建
                 if (api != null) {
-                    api.logging().logToOutput("[QianwenApiClient] RAG MCP 文档路径已更新: " + ragMcpDocumentsPath);
+                    api.logging().logToOutput("[AgentApiClient] RAG MCP 文档路径已更新: " + ragMcpDocumentsPath);
                 }
             }
         }
@@ -771,7 +770,7 @@ public class QianwenApiClient {
             // 清空 Assistant，下次使用时重新创建
             assistant = null;
             if (api != null) {
-                api.logging().logToOutput("[QianwenApiClient] Chrome MCP 工具调用已" + (enableChromeMcp ? "启用" : "禁用"));
+                api.logging().logToOutput("[AgentApiClient] Chrome MCP 工具调用已" + (enableChromeMcp ? "启用" : "禁用"));
             }
         }
     }
@@ -789,7 +788,7 @@ public class QianwenApiClient {
             if (enableChromeMcp) {
                 assistant = null; // 清空 Assistant，下次使用时重新创建
                 if (api != null) {
-                    api.logging().logToOutput("[QianwenApiClient] Chrome MCP 地址已更新: " + chromeMcpUrl);
+                    api.logging().logToOutput("[AgentApiClient] Chrome MCP 地址已更新: " + chromeMcpUrl);
                 }
             }
         }
@@ -805,7 +804,7 @@ public class QianwenApiClient {
             // 清空 Assistant，下次使用时重新创建
             assistant = null;
             if (api != null) {
-                api.logging().logToOutput("[QianwenApiClient] 直接查找知识库已" + (enableFileSystemAccess ? "启用" : "禁用"));
+                api.logging().logToOutput("[AgentApiClient] 直接查找知识库已" + (enableFileSystemAccess ? "启用" : "禁用"));
             }
         }
     }
@@ -827,7 +826,7 @@ public class QianwenApiClient {
     //         // 清空 Assistant，下次使用时重新创建
     //         assistant = null;
     //         if (api != null) {
-    //             api.logging().logToOutput("[QianwenApiClient] RAG 已" + (enableRag ? "启用" : "禁用"));
+    //             api.logging().logToOutput("[AgentApiClient] RAG 已" + (enableRag ? "启用" : "禁用"));
     //         }
     //     }
     // }
@@ -846,7 +845,7 @@ public class QianwenApiClient {
     //             loadRagContent();
     //             assistant = null;
     //             if (api != null) {
-    //                 api.logging().logToOutput("[QianwenApiClient] RAG 文档路径已更新: " + ragDocumentsPath);
+    //                 api.logging().logToOutput("[AgentApiClient] RAG 文档路径已更新: " + ragDocumentsPath);
     //             }
     //         } else {
     //             clearRagContentManager();
@@ -887,7 +886,7 @@ public class QianwenApiClient {
             sourceInfo = RequestSourceDetector.detectSource(api, requestResponse);
         }
 
-        api.logging().logToOutput("[QianwenApiClient] 请求来源: " + sourceInfo.format());
+        api.logging().logToOutput("[AgentApiClient] 请求来源: " + sourceInfo.format());
         
         // 格式化 HTTP 内容
         String httpRequest = requestResponse != null 
@@ -1003,7 +1002,7 @@ public class QianwenApiClient {
                             fullErrorMsg = errorMsg + " | Cause: " + error.getCause().getMessage();
                             // 打印堆栈跟踪
                             if (api != null) {
-                                api.logging().logToError("[QianwenApiClient] TokenStream错误堆栈:");
+                                api.logging().logToError("[AgentApiClient] TokenStream错误堆栈:");
                                 error.printStackTrace();
                             }
                         }
@@ -1058,7 +1057,7 @@ public class QianwenApiClient {
                     logError("异常消息: " + cause.getMessage());
                     // 打印堆栈跟踪
                     if (api != null) {
-                        api.logging().logToError("[QianwenApiClient] ExecutionException堆栈:");
+                        api.logging().logToError("[AgentApiClient] ExecutionException堆栈:");
                         cause.printStackTrace();
                     }
                 }
@@ -1097,7 +1096,7 @@ public class QianwenApiClient {
                 logError("请求异常: " + e.getClass().getSimpleName() + " - " + e.getMessage());
                 // 打印堆栈跟踪
                 if (api != null) {
-                    api.logging().logToError("[QianwenApiClient] 异常堆栈:");
+                    api.logging().logToError("[AgentApiClient] 异常堆栈:");
                     e.printStackTrace();
                 }
             }
@@ -1336,19 +1335,19 @@ public class QianwenApiClient {
     
     private void logInfo(String message) {
         if (api != null) {
-            api.logging().logToOutput("[QianwenApiClient] " + message);
+            api.logging().logToOutput("[AgentApiClient] " + message);
         }
     }
 
     private void logError(String message) {
         if (api != null) {
-            api.logging().logToError("[QianwenApiClient] " + message);
+            api.logging().logToError("[AgentApiClient] " + message);
         }
     }
 
     private void logDebug(String message) {
         if (api != null) {
-            api.logging().logToOutput("[QianwenApiClient] " + message);
+            api.logging().logToOutput("[AgentApiClient] " + message);
         }
     }
     

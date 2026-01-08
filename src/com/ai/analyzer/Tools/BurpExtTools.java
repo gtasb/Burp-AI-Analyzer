@@ -32,7 +32,7 @@ public class BurpExtTools {
     private static Registration providerRegistration = null;
     
     // 当前活跃的 payloads 列表（线程安全）
-    private static volatile List<String> currentPayloads = Collections.synchronizedList(new ArrayList<>());
+    private static final List<String> currentPayloads = Collections.synchronizedList(new ArrayList<>());
     
     public BurpExtTools(MontoyaApi api) {
         this.api = api;

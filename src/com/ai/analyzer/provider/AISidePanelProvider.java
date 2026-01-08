@@ -1,7 +1,7 @@
 package com.ai.analyzer.provider;
 
 import burp.api.montoya.MontoyaApi;
-import com.ai.analyzer.api.QianwenApiClient;
+import com.ai.analyzer.api.AgentApiClient;
 import com.ai.analyzer.ui.ChatPanel;
 import com.ai.analyzer.ui.AISidePanelRequestEditor;
 import com.ai.analyzer.ui.AISidePanelResponseEditor;
@@ -35,7 +35,7 @@ public class AISidePanelProvider implements HttpRequestEditorProvider, HttpRespo
     /**
      * 获取共享的 API Client（优先从 analyzerTab 获取，避免重复初始化）
      */
-    private QianwenApiClient getApiClient() {
+    private AgentApiClient getApiClient() {
         // 优先使用 analyzerTab 中的共享 apiClient，避免重复初始化
         if (analyzerTab != null) {
             return analyzerTab.getApiClient();
@@ -67,7 +67,7 @@ public class AISidePanelProvider implements HttpRequestEditorProvider, HttpRespo
             // 忽略加载错误，使用默认值
         }
         
-        QianwenApiClient apiClient = new QianwenApiClient(api, apiUrl, apiKey);
+        AgentApiClient apiClient = new AgentApiClient(api, apiUrl, apiKey);
         apiClient.setModel(model);
         return apiClient;
     }
@@ -75,7 +75,7 @@ public class AISidePanelProvider implements HttpRequestEditorProvider, HttpRespo
     @Override
     public ExtensionProvidedHttpRequestEditor provideHttpRequestEditor(EditorCreationContext creationContext) {
         // 使用共享的 apiClient，避免重复初始化
-        QianwenApiClient sharedApiClient = getApiClient();
+        AgentApiClient sharedApiClient = getApiClient();
         ChatPanel newChatPanel = new ChatPanel(api, sharedApiClient);
         // 设置analyzerTab引用，使ChatPanel能够动态更新API配置
         if (analyzerTab != null) {
@@ -88,7 +88,7 @@ public class AISidePanelProvider implements HttpRequestEditorProvider, HttpRespo
     @Override
     public ExtensionProvidedHttpResponseEditor provideHttpResponseEditor(EditorCreationContext creationContext) {
         // 使用共享的 apiClient，避免重复初始化
-        QianwenApiClient sharedApiClient = getApiClient();
+        AgentApiClient sharedApiClient = getApiClient();
         ChatPanel newChatPanel = new ChatPanel(api, sharedApiClient);
         // 设置analyzerTab引用，使ChatPanel能够动态更新API配置
         if (analyzerTab != null) {
