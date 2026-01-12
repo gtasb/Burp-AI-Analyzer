@@ -1,12 +1,17 @@
 package com.ai.analyzer.model;
 
 import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.List;
+
 public class PluginSettings implements Serializable {
     
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 4L; // 版本号更新以支持 customParameters
     private String apiUrl;
     private String apiKey;
     private String model;
+    private String apiProvider = "DashScope"; // API 提供者：DashScope 或 OpenAI兼容
+    private String customParameters = ""; // 用户自定义参数（JSON 格式）
     
     private String userPrompt;
     private boolean enableThinking = true; // 默认启用思考过程
@@ -21,6 +26,11 @@ public class PluginSettings implements Serializable {
     private String chromeMcpUrl = " "; // Chrome MCP 服务器地址
     private boolean enableRag = false; // 默认禁用 RAG
     private String ragDocumentsPath = ""; // RAG 文档路径
+    
+    // Skills 配置
+    private boolean enableSkills = false; // 默认禁用 Skills
+    private String skillsDirectoryPath = ""; // Skills 目录路径
+    private List<String> enabledSkillNames = new ArrayList<>(); // 已启用的 skill 名称列表
     
     public PluginSettings() {
         // 默认设置
@@ -156,6 +166,22 @@ public class PluginSettings implements Serializable {
         this.model = model;
     }
     
+    public String getApiProvider() {
+        return apiProvider != null ? apiProvider : "DashScope";
+    }
+    
+    public void setApiProvider(String apiProvider) {
+        this.apiProvider = apiProvider != null ? apiProvider : "DashScope";
+    }
+    
+    public String getCustomParameters() {
+        return customParameters != null ? customParameters : "";
+    }
+    
+    public void setCustomParameters(String customParameters) {
+        this.customParameters = customParameters != null ? customParameters : "";
+    }
+    
     public String getUserPrompt() {
         return userPrompt;
     }
@@ -258,5 +284,30 @@ public class PluginSettings implements Serializable {
     
     public void setEnableFileSystemAccess(boolean enableFileSystemAccess) {
         this.enableFileSystemAccess = enableFileSystemAccess;
+    }
+    
+    // Skills 配置
+    public boolean isEnableSkills() {
+        return enableSkills;
+    }
+    
+    public void setEnableSkills(boolean enableSkills) {
+        this.enableSkills = enableSkills;
+    }
+    
+    public String getSkillsDirectoryPath() {
+        return skillsDirectoryPath;
+    }
+    
+    public void setSkillsDirectoryPath(String skillsDirectoryPath) {
+        this.skillsDirectoryPath = skillsDirectoryPath;
+    }
+    
+    public List<String> getEnabledSkillNames() {
+        return enabledSkillNames != null ? enabledSkillNames : new ArrayList<>();
+    }
+    
+    public void setEnabledSkillNames(List<String> enabledSkillNames) {
+        this.enabledSkillNames = enabledSkillNames != null ? enabledSkillNames : new ArrayList<>();
     }
 }

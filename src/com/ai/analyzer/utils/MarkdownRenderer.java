@@ -312,7 +312,9 @@ public class MarkdownRenderer {
     
     /**
      * 渲染列表项内容
-     * 特殊处理：如果列表项只包含一个段落，直接渲染其内联内容（不添加段落的额外换行）
+     * 特殊处理：
+     * 1. 如果列表项只包含一个段落，直接渲染其内联内容
+     * 2. 如果列表项包含段落+代码块，确保它们之间有正确的换行
      */
     private static void renderListItemContent(StyledDocument doc, ListItem listItem, 
             Style regular, Style bold, Style italic, Style code, Style link,
@@ -325,8 +327,26 @@ public class MarkdownRenderer {
             renderInlineContent(doc, child, regular, bold, italic, code, link);
             doc.insertString(doc.getLength(), "\n", regular);
         } else {
-            // 否则使用标准的节点渲染
-            renderNode(doc, listItem, regular, bold, italic, code, link, header1, header2, header3, list);
+            // 处理包含多个子节点的列表项（如段落+代码块）
+            while (child != null) {
+                if (child instanceof Paragraph) {
+                    renderInlineContent(doc, child, regular, bold, italic, code, link);
+                    // 段落后添加换行
+                    doc.insertString(doc.getLength(), "\n", regular);
+                } else if (child instanceof FencedCodeBlock) {
+                    // 代码块前确保有换行分隔
+                    renderFencedCodeBlock(doc, (FencedCodeBlock) child, code);
+                } else if (child instanceof IndentedCodeBlock) {
+                    renderIndentedCodeBlock(doc, (IndentedCodeBlock) child, code);
+                } else if (child instanceof BulletList) {
+                    // 嵌套的无序列表
+                    renderBulletList(doc, (BulletList) child, regular, bold, italic, code, link, header1, header2, header3, list);
+                } else if (child instanceof OrderedList) {
+                    // 嵌套的有序列表
+                    renderOrderedList(doc, (OrderedList) child, regular, bold, italic, code, link, header1, header2, header3, list);
+                }
+                child = child.getNext();
+            }
         }
     }
     

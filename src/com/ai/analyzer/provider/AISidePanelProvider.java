@@ -17,36 +17,30 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.ObjectInputStream;
 
+/**
+ * Side Panel 提供者（回退版本）
+ */
 public class AISidePanelProvider implements HttpRequestEditorProvider, HttpResponseEditorProvider {
     private final MontoyaApi api;
-    private AIAnalyzerTab analyzerTab; // 保存analyzerTab引用
+    private AIAnalyzerTab analyzerTab;
 
     public AISidePanelProvider(MontoyaApi api) {
         this.api = api;
     }
     
-    /**
-     * 设置analyzerTab引用，用于获取API配置
-     */
     public void setAnalyzerTab(AIAnalyzerTab analyzerTab) {
         this.analyzerTab = analyzerTab;
     }
     
-    /**
-     * 获取共享的 API Client（优先从 analyzerTab 获取，避免重复初始化）
-     */
     private AgentApiClient getApiClient() {
-        // 优先使用 analyzerTab 中的共享 apiClient，避免重复初始化
         if (analyzerTab != null) {
             return analyzerTab.getApiClient();
         }
         
-        // 如果 analyzerTab 不可用，才创建新实例（这种情况应该很少发生）
         String apiUrl = "https://dashscope.aliyuncs.com/api/v1";
         String apiKey = "";
         String model = "qwen-max";
         
-        // 尝试从保存的设置文件加载
         try {
             File settingsFile = new File(System.getProperty("user.home"), ".burp_ai_analyzer_settings");
             if (settingsFile.exists()) {
@@ -64,7 +58,7 @@ public class AISidePanelProvider implements HttpRequestEditorProvider, HttpRespo
                 }
             }
         } catch (Exception e) {
-            // 忽略加载错误，使用默认值
+            // 忽略
         }
         
         AgentApiClient apiClient = new AgentApiClient(api, apiUrl, apiKey);
@@ -74,27 +68,25 @@ public class AISidePanelProvider implements HttpRequestEditorProvider, HttpRespo
 
     @Override
     public ExtensionProvidedHttpRequestEditor provideHttpRequestEditor(EditorCreationContext creationContext) {
-        // 使用共享的 apiClient，避免重复初始化
         AgentApiClient sharedApiClient = getApiClient();
-        ChatPanel newChatPanel = new ChatPanel(api, sharedApiClient);
-        // 设置analyzerTab引用，使ChatPanel能够动态更新API配置
+        ChatPanel chatPanel = new ChatPanel(api, sharedApiClient);
+        
         if (analyzerTab != null) {
-            newChatPanel.setAnalyzerTab(analyzerTab);
+            chatPanel.setAnalyzerTab(analyzerTab);
         }
-        AISidePanelRequestEditor editor = new AISidePanelRequestEditor(api, newChatPanel);
-        return editor;
+        
+        return new AISidePanelRequestEditor(api, chatPanel);
     }
 
     @Override
     public ExtensionProvidedHttpResponseEditor provideHttpResponseEditor(EditorCreationContext creationContext) {
-        // 使用共享的 apiClient，避免重复初始化
         AgentApiClient sharedApiClient = getApiClient();
-        ChatPanel newChatPanel = new ChatPanel(api, sharedApiClient);
-        // 设置analyzerTab引用，使ChatPanel能够动态更新API配置
+        ChatPanel chatPanel = new ChatPanel(api, sharedApiClient);
+        
         if (analyzerTab != null) {
-            newChatPanel.setAnalyzerTab(analyzerTab);
+            chatPanel.setAnalyzerTab(analyzerTab);
         }
-        AISidePanelResponseEditor editor = new AISidePanelResponseEditor(api, newChatPanel);
-        return editor;
+        
+        return new AISidePanelResponseEditor(api, chatPanel);
     }
 }

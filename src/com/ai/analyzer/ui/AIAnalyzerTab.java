@@ -4,6 +4,8 @@ import burp.api.montoya.MontoyaApi;
 import com.ai.analyzer.api.AgentApiClient;
 import com.ai.analyzer.model.PluginSettings;
 import com.ai.analyzer.model.RequestData;
+import com.ai.analyzer.skills.Skill;
+import com.ai.analyzer.skills.SkillManager;
 import com.ai.analyzer.utils.MarkdownRenderer;
 // import com.example.ai.analyzer.Tools.ToolDefinitions;
 // import com.example.ai.analyzer.Tools.ToolExecutor;
@@ -11,10 +13,13 @@ import com.ai.analyzer.utils.MarkdownRenderer;
 import javax.swing.*;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
+import javax.swing.event.ListSelectionEvent;
 import javax.swing.table.DefaultTableModel;
+import javax.swing.table.TableCellRenderer;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.StyledDocument;
 import java.awt.*;
+import java.io.File;
 import java.io.FileOutputStream;
 import java.io.ObjectOutputStream;
 import java.util.ArrayList;
@@ -30,9 +35,11 @@ public class AIAnalyzerTab extends JPanel {
     private final AgentApiClient apiClient;
     
     // UI组件
+    private JComboBox<String> apiProviderComboBox; // API 提供者下拉框
     private JTextField apiUrlField;
     private JTextField apiKeyField;
     private JTextField modelField;
+    private JTextField customParametersField; // 自定义参数输入框
     private JCheckBox enableThinkingCheckBox;
     private JCheckBox enableSearchCheckBox;
     private JCheckBox enableMcpCheckBox;
@@ -46,6 +53,17 @@ public class AIAnalyzerTab extends JPanel {
     // 默认 RAG 功能暂时禁用，改用 RAG MCP
     // private JCheckBox enableRagCheckBox;
     // private JTextField ragDocumentsPathField;
+    
+    // Skills 标签页组件
+    private JCheckBox enableSkillsCheckBox;
+    private JTextField skillsDirectoryField;
+    private JTable skillsTable;
+    private DefaultTableModel skillsTableModel;
+    private JTextPane skillPreviewPane;
+    private JButton browseSkillsDirButton;
+    private JButton refreshSkillsButton;
+    private JButton createExampleSkillButton;
+    
     private JTable requestListTable;
     private DefaultTableModel requestTableModel;
     private HttpRequestEditor requestEditor;
@@ -112,6 +130,10 @@ public class AIAnalyzerTab extends JPanel {
         JPanel configPanel = createConfigTabPanel();
         mainTabbedPane.addTab("配置", configPanel);
         
+        // 第三个标签页：Skills（自定义技能）
+        JPanel skillsPanel = createSkillsTabPanel();
+        mainTabbedPane.addTab("Skills", skillsPanel);
+        
         add(mainTabbedPane, BorderLayout.CENTER);
     }
     
@@ -166,9 +188,43 @@ public class AIAnalyzerTab extends JPanel {
         gbc.insets = new Insets(5, 5, 5, 5);
         gbc.anchor = GridBagConstraints.WEST;
         
-        // API URL
+        // API 提供者选择
         gbc.gridx = 0;
         gbc.gridy = 0;
+        apiConfigPanel.add(new JLabel("API 提供者:"), gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        String[] providers = {"DashScope", "OpenAI兼容"};
+        apiProviderComboBox = new JComboBox<>(providers);
+        apiProviderComboBox.setSelectedIndex(0); // 默认 DashScope
+        apiProviderComboBox.addActionListener(e -> {
+            String selectedProvider = (String) apiProviderComboBox.getSelectedItem();
+            apiClient.setApiProvider(selectedProvider);
+            // 根据选择更新默认 URL
+            if ("DashScope".equals(selectedProvider)) {
+                if (apiUrlField.getText().contains("openai.com") || apiUrlField.getText().isEmpty()) {
+                    apiUrlField.setText("https://dashscope.aliyuncs.com/api/v1");
+                }
+                // DashScope 支持深度思考和搜索
+                enableThinkingCheckBox.setEnabled(true);
+                enableSearchCheckBox.setEnabled(true);
+            } else {
+                // OpenAI 兼容模式不支持 DashScope 特有的深度思考和搜索功能
+                enableThinkingCheckBox.setEnabled(false);
+                enableThinkingCheckBox.setSelected(false);
+                enableSearchCheckBox.setEnabled(false);
+                enableSearchCheckBox.setSelected(false);
+            }
+        });
+        apiProviderComboBox.setToolTipText("选择 API 提供者：DashScope（通义千问）或 OpenAI 兼容格式（支持 OpenAI、Ollama、LM Studio 等）");
+        apiConfigPanel.add(apiProviderComboBox, gbc);
+        
+        // API URL
+        gbc.gridx = 0;
+        gbc.gridy = 1;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
         apiConfigPanel.add(new JLabel("API URL:"), gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
@@ -178,7 +234,7 @@ public class AIAnalyzerTab extends JPanel {
         
         // API Key
         gbc.gridx = 0;
-        gbc.gridy = 1;
+        gbc.gridy = 2;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
         apiConfigPanel.add(new JLabel("API Key:"), gbc);
@@ -190,7 +246,7 @@ public class AIAnalyzerTab extends JPanel {
         
         // Model
         gbc.gridx = 0;
-        gbc.gridy = 2;
+        gbc.gridy = 3;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
         apiConfigPanel.add(new JLabel("Model:"), gbc);
@@ -200,9 +256,31 @@ public class AIAnalyzerTab extends JPanel {
         modelField = new JTextField("qwen-max", 30);
         apiConfigPanel.add(modelField, gbc);
         
+        // 自定义参数
+        gbc.gridx = 0;
+        gbc.gridy = 4;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        apiConfigPanel.add(new JLabel("自定义参数:"), gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        customParametersField = new JTextField("", 30);
+        customParametersField.setToolTipText("<html><b>自定义参数（JSON 格式，直接透传到 API）</b><br/>" +
+            "<br/><b>OpenAI 标准参数：</b><br/>" +
+            "temperature, top_p, max_tokens, frequency_penalty, presence_penalty, seed, stop<br/>" +
+            "<br/><b>Ollama 专有参数：</b><br/>" +
+            "• format: \"json\" 或 JSON Schema 对象（结构化输出）<br/>" +
+            "• options: {\"num_ctx\": 8192, \"top_k\": 50, \"min_p\": 0.05, ...}<br/>" +
+            "• keep_alive: \"30m\" / \"24h\" / -1（永久）/ 0（立即卸载）<br/>" +
+            "• think: true（启用 reasoning 模式，如 qwen3-thinking）<br/>" +
+            "<br/><b>示例：</b><br/>" +
+            "{\"format\": \"json\", \"keep_alive\": \"30m\", \"options\": {\"num_ctx\": 8192}}</html>");
+        apiConfigPanel.add(customParametersField, gbc);
+        
         // MCP 配置分隔线
         gbc.gridx = 0;
-        gbc.gridy = 3;
+        gbc.gridy = 5;
         gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -211,7 +289,7 @@ public class AIAnalyzerTab extends JPanel {
         
         // Burp MCP 工具调用开关
         gbc.gridx = 0;
-        gbc.gridy = 4;
+        gbc.gridy = 6;
         gbc.gridwidth = 1;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
@@ -232,7 +310,7 @@ public class AIAnalyzerTab extends JPanel {
         
         // Burp MCP 地址
         gbc.gridx = 0;
-        gbc.gridy = 5;
+        gbc.gridy = 7;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
         apiConfigPanel.add(new JLabel("Burp MCP 地址:"), gbc);
@@ -266,10 +344,10 @@ public class AIAnalyzerTab extends JPanel {
             }
         });
         apiConfigPanel.add(BurpMcpUrlField, gbc);
-
+        
         // 知识库检索工具开关（两个选项放同一行）
         gbc.gridx = 0;
-        gbc.gridy = 6;
+        gbc.gridy = 8;
         gbc.gridwidth = 1;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
@@ -346,10 +424,10 @@ public class AIAnalyzerTab extends JPanel {
         //     }
         // });
         // apiConfigPanel.add(ragMcpUrlField, gbc);
-
+        
         // RAG MCP 文档路径
         gbc.gridx = 0;
-        gbc.gridy = 7;
+        gbc.gridy = 9;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
         apiConfigPanel.add(new JLabel("知识库 文档路径:"), gbc);
@@ -387,7 +465,7 @@ public class AIAnalyzerTab extends JPanel {
 
         // Chrome MCP 工具调用开关
         gbc.gridx = 0;
-        gbc.gridy = 8;
+        gbc.gridy = 10;
         gbc.gridwidth = 1;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
@@ -405,10 +483,10 @@ public class AIAnalyzerTab extends JPanel {
             }
         });
         apiConfigPanel.add(enableChromeMcpCheckBox, gbc);
-
+        
         // Chrome MCP 地址
         gbc.gridx = 0;
-        gbc.gridy = 9;
+        gbc.gridy = 11;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
         apiConfigPanel.add(new JLabel("Chrome MCP 地址:"), gbc);
@@ -445,7 +523,7 @@ public class AIAnalyzerTab extends JPanel {
 
         // RAG 配置分隔线
         gbc.gridx = 0;
-        gbc.gridy = 10;
+        gbc.gridy = 12;
         gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -505,7 +583,7 @@ public class AIAnalyzerTab extends JPanel {
         
         // 设置按钮
         gbc.gridx = 0;
-        gbc.gridy = 11; // 调整 gridy，因为上面的 RAG MCP 地址配置被注释掉了
+        gbc.gridy = 13;
         gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -548,6 +626,299 @@ public class AIAnalyzerTab extends JPanel {
         return configPanel;
     }
 
+    /**
+     * 创建 Skills 标签页（第三个标签页）
+     * 用于管理用户自定义的技能（Skills）
+     */
+    private JPanel createSkillsTabPanel() {
+        JPanel skillsPanel = new JPanel(new BorderLayout(10, 10));
+        skillsPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        
+        // 顶部配置面板
+        JPanel topPanel = new JPanel(new GridBagLayout());
+        topPanel.setBorder(BorderFactory.createTitledBorder("Skills 配置"));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.anchor = GridBagConstraints.WEST;
+        
+        // 启用 Skills 复选框
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.gridwidth = 3;
+        enableSkillsCheckBox = new JCheckBox("启用 Skills（自定义技能指令）", false);
+        enableSkillsCheckBox.setToolTipText("启用后，AI 将加载并应用选中的技能指令");
+        enableSkillsCheckBox.addActionListener(e -> {
+            boolean enabled = enableSkillsCheckBox.isSelected();
+            skillsDirectoryField.setEnabled(enabled);
+            browseSkillsDirButton.setEnabled(enabled);
+            refreshSkillsButton.setEnabled(enabled);
+            createExampleSkillButton.setEnabled(enabled);
+            skillsTable.setEnabled(enabled);
+            apiClient.setEnableSkills(enabled);
+        });
+        topPanel.add(enableSkillsCheckBox, gbc);
+        
+        // Skills 目录路径
+        gbc.gridx = 0;
+        gbc.gridy = 1;
+        gbc.gridwidth = 1;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        topPanel.add(new JLabel("Skills 目录:"), gbc);
+        
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        skillsDirectoryField = new JTextField("", 40);
+        skillsDirectoryField.setEnabled(false);
+        skillsDirectoryField.setToolTipText("包含 SKILL.md 文件的目录路径");
+        topPanel.add(skillsDirectoryField, gbc);
+        
+        gbc.gridx = 2;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        browseSkillsDirButton = new JButton("浏览...");
+        browseSkillsDirButton.setEnabled(false);
+        browseSkillsDirButton.addActionListener(e -> browseSkillsDirectory());
+        topPanel.add(browseSkillsDirButton, gbc);
+        
+        // 按钮面板
+        gbc.gridx = 0;
+        gbc.gridy = 2;
+        gbc.gridwidth = 3;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        JPanel buttonsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+        
+        refreshSkillsButton = new JButton("刷新 Skills");
+        refreshSkillsButton.setEnabled(false);
+        refreshSkillsButton.addActionListener(e -> refreshSkills());
+        buttonsPanel.add(refreshSkillsButton);
+        
+        createExampleSkillButton = new JButton("创建示例 Skill");
+        createExampleSkillButton.setEnabled(false);
+        createExampleSkillButton.addActionListener(e -> createExampleSkill());
+        buttonsPanel.add(createExampleSkillButton);
+        
+        topPanel.add(buttonsPanel, gbc);
+        
+        skillsPanel.add(topPanel, BorderLayout.NORTH);
+        
+        // 中间分割面板：技能列表 + 预览
+        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
+        splitPane.setDividerLocation(400);
+        
+        // 左侧：Skills 列表
+        JPanel listPanel = new JPanel(new BorderLayout());
+        listPanel.setBorder(BorderFactory.createTitledBorder("已加载的 Skills"));
+        
+        String[] columnNames = {"启用", "名称", "描述"};
+        skillsTableModel = new DefaultTableModel(columnNames, 0) {
+            @Override
+            public Class<?> getColumnClass(int columnIndex) {
+                if (columnIndex == 0) return Boolean.class;
+                return String.class;
+            }
+            @Override
+            public boolean isCellEditable(int row, int column) {
+                return column == 0; // 只有"启用"列可编辑
+            }
+        };
+        skillsTable = new JTable(skillsTableModel);
+        skillsTable.setEnabled(false);
+        skillsTable.getColumnModel().getColumn(0).setMaxWidth(50);
+        skillsTable.getColumnModel().getColumn(0).setMinWidth(50);
+        skillsTable.getColumnModel().getColumn(1).setPreferredWidth(120);
+        skillsTable.getColumnModel().getColumn(2).setPreferredWidth(250);
+        
+        // 监听复选框变化
+        skillsTableModel.addTableModelListener(e -> {
+            if (e.getColumn() == 0) {
+                int row = e.getFirstRow();
+                Boolean enabled = (Boolean) skillsTableModel.getValueAt(row, 0);
+                String skillName = (String) skillsTableModel.getValueAt(row, 1);
+                apiClient.getSkillManager().setSkillEnabled(skillName, enabled);
+            }
+        });
+        
+        // 监听选择变化，更新预览
+        skillsTable.getSelectionModel().addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) {
+                updateSkillPreview();
+            }
+        });
+        
+        JScrollPane tableScrollPane = new JScrollPane(skillsTable);
+        listPanel.add(tableScrollPane, BorderLayout.CENTER);
+        
+        splitPane.setLeftComponent(listPanel);
+        
+        // 右侧：Skill 预览
+        JPanel previewPanel = new JPanel(new BorderLayout());
+        previewPanel.setBorder(BorderFactory.createTitledBorder("Skill 预览"));
+        
+        skillPreviewPane = new JTextPane();
+        skillPreviewPane.setEditable(false);
+        skillPreviewPane.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        skillPreviewPane.setBackground(new Color(250, 250, 250));
+        JScrollPane previewScrollPane = new JScrollPane(skillPreviewPane);
+        previewPanel.add(previewScrollPane, BorderLayout.CENTER);
+        
+        splitPane.setRightComponent(previewPanel);
+        
+        skillsPanel.add(splitPane, BorderLayout.CENTER);
+        
+        // 底部说明
+        JTextArea infoArea = new JTextArea();
+        infoArea.setEditable(false);
+        infoArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
+        infoArea.setBackground(new Color(245, 245, 245));
+        infoArea.setForeground(new Color(100, 100, 100));
+        infoArea.setText("Skills 使用说明：\n" +
+                        "• Skills 是用户自定义的指令集，用于指导 AI 执行特定任务\n" +
+                        "• 每个 Skill 是一个包含 SKILL.md 文件的文件夹\n" +
+                        "• SKILL.md 格式：\n" +
+                        "  ---\n" +
+                        "  name: skill-name\n" +
+                        "  description: 技能描述\n" +
+                        "  ---\n" +
+                        "  # 技能指令内容...\n" +
+                        "• 勾选技能后，其指令将被添加到 AI 的系统提示词中\n" +
+                        "• 参考: https://github.com/anthropics/skills");
+        infoArea.setLineWrap(true);
+        infoArea.setWrapStyleWord(true);
+        infoArea.setRows(6);
+        JScrollPane infoScrollPane = new JScrollPane(infoArea);
+        infoScrollPane.setBorder(BorderFactory.createTitledBorder("使用说明"));
+        infoScrollPane.setPreferredSize(new Dimension(0, 120));
+        
+        skillsPanel.add(infoScrollPane, BorderLayout.SOUTH);
+        
+        return skillsPanel;
+    }
+    
+    /**
+     * 浏览 Skills 目录
+     */
+    private void browseSkillsDirectory() {
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        fileChooser.setDialogTitle("选择 Skills 目录");
+        
+        // 如果已有路径，从该路径开始
+        String currentPath = skillsDirectoryField.getText().trim();
+        if (!currentPath.isEmpty()) {
+            File currentDir = new File(currentPath);
+            if (currentDir.exists()) {
+                fileChooser.setCurrentDirectory(currentDir);
+            }
+        }
+        
+        int result = fileChooser.showOpenDialog(this);
+        if (result == JFileChooser.APPROVE_OPTION) {
+            String selectedPath = fileChooser.getSelectedFile().getAbsolutePath();
+            skillsDirectoryField.setText(selectedPath);
+            apiClient.setSkillsDirectoryPath(selectedPath);
+            refreshSkills();
+        }
+    }
+    
+    /**
+     * 刷新 Skills 列表
+     */
+    private void refreshSkills() {
+        String dirPath = skillsDirectoryField.getText().trim();
+        if (dirPath.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "请先设置 Skills 目录路径", "提示", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        
+        // 设置路径并加载
+        apiClient.setSkillsDirectoryPath(dirPath);
+        apiClient.getSkillManager().loadSkills();
+        
+        // 更新表格
+        updateSkillsTable();
+        
+        api.logging().logToOutput("Skills 已刷新，共 " + apiClient.getSkillManager().getAllSkills().size() + " 个");
+    }
+    
+    /**
+     * 更新 Skills 表格
+     */
+    private void updateSkillsTable() {
+        skillsTableModel.setRowCount(0);
+        
+        List<Skill> skills = apiClient.getSkillManager().getAllSkills();
+        for (Skill skill : skills) {
+            Object[] row = {
+                skill.isEnabled(),
+                skill.getName(),
+                skill.getShortDescription()
+            };
+            skillsTableModel.addRow(row);
+        }
+    }
+    
+    /**
+     * 更新 Skill 预览
+     */
+    private void updateSkillPreview() {
+        int selectedRow = skillsTable.getSelectedRow();
+        if (selectedRow < 0) {
+            skillPreviewPane.setText("");
+            return;
+        }
+        
+        String skillName = (String) skillsTableModel.getValueAt(selectedRow, 1);
+        Skill skill = apiClient.getSkillManager().getSkill(skillName);
+        
+        if (skill != null) {
+            StringBuilder preview = new StringBuilder();
+            preview.append("【名称】").append(skill.getName()).append("\n\n");
+            preview.append("【描述】").append(skill.getDescription()).append("\n\n");
+            preview.append("【文件路径】").append(skill.getFilePath()).append("\n\n");
+            preview.append("【指令内容】\n").append(skill.getContent());
+            skillPreviewPane.setText(preview.toString());
+            skillPreviewPane.setCaretPosition(0);
+        }
+    }
+    
+    /**
+     * 创建示例 Skill
+     */
+    private void createExampleSkill() {
+        String dirPath = skillsDirectoryField.getText().trim();
+        if (dirPath.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "请先设置 Skills 目录路径", "提示", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        
+        // 检查目录是否存在
+        File dir = new File(dirPath);
+        if (!dir.exists()) {
+            int result = JOptionPane.showConfirmDialog(this, 
+                "目录不存在，是否创建？\n" + dirPath, 
+                "确认", JOptionPane.YES_NO_OPTION);
+            if (result == JOptionPane.YES_OPTION) {
+                if (!dir.mkdirs()) {
+                    JOptionPane.showMessageDialog(this, "创建目录失败", "错误", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+            } else {
+                return;
+            }
+        }
+        
+        // 创建示例 Skill
+        apiClient.getSkillManager().createExampleSkill(dirPath);
+        
+        // 刷新列表
+        refreshSkills();
+        
+        JOptionPane.showMessageDialog(this, 
+            "示例 Skill 已创建！\n路径: " + dirPath + "/example-skill/SKILL.md", 
+            "成功", JOptionPane.INFORMATION_MESSAGE);
+    }
 
     private JPanel createRequestListPanel() {
         JPanel panel = new JPanel(new BorderLayout());
@@ -748,9 +1119,11 @@ public class AIAnalyzerTab extends JPanel {
         }
 
         // 更新API客户端配置
+        apiClient.setApiProvider((String) apiProviderComboBox.getSelectedItem());
         apiClient.setApiUrl(apiUrlField.getText().trim());
         apiClient.setApiKey(apiKeyField.getText().trim());
         apiClient.setModel(modelField.getText().trim());
+        apiClient.setCustomParameters(customParametersField.getText().trim());
         apiClient.setEnableThinking(enableThinkingCheckBox.isSelected());
         apiClient.setEnableSearch(enableSearchCheckBox.isSelected());
         
@@ -788,41 +1161,59 @@ public class AIAnalyzerTab extends JPanel {
                         httpContent,
                         finalUserPrompt,
                         chunk -> {
-                            // 将chunk添加到缓冲区
-                            fullResponse.append(chunk);
+                            // 检查是否已取消（双重检查：SwingWorker 和 ApiClient）
+                            if (isCancelled() || apiClient.isStreamingCancelled()) {
+                                return; // 已取消，不再处理
+                            }
                             
-                            // 流式输出时，实时进行Markdown解析和渲染
-                            // 使用invokeAndWait确保最后一个chunk的渲染完成
-                            try {
-                                SwingUtilities.invokeAndWait(() -> {
+                            // 将chunk添加到缓冲区（线程安全）
+                            synchronized (fullResponse) {
+                            fullResponse.append(chunk);
+                            }
+                            
+                            // 流式输出时，使用 invokeLater 进行异步 UI 更新
+                            // 避免使用 invokeAndWait 可能导致的死锁或阻塞问题
+                            final String currentContent;
+                            synchronized (fullResponse) {
+                                currentContent = fullResponse.toString();
+                            }
+                            
+                            SwingUtilities.invokeLater(() -> {
+                                // 检查取消状态
+                                if (isCancelled() || apiClient.isStreamingCancelled()) {
+                                    return;
+                                }
                                     try {
                                         // 使用流式Markdown渲染
-                                        MarkdownRenderer.appendMarkdownStreaming(resultTextPane, fullResponse.toString(), aiMessageStartPos);
+                                    MarkdownRenderer.appendMarkdownStreaming(resultTextPane, currentContent, aiMessageStartPos);
                                         resultTextPane.setCaretPosition(resultTextPane.getStyledDocument().getLength());
                                     } catch (Exception e) {
                                         api.logging().logToError("流式Markdown渲染失败: " + e.getMessage());
                                         e.printStackTrace();
                                     }
                                 });
-                            } catch (Exception e) {
-                                // 如果invokeAndWait失败，回退到invokeLater
-                                SwingUtilities.invokeLater(() -> {
-                                    try {
-                                        MarkdownRenderer.appendMarkdownStreaming(resultTextPane, fullResponse.toString(), aiMessageStartPos);
-                                        resultTextPane.setCaretPosition(resultTextPane.getStyledDocument().getLength());
-                                    } catch (Exception ex) {
-                                        api.logging().logToError("流式Markdown渲染失败: " + ex.getMessage());
-                                    }
-                                });
-                            }
                         }
                     );
                     
                     // 流式输出完成后，使用完整的Markdown渲染替换流式渲染的内容
-                    String finalContent = fullResponse.toString();
+                    // 如果已取消，跳过最终渲染
+                    if (isCancelled() || apiClient.isStreamingCancelled()) {
+                        return null;
+                    }
+                    
+                    final String finalContent;
+                    synchronized (fullResponse) {
+                        finalContent = fullResponse.toString();
+                    }
+                    
                     if (!finalContent.isEmpty()) {
+                        // 使用 invokeLater 进行最终渲染，避免阻塞
+                        // 使用 CountDownLatch 等待渲染完成（可选，但更安全）
+                        final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+                        SwingUtilities.invokeLater(() -> {
                         try {
-                            SwingUtilities.invokeAndWait(() -> {
+                                // 检查取消状态
+                                if (isCancelled() || apiClient.isStreamingCancelled()) return;
                                 try {
                                     StyledDocument doc = resultTextPane.getStyledDocument();
                                     // 删除流式渲染的内容
@@ -838,24 +1229,16 @@ public class AIAnalyzerTab extends JPanel {
                                 } catch (Exception e) {
                                     api.logging().logToError("流式输出完成后完整渲染失败: " + e.getMessage());
                                 }
-                            });
-                        } catch (Exception e) {
-                            // 如果invokeAndWait失败，使用invokeLater作为备选
-                            SwingUtilities.invokeLater(() -> {
-                                try {
-                                    StyledDocument doc = resultTextPane.getStyledDocument();
-                                    int currentLength = doc.getLength();
-                                    if (currentLength > aiMessageStartPos) {
-                                        doc.remove(aiMessageStartPos, currentLength - aiMessageStartPos);
-                                    }
-                                    MarkdownRenderer.appendMarkdown(resultTextPane, finalContent);
-                                    resultTextPane.setCaretPosition(resultTextPane.getStyledDocument().getLength());
-                                } catch (BadLocationException ex) {
-                                    api.logging().logToError("流式输出完成后完整渲染失败: " + ex.getMessage());
-                                } catch (Exception ex) {
-                                    api.logging().logToError("流式输出完成后完整渲染失败: " + ex.getMessage());
-                                }
-                            });
+                            } finally {
+                                latch.countDown();
+                            }
+                        });
+                        
+                        // 等待渲染完成（最多等待5秒）
+                        try {
+                            latch.await(5, java.util.concurrent.TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
                         }
                     }
                 } catch (Exception e) {
@@ -869,13 +1252,20 @@ public class AIAnalyzerTab extends JPanel {
             @Override
             protected void done() {
                 try {
-                    get(); // 检查是否有异常
-                    
+                    if (!isCancelled()) {
+                        get(); // 检查是否有异常（只在未取消时调用）
+                    }
                     // 流式输出已完成，在doInBackground()中已经完成了完整渲染，这里不需要再渲染
+                } catch (java.util.concurrent.CancellationException e) {
+                    // 用户取消，正常情况，不显示错误
+                    api.logging().logToOutput("分析已被用户取消");
                 } catch (Exception e) {
+                    // 只有在非取消情况下才显示错误
+                    if (!isCancelled() && !apiClient.isStreamingCancelled()) {
                     SwingUtilities.invokeLater(() -> {
                         appendToResult("分析过程中出现错误: " + e.getMessage());
                     });
+                    }
                 } finally {
                     analyzeButton.setEnabled(true);
                     analyzeButton.setText("开始分析");
@@ -930,16 +1320,16 @@ public class AIAnalyzerTab extends JPanel {
             analyzeButton.setText("开始分析");
             
             // 添加中断提示
-            try {
-                StyledDocument doc = resultTextPane.getStyledDocument();
-                javax.swing.text.Style stopStyle = doc.addStyle("stop", null);
-                javax.swing.text.StyleConstants.setForeground(stopStyle, java.awt.Color.ORANGE);
-                javax.swing.text.StyleConstants.setBold(stopStyle, true);
-                javax.swing.text.StyleConstants.setItalic(stopStyle, true);
-                doc.insertString(doc.getLength(), "\n\n[输出已中断]", stopStyle);
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+        try {
+            StyledDocument doc = resultTextPane.getStyledDocument();
+            javax.swing.text.Style stopStyle = doc.addStyle("stop", null);
+            javax.swing.text.StyleConstants.setForeground(stopStyle, java.awt.Color.ORANGE);
+            javax.swing.text.StyleConstants.setBold(stopStyle, true);
+            javax.swing.text.StyleConstants.setItalic(stopStyle, true);
+            doc.insertString(doc.getLength(), "\n\n[输出已中断]", stopStyle);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
             
             api.logging().logToOutput("用户中断了AI分析");
         }
@@ -1003,8 +1393,17 @@ public class AIAnalyzerTab extends JPanel {
                 false, // enableRag 暂时禁用
                 ""    // ragDocumentsPath 暂时禁用
             );
+            // 设置 API 提供者
+            settings.setApiProvider((String) apiProviderComboBox.getSelectedItem());
+            // 设置自定义参数
+            settings.setCustomParameters(customParametersField.getText().trim());
             // 设置直接查找知识库选项
             settings.setEnableFileSystemAccess(enableFileSystemAccessCheckBox.isSelected());
+            
+            // 设置 Skills 选项
+            settings.setEnableSkills(enableSkillsCheckBox.isSelected());
+            settings.setSkillsDirectoryPath(skillsDirectoryField.getText().trim());
+            settings.setEnabledSkillNames(apiClient.getSkillManager().getEnabledSkillNames());
 
             ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream("ai_analyzer_settings.dat"));
             oos.writeObject(settings);
@@ -1066,12 +1465,21 @@ public class AIAnalyzerTab extends JPanel {
      * 应用设置到UI和API客户端
      */
     private void applySettings(PluginSettings settings) {
+        // API 提供者（需要在其他设置之前应用，因为会影响 UI 状态）
+        String provider = settings.getApiProvider();
+        apiProviderComboBox.setSelectedItem(provider);
+        // 根据提供者设置功能开关的启用状态
+        boolean isDashScope = "DashScope".equals(provider);
+        enableThinkingCheckBox.setEnabled(isDashScope);
+        enableSearchCheckBox.setEnabled(isDashScope);
+        
         apiUrlField.setText(settings.getApiUrl());
         apiKeyField.setText(settings.getApiKey());
         modelField.setText(settings.getModel());
+        customParametersField.setText(settings.getCustomParameters());
         userPromptArea.setText(settings.getUserPrompt());
-        enableThinkingCheckBox.setSelected(settings.isEnableThinking());
-        enableSearchCheckBox.setSelected(settings.isEnableSearch());
+        enableThinkingCheckBox.setSelected(isDashScope && settings.isEnableThinking());
+        enableSearchCheckBox.setSelected(isDashScope && settings.isEnableSearch());
         
         // Burp MCP 配置
         enableMcpCheckBox.setSelected(settings.isEnableMcp());
@@ -1101,11 +1509,13 @@ public class AIAnalyzerTab extends JPanel {
         // ragDocumentsPathField.setEnabled(settings.isEnableRag());
         
         // 更新API客户端配置
+        apiClient.setApiProvider(settings.getApiProvider());
         apiClient.setApiUrl(settings.getApiUrl());
         apiClient.setApiKey(settings.getApiKey());
         apiClient.setModel(settings.getModel());
-        apiClient.setEnableThinking(settings.isEnableThinking());
-        apiClient.setEnableSearch(settings.isEnableSearch());
+        apiClient.setCustomParameters(settings.getCustomParameters());
+        apiClient.setEnableThinking(isDashScope && settings.isEnableThinking());
+        apiClient.setEnableSearch(isDashScope && settings.isEnableSearch());
         apiClient.setEnableMcp(settings.isEnableMcp());
         apiClient.setBurpMcpUrl(settings.getMcpUrl());
         apiClient.setEnableRagMcp(settings.isEnableRagMcp());
@@ -1117,6 +1527,26 @@ public class AIAnalyzerTab extends JPanel {
         // apiClient.setEnableRag(settings.isEnableRag()); // 默认 RAG 暂时禁用
         // apiClient.setRagDocumentsPath(settings.getRagDocumentsPath()); // 默认 RAG 暂时禁用
         // apiClient.ensureRagInitialized(); // 默认 RAG 暂时禁用
+        
+        // Skills 配置
+        enableSkillsCheckBox.setSelected(settings.isEnableSkills());
+        skillsDirectoryField.setText(settings.getSkillsDirectoryPath());
+        skillsDirectoryField.setEnabled(settings.isEnableSkills());
+        browseSkillsDirButton.setEnabled(settings.isEnableSkills());
+        refreshSkillsButton.setEnabled(settings.isEnableSkills());
+        createExampleSkillButton.setEnabled(settings.isEnableSkills());
+        skillsTable.setEnabled(settings.isEnableSkills());
+        
+        apiClient.setEnableSkills(settings.isEnableSkills());
+        if (settings.getSkillsDirectoryPath() != null && !settings.getSkillsDirectoryPath().isEmpty()) {
+            apiClient.setSkillsDirectoryPath(settings.getSkillsDirectoryPath());
+            apiClient.getSkillManager().loadSkills();
+            // 恢复已启用的 skills
+            if (settings.getEnabledSkillNames() != null) {
+                apiClient.getSkillManager().setEnabledSkillNames(settings.getEnabledSkillNames());
+            }
+            updateSkillsTable();
+        }
     }
     
     /**
