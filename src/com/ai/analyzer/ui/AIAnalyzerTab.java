@@ -344,7 +344,7 @@ public class AIAnalyzerTab extends JPanel {
             }
         });
         apiConfigPanel.add(BurpMcpUrlField, gbc);
-        
+
         // 知识库检索工具开关（两个选项放同一行）
         gbc.gridx = 0;
         gbc.gridy = 8;
@@ -424,7 +424,7 @@ public class AIAnalyzerTab extends JPanel {
         //     }
         // });
         // apiConfigPanel.add(ragMcpUrlField, gbc);
-        
+
         // RAG MCP 文档路径
         gbc.gridx = 0;
         gbc.gridy = 9;
@@ -483,7 +483,7 @@ public class AIAnalyzerTab extends JPanel {
             }
         });
         apiConfigPanel.add(enableChromeMcpCheckBox, gbc);
-        
+
         // Chrome MCP 地址
         gbc.gridx = 0;
         gbc.gridy = 11;
@@ -625,7 +625,7 @@ public class AIAnalyzerTab extends JPanel {
         
         return configPanel;
     }
-
+    
     /**
      * 创建 Skills 标签页（第三个标签页）
      * 用于管理用户自定义的技能（Skills）
@@ -1161,59 +1161,54 @@ public class AIAnalyzerTab extends JPanel {
                         httpContent,
                         finalUserPrompt,
                         chunk -> {
-                            // 检查是否已取消（双重检查：SwingWorker 和 ApiClient）
-                            if (isCancelled() || apiClient.isStreamingCancelled()) {
-                                return; // 已取消，不再处理
+                            // 检查是否已取消（检查 SwingWorker 和 isAnalyzing 状态）
+                            if (currentWorker.isCancelled() || !isAnalyzing) {
+                                return; // 立即返回，不再处理后续的 chunk
                             }
                             
-                            // 将chunk添加到缓冲区（线程安全）
-                            synchronized (fullResponse) {
+                            // 将chunk添加到缓冲区
                             fullResponse.append(chunk);
-                            }
                             
-                            // 流式输出时，使用 invokeLater 进行异步 UI 更新
-                            // 避免使用 invokeAndWait 可能导致的死锁或阻塞问题
-                            final String currentContent;
-                            synchronized (fullResponse) {
-                                currentContent = fullResponse.toString();
-                            }
-                            
-                            SwingUtilities.invokeLater(() -> {
-                                // 检查取消状态
-                                if (isCancelled() || apiClient.isStreamingCancelled()) {
-                                    return;
-                                }
+                            // 流式输出时，实时进行Markdown解析和渲染
+                            // 使用invokeAndWait确保最后一个chunk的渲染完成
+                            try {
+                                SwingUtilities.invokeAndWait(() -> {
+                                    // 再次检查取消状态（双重检查）
+                                    if (currentWorker.isCancelled() || !isAnalyzing) {
+                                        return;
+                                    }
                                     try {
                                         // 使用流式Markdown渲染
-                                    MarkdownRenderer.appendMarkdownStreaming(resultTextPane, currentContent, aiMessageStartPos);
+                                        MarkdownRenderer.appendMarkdownStreaming(resultTextPane, fullResponse.toString(), aiMessageStartPos);
                                         resultTextPane.setCaretPosition(resultTextPane.getStyledDocument().getLength());
                                     } catch (Exception e) {
                                         api.logging().logToError("流式Markdown渲染失败: " + e.getMessage());
                                         e.printStackTrace();
                                     }
                                 });
+                            } catch (Exception e) {
+                                // 如果invokeAndWait失败，回退到invokeLater
+                                SwingUtilities.invokeLater(() -> {
+                                    // 再次检查取消状态
+                                    if (currentWorker.isCancelled() || !isAnalyzing) {
+                                        return;
+                                    }
+                                    try {
+                                        MarkdownRenderer.appendMarkdownStreaming(resultTextPane, fullResponse.toString(), aiMessageStartPos);
+                                        resultTextPane.setCaretPosition(resultTextPane.getStyledDocument().getLength());
+                                    } catch (Exception ex) {
+                                        api.logging().logToError("流式Markdown渲染失败: " + ex.getMessage());
+                                    }
+                                });
+                            }
                         }
                     );
                     
                     // 流式输出完成后，使用完整的Markdown渲染替换流式渲染的内容
-                    // 如果已取消，跳过最终渲染
-                    if (isCancelled() || apiClient.isStreamingCancelled()) {
-                        return null;
-                    }
-                    
-                    final String finalContent;
-                    synchronized (fullResponse) {
-                        finalContent = fullResponse.toString();
-                    }
-                    
+                    String finalContent = fullResponse.toString();
                     if (!finalContent.isEmpty()) {
-                        // 使用 invokeLater 进行最终渲染，避免阻塞
-                        // 使用 CountDownLatch 等待渲染完成（可选，但更安全）
-                        final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
-                        SwingUtilities.invokeLater(() -> {
                         try {
-                                // 检查取消状态
-                                if (isCancelled() || apiClient.isStreamingCancelled()) return;
+                            SwingUtilities.invokeAndWait(() -> {
                                 try {
                                     StyledDocument doc = resultTextPane.getStyledDocument();
                                     // 删除流式渲染的内容
@@ -1229,16 +1224,24 @@ public class AIAnalyzerTab extends JPanel {
                                 } catch (Exception e) {
                                     api.logging().logToError("流式输出完成后完整渲染失败: " + e.getMessage());
                                 }
-                            } finally {
-                                latch.countDown();
-                            }
-                        });
-                        
-                        // 等待渲染完成（最多等待5秒）
-                        try {
-                            latch.await(5, java.util.concurrent.TimeUnit.SECONDS);
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
+                            });
+                        } catch (Exception e) {
+                            // 如果invokeAndWait失败，使用invokeLater作为备选
+                            SwingUtilities.invokeLater(() -> {
+                                try {
+                                    StyledDocument doc = resultTextPane.getStyledDocument();
+                                    int currentLength = doc.getLength();
+                                    if (currentLength > aiMessageStartPos) {
+                                        doc.remove(aiMessageStartPos, currentLength - aiMessageStartPos);
+                                    }
+                                    MarkdownRenderer.appendMarkdown(resultTextPane, finalContent);
+                                    resultTextPane.setCaretPosition(resultTextPane.getStyledDocument().getLength());
+                                } catch (BadLocationException ex) {
+                                    api.logging().logToError("流式输出完成后完整渲染失败: " + ex.getMessage());
+                                } catch (Exception ex) {
+                                    api.logging().logToError("流式输出完成后完整渲染失败: " + ex.getMessage());
+                                }
+                            });
                         }
                     }
                 } catch (Exception e) {
@@ -1252,20 +1255,13 @@ public class AIAnalyzerTab extends JPanel {
             @Override
             protected void done() {
                 try {
-                    if (!isCancelled()) {
-                        get(); // 检查是否有异常（只在未取消时调用）
-                    }
+                    get(); // 检查是否有异常
+                    
                     // 流式输出已完成，在doInBackground()中已经完成了完整渲染，这里不需要再渲染
-                } catch (java.util.concurrent.CancellationException e) {
-                    // 用户取消，正常情况，不显示错误
-                    api.logging().logToOutput("分析已被用户取消");
                 } catch (Exception e) {
-                    // 只有在非取消情况下才显示错误
-                    if (!isCancelled() && !apiClient.isStreamingCancelled()) {
                     SwingUtilities.invokeLater(() -> {
                         appendToResult("分析过程中出现错误: " + e.getMessage());
                     });
-                    }
                 } finally {
                     analyzeButton.setEnabled(true);
                     analyzeButton.setText("开始分析");
@@ -1320,16 +1316,16 @@ public class AIAnalyzerTab extends JPanel {
             analyzeButton.setText("开始分析");
             
             // 添加中断提示
-        try {
-            StyledDocument doc = resultTextPane.getStyledDocument();
-            javax.swing.text.Style stopStyle = doc.addStyle("stop", null);
-            javax.swing.text.StyleConstants.setForeground(stopStyle, java.awt.Color.ORANGE);
-            javax.swing.text.StyleConstants.setBold(stopStyle, true);
-            javax.swing.text.StyleConstants.setItalic(stopStyle, true);
-            doc.insertString(doc.getLength(), "\n\n[输出已中断]", stopStyle);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+            try {
+                StyledDocument doc = resultTextPane.getStyledDocument();
+                javax.swing.text.Style stopStyle = doc.addStyle("stop", null);
+                javax.swing.text.StyleConstants.setForeground(stopStyle, java.awt.Color.ORANGE);
+                javax.swing.text.StyleConstants.setBold(stopStyle, true);
+                javax.swing.text.StyleConstants.setItalic(stopStyle, true);
+                doc.insertString(doc.getLength(), "\n\n[输出已中断]", stopStyle);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
             
             api.logging().logToOutput("用户中断了AI分析");
         }

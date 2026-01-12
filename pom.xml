@@ -7,7 +7,7 @@
 
     <groupId>com.burp.extension</groupId>
     <artifactId>ai-analyzer</artifactId>
-    <version>1.0.0</version>
+    <version>Dev</version>
     <packaging>jar</packaging>
 
     <name>AI Vulnerability Analyzer</name>
