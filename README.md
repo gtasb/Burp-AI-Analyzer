@@ -15,6 +15,11 @@
 - **RAG MCP** - 接入本地知识库，结合安全文档进行分析
 - **Chrome MCP** - 控制浏览器进行自动化测试（规划中）
 
+### 🎯 Skills 自定义技能
+- **自定义指令** - 创建专属技能指导 AI 行为
+- **可执行工具** - 定义本地命令/工具，让 AI 自动调用（如 nmap、sqlmap 等）
+- **参数模板** - 灵活的参数配置，AI 智能填充
+
 ### 📊 专业渲染
 - **Markdown 渲染** - 支持标题、列表、代码块、链接等格式
 - **工具执行可视化** - 清晰展示 AI 调用了哪些工具、传入了什么参数
@@ -30,6 +35,7 @@
 | 大模型 | 通义千问 (qwen-max) |
 | 工具协议 | Model Context Protocol (MCP) |
 | RAG | rag-mcp-server |
+| Skills | Anthropic Agent Skills 规范 |
 | GUI | Swing |
 
 ## 📦 快速开始
@@ -72,17 +78,185 @@ RAG MCP 是一个本地知识库，用于存储和检索安全文档。
 使用uvx（推荐）
 ```bash
 # Install with uvx (comes with uv)
-uvx rag-mcp-server
+uvx rag-mcp
 ```
 
 使用pip（需要配置好环境变量）
 ```bash
-pip install rag-mcp-server
+pip install rag-mcp
 ```
 
 2. 配置 RAG MCP
 
 文档我们用的是PayloadsAllTheThings
+
+## 🎯 Skills 自定义技能
+
+Skills 是用户自定义的技能系统，参考 [Anthropic Agent Skills](https://github.com/anthropics/skills) 规范实现。
+
+### Skills 能做什么？
+
+1. **自定义指令** - 创建专属的 AI 行为指导，如「SQL注入测试专家」「代码审计助手」
+2. **可执行工具** - 定义本地命令行工具，AI 在需要时自动调用（如 nmap、sqlmap、nuclei 等）
+3. **参数化执行** - 支持参数模板，AI 根据上下文智能填充参数
+
+### 快速开始
+
+1. 在插件的 **Skills** 标签页中启用 Skills 功能
+2. 设置 Skills 目录路径（存放 SKILL.md 文件的目录）
+3. 点击「创建示例 Skill」生成示例文件
+4. 勾选启用想要使用的技能
+
+### SKILL.md 格式
+
+每个技能是一个文件夹，包含一个 `SKILL.md` 文件：
+
+```
+skills/
+├── sql-injection-tester/
+│   └── SKILL.md
+├── network-scanner/
+│   └── SKILL.md
+└── code-auditor/
+    └── SKILL.md
+```
+
+#### 基础格式（仅指令）
+
+```yaml
+---
+name: sql-injection-tester
+description: SQL注入测试专家技能
+---
+
+# SQL注入测试专家
+
+当用户提供 HTTP 请求时，按以下流程进行 SQL 注入测试：
+
+## 测试流程
+1. 识别所有可能的注入点（GET/POST 参数、Cookie、Header）
+2. 按危害程度排序测试
+3. 构造测试 payload 并验证
+
+## 常用 Payload
+- 单引号测试: `'`
+- 布尔盲注: `' AND '1'='1`
+- 时间盲注: `' AND SLEEP(5)--`
+...
+```
+
+#### 高级格式（包含可执行工具）
+
+```yaml
+---
+name: network-scanner
+description: 网络扫描技能，包含 nmap 等工具
+tools:
+  - name: nmap_scan
+    description: 使用 nmap 进行端口扫描
+    command: "C:/Tools/nmap/nmap.exe"
+    args: "-sV -p {ports} {target}"
+    working_dir: "C:/Tools/nmap"
+    timeout: 300
+    parameters:
+      - name: target
+        description: 目标 IP 或域名
+        required: true
+      - name: ports
+        description: 端口范围
+        default: "1-1000"
+  
+  - name: nuclei_scan
+    description: 使用 nuclei 进行漏洞扫描
+    command: "/usr/local/bin/nuclei"
+    args: "-u {url} -t {templates}"
+    timeout: 600
+    parameters:
+      - name: url
+        description: 目标 URL
+        required: true
+      - name: templates
+        description: 模板路径
+        default: "cves/"
+---
+
+# Network Scanner
+
+当需要进行网络扫描时，使用以下工具：
+
+## 可用工具
+
+### nmap_scan
+用于端口扫描和服务识别。
+
+使用场景：
+- 发现开放端口
+- 识别服务版本
+- 初步侦察
+
+### nuclei_scan
+用于自动化漏洞扫描。
+
+使用场景：
+- CVE 漏洞检测
+- 配置错误检测
+- 批量漏洞扫描
+```
+
+### 工具定义参数说明
+
+| 参数 | 必需 | 说明 |
+|------|------|------|
+| `name` | ✓ | 工具名称，AI 调用时使用 |
+| `description` | ✓ | 工具描述，告诉 AI 这个工具做什么 |
+| `command` | ✓ | 可执行文件路径（支持相对路径，相对于 SKILL.md 所在目录） |
+| `args` | | 参数模板，使用 `{param_name}` 作为占位符 |
+| `working_dir` | | 工作目录 |
+| `timeout` | | 执行超时（秒），默认 120 |
+| `parameters` | | 参数定义列表 |
+
+### 参数定义
+
+| 字段 | 说明 |
+|------|------|
+| `name` | 参数名（对应 args 中的占位符） |
+| `description` | 参数描述 |
+| `type` | 类型：string/number/boolean |
+| `required` | 是否必需 |
+| `default` | 默认值 |
+
+### AI 调用流程
+
+当 AI 需要使用 Skill 工具时：
+
+1. AI 调用 `list_skill_tools` 查看可用工具列表
+2. AI 调用 `execute_skill_tool(toolName, parameters)` 执行工具
+3. 工具执行完成后，AI 接收输出并分析结果
+
+```
+用户: 扫描一下 192.168.1.1 的常用端口
+
+AI: 我来使用 nmap 进行端口扫描。
+
+▶ execute_skill_tool
+   toolName=skill_network_nmap_scan
+   parameters={"target": "192.168.1.1", "ports": "21,22,80,443,3306,8080"}
+
+[执行 nmap -sV -p 21,22,80,443,3306,8080 192.168.1.1]
+
+扫描结果分析：
+- 22/tcp open - SSH (OpenSSH 8.2)
+- 80/tcp open - HTTP (nginx 1.18)
+- 443/tcp open - HTTPS
+...
+```
+
+### 安全注意事项
+
+- ⚠️ 工具执行有超时限制（默认 120 秒）
+- ⚠️ 输出大小限制（100KB）
+- ⚠️ 仅对授权目标进行测试
+- ⚠️ 确保工具路径正确且有执行权限
 
 ## 🔗 获取 API Key
 
@@ -119,6 +293,13 @@ AI 执行：
 | 启用 RAG MCP | 接入本地知识库 | 关闭 |
 | RAG 文档路径 | 知识库文档目录 | - |
 
+### Skills 配置
+
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| 启用 Skills | 允许使用自定义技能 | 关闭 |
+| Skills 目录 | 存放 SKILL.md 的目录 | - |
+
 ### 模型参数
 
 | 参数 | 说明 |
@@ -145,6 +326,12 @@ gradle clean jar
 详细说明请查看 [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) 和 [QUICKSTART.md](QUICKSTART.md)
 
 ## 📝 更新日志
+
+### v1.1.0
+- ✅ Skills 自定义技能系统
+- ✅ 支持定义可执行工具（nmap、sqlmap 等）
+- ✅ 参数模板和智能填充
+- ✅ 工具执行超时和输出限制
 
 ### v1.0.0
 - ✅ 基础 AI 分析功能

@@ -23,7 +23,7 @@ public class AllMcpToolProvider {
     private McpTransport transport;
     private McpClient mcpClient;
 
-    
+
     /**
      * 创建 Legacy HTTP Transport（用于 Burp MCP Server）
      * 根据 curl 测试：Burp MCP Server 使用 SSE (Server-Sent Events) 协议

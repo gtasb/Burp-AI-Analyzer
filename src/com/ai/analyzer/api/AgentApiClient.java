@@ -4,6 +4,9 @@ import com.ai.analyzer.Agent.Assistant;
 import com.ai.analyzer.mcpClient.AllMcpToolProvider;
 import com.ai.analyzer.mcpClient.McpToolMappingConfig;
 import com.ai.analyzer.mcpClient.ToolExecutionFormatter;
+import com.ai.analyzer.skills.SkillManager;
+import com.ai.analyzer.skills.SkillToolsProvider;
+import com.ai.analyzer.manager.ChatSessionManager;
 // import com.ai.analyzer.rag.RagContentManager; // 默认 RAG 暂时禁用
 import com.ai.analyzer.utils.RequestSourceDetector;
 import burp.api.montoya.http.message.HttpRequestResponse;
@@ -33,10 +36,37 @@ import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.tool.BeforeToolExecution;
 import dev.langchain4j.service.tool.ToolExecution;
 import dev.langchain4j.community.model.dashscope.QwenStreamingChatModel;
+import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
+import dev.langchain4j.model.chat.StreamingChatModel;
 import lombok.Getter;
 
 
 public class AgentApiClient {
+    // API 提供者类型枚举
+    public enum ApiProvider {
+        DASHSCOPE("DashScope"),
+        OPENAI_COMPATIBLE("OpenAI兼容");
+        
+        private final String displayName;
+        
+        ApiProvider(String displayName) {
+            this.displayName = displayName;
+        }
+        
+        public String getDisplayName() {
+            return displayName;
+        }
+        
+        public static ApiProvider fromDisplayName(String displayName) {
+            for (ApiProvider provider : values()) {
+                if (provider.displayName.equals(displayName)) {
+                    return provider;
+                }
+            }
+            return DASHSCOPE; // 默认
+        }
+    }
+    
     @Getter
     private String apiKey;
     // 获取API配置的方法
@@ -44,7 +74,9 @@ public class AgentApiClient {
     private String apiUrl;
     @Getter
     private String model;
-    private QwenStreamingChatModel chatModel;
+    @Getter
+    private ApiProvider apiProvider = ApiProvider.DASHSCOPE; // 默认使用 DashScope
+    private StreamingChatModel chatModel; // 使用通用接口，支持多种模型
     /**
      * -- SETTER --
      *  设置 MontoyaApi 引用
@@ -72,6 +104,12 @@ public class AgentApiClient {
     private String chromeMcpUrl = ""; // Chrome MCP 服务器地址
     @Getter
     private boolean enableFileSystemAccess = false; // 是否启用直接查找知识库（FileSystemAccess）
+    @Getter
+    private boolean enableSkills = false; // 是否启用 Skills
+    @Getter
+    private String customParameters = ""; // 用户自定义参数（JSON 格式，如 {"top_p": 0.9, "max_tokens": 4096}）
+    private SkillManager skillManager; // Skills 管理器
+    private SkillToolsProvider skillToolsProvider; // Skills 工具提供者
     // 默认 RAG 功能暂时禁用，改用 RAG MCP
     // @Getter
     // private boolean enableRag = false; // 是否启用 RAG
@@ -85,6 +123,7 @@ public class AgentApiClient {
     private MessageWindowChatMemory chatMemory; // 共享的聊天记忆，用于保持上下文（即使 Assistant 重新创建也保留）
     private volatile TokenStream currentTokenStream; // 当前活动的 TokenStream，用于取消流式输出
     private volatile StreamingHandle streamingHandle; // 流式句柄，用于正确取消流
+    private volatile boolean streamingCancelled = false; // 流式输出取消标志
 
     public void setApi(MontoyaApi api) {
         this.api = api;
@@ -132,14 +171,25 @@ public class AgentApiClient {
         }
         initializeChatModel();
     }
-
+    
     /**
-     * 初始化 LangChain4j ChatModel
+     * 根据 apiProvider 选择初始化方法
      */
     private void initializeChatModel() {
+        if (apiProvider == ApiProvider.OPENAI_COMPATIBLE) {
+            initializeOpenAIChatModel();
+        } else {
+        initializeQwenChatModel();
+        }
+    }
+
+    /**
+     * 初始化 LangChain4j QwenChatModel
+     */
+    private void initializeQwenChatModel() {
         if (apiKey == null || apiKey.trim().isEmpty()) {
             if (api != null) {
-                api.logging().logToOutput("[AgentApiClient] 警告: API Key为空，无法初始化ChatModel");
+                logInfo(" 警告: API Key为空，无法初始化ChatModel");
             }
             return;
         }
@@ -180,12 +230,12 @@ public class AgentApiClient {
             
             // 只在第一次初始化时输出详细信息
             if (api != null && isFirstInitialization) {
-                api.logging().logToOutput("[AgentApiClient] 初始化LangChain4j ChatModel");
-                api.logging().logToOutput("[AgentApiClient] 原始API URL: " + apiUrl);
-                //api.logging().logToOutput("[AgentApiClient] 处理后的BaseURL: " + baseUrl);
-                api.logging().logToOutput("[AgentApiClient] Model: " + modelName);
-                api.logging().logToOutput("[AgentApiClient] EnableThinking: " + enableThinking);
-                api.logging().logToOutput("[AgentApiClient] EnableSearch: " + enableSearch);
+                logInfo(" 初始化LangChain4j ChatModel");
+                logInfo(" 原始API URL: " + apiUrl);
+                //logInfo(" 处理后的BaseURL: " + baseUrl);
+                logInfo(" Model: " + modelName);
+                logInfo(" EnableThinking: " + enableThinking);
+                logInfo(" EnableSearch: " + enableSearch);
             }
 
             // 使用类成员变量的值，确保每次初始化都使用最新的用户设置
@@ -226,15 +276,367 @@ public class AgentApiClient {
                     
             // 只在第一次初始化时输出成功信息
             if (api != null && isFirstInitialization) {
-                api.logging().logToOutput("[AgentApiClient] LangChain4j ChatModel初始化成功");
+                logInfo(" LangChain4j ChatModel初始化成功");
                 isFirstInitialization = false; // 标记已完成第一次初始化
             }
         } catch (Exception e) {
             if (api != null) {
-                api.logging().logToError("[AgentApiClient] 初始化ChatModel失败: " + e.getMessage());
+                logError(" 初始化ChatModel失败: " + e.getMessage());
                 //e.printStackTrace();
             }
         }
+    }
+
+
+    /**
+     * 初始化 LangChain4j OpenAI 兼容格式 ChatModel
+     * 参考: https://docs.langchain4j.dev/integrations/language-models/openai-compatible
+     * 
+     * 支持通过 customParameters 透传任意参数到 API，包括：
+     * - OpenAI 标准参数: temperature, top_p, max_tokens, frequency_penalty, presence_penalty, seed, stop
+     * - Ollama 专有参数: format, options, keep_alive, think 等
+     */
+    private void initializeOpenAIChatModel() {
+        if (apiKey == null || apiKey.trim().isEmpty()) {
+            if (api != null) {
+                logInfo(" 警告: API Key为空，无法初始化 OpenAI 兼容 ChatModel");
+            }
+            return;
+        }
+        
+        try {
+            // 解析 baseUrl 和 modelName
+            String baseUrl = this.apiUrl;
+            String modelName = this.model;
+            
+            // 如果 apiUrl 为空，使用默认的 OpenAI 地址
+            if (baseUrl == null || baseUrl.trim().isEmpty()) {
+                baseUrl = "https://api.openai.com/v1";
+            }
+            
+            // 确保 baseUrl 以 /v1 结尾
+            if (!baseUrl.endsWith("/v1") && !baseUrl.endsWith("/v1/")) {
+                if (baseUrl.endsWith("/")) {
+                    baseUrl = baseUrl + "v1";
+                } else {
+                    baseUrl = baseUrl + "/v1";
+            }            
+            }
+            
+            // 如果 model 为空，使用默认模型
+            if (modelName == null || modelName.trim().isEmpty()) {
+                modelName = "gpt-3.5-turbo";
+            }
+            
+            var builder = OpenAiStreamingChatModel.builder()
+                    .baseUrl(baseUrl)
+                    .apiKey(apiKey)
+                    .modelName(modelName)
+                    .temperature(0.7); // 默认温度
+            
+            // 解析并应用自定义参数（使用 customParameters 直接透传到 API）
+            if (customParameters != null && !customParameters.trim().isEmpty()) {
+                try {
+                    java.util.Map<String, Object> customParamsMap = parseJsonToMap(customParameters);
+                    if (!customParamsMap.isEmpty()) {
+                        // 使用 OpenAiChatRequestParameters 的 customParameters 直接透传
+                        // 这样 Ollama 专有参数（format, options, keep_alive, think 等）都能正确传递
+                        dev.langchain4j.model.openai.OpenAiChatRequestParameters requestParams = 
+                            dev.langchain4j.model.openai.OpenAiChatRequestParameters.builder()
+                                .customParameters(customParamsMap)
+                    .build();
+                        builder.defaultRequestParameters(requestParams);
+                        
+                        if (api != null) {
+                            logInfo(" 已设置自定义参数: " + customParamsMap.keySet());
+                        }
+                    }
+                } catch (Exception e) {
+                    if (api != null) {
+                        logError(" 解析自定义参数失败: " + e.getMessage());
+                    }
+                }
+            }
+            
+            this.chatModel = builder.build();
+                    
+            // 只在第一次初始化时输出成功信息
+            if (api != null && isFirstInitialization) {
+                logInfo(" OpenAI 兼容 ChatModel 初始化成功");
+                logInfo(" Base URL: " + baseUrl + ", Model: " + modelName);
+                if (customParameters != null && !customParameters.isEmpty()) {
+                    logInfo(" 自定义参数: " + customParameters);
+                }
+                isFirstInitialization = false;
+            }
+        } catch (Exception e) {
+            if (api != null) {
+                logError(" 初始化 OpenAI 兼容 ChatModel 失败: " + e.getMessage());
+            }
+        }
+    }
+    
+    /**
+     * 将 JSON 字符串解析为 Map（支持嵌套对象和数组）
+     * 用于透传用户自定义参数到 API（如 Ollama 的 format, options, keep_alive, think 等）
+     * 
+     * 支持的格式示例：
+     * - {"format": "json", "keep_alive": "30m", "think": true}
+     * - {"options": {"num_ctx": 8192, "top_k": 50, "min_p": 0.05}}
+     */
+    private java.util.Map<String, Object> parseJsonToMap(String jsonStr) {
+        java.util.Map<String, Object> result = new java.util.LinkedHashMap<>();
+        
+        jsonStr = jsonStr.trim();
+        if (jsonStr.isEmpty()) return result;
+        
+        // 移除外层花括号
+        if (jsonStr.startsWith("{") && jsonStr.endsWith("}")) {
+            jsonStr = jsonStr.substring(1, jsonStr.length() - 1).trim();
+        }
+        
+        if (jsonStr.isEmpty()) return result;
+        
+        // 状态机解析：支持嵌套对象和数组
+        int i = 0;
+        while (i < jsonStr.length()) {
+            // 跳过空白
+            while (i < jsonStr.length() && Character.isWhitespace(jsonStr.charAt(i))) i++;
+            if (i >= jsonStr.length()) break;
+            
+            // 解析 key
+            String key = parseJsonKey(jsonStr, i);
+            if (key == null) break;
+            i += countKeyLength(jsonStr, i);
+            
+            // 跳过空白和冒号
+            while (i < jsonStr.length() && (Character.isWhitespace(jsonStr.charAt(i)) || jsonStr.charAt(i) == ':')) i++;
+            if (i >= jsonStr.length()) break;
+            
+            // 解析 value
+            ParseResult pr = parseJsonValue(jsonStr, i);
+            if (pr != null) {
+                result.put(key, pr.value);
+                i = pr.endIndex;
+            } else {
+                break;
+            }
+            
+            // 跳过逗号和空白
+            while (i < jsonStr.length() && (Character.isWhitespace(jsonStr.charAt(i)) || jsonStr.charAt(i) == ',')) i++;
+        }
+        
+        return result;
+    }
+    
+    /**
+     * 解析结果类，包含值和结束位置
+     */
+    private static class ParseResult {
+        Object value;
+        int endIndex;
+        ParseResult(Object value, int endIndex) {
+            this.value = value;
+            this.endIndex = endIndex;
+        }
+    }
+    
+    /**
+     * 解析 JSON key（去除引号）
+     */
+    private String parseJsonKey(String json, int start) {
+        if (start >= json.length()) return null;
+        char c = json.charAt(start);
+        
+        // 带引号的 key
+        if (c == '"' || c == '\'') {
+            char quote = c;
+            int end = start + 1;
+            while (end < json.length() && json.charAt(end) != quote) {
+                if (json.charAt(end) == '\\' && end + 1 < json.length()) end++;
+                end++;
+            }
+            return json.substring(start + 1, end);
+        }
+        
+        // 不带引号的 key
+        int end = start;
+        while (end < json.length()) {
+            char ch = json.charAt(end);
+            if (ch == ':' || Character.isWhitespace(ch)) break;
+            end++;
+        }
+        return json.substring(start, end);
+    }
+    
+    /**
+     * 计算 key 在 JSON 中的长度（包含引号）
+     */
+    private int countKeyLength(String json, int start) {
+        if (start >= json.length()) return 0;
+        char c = json.charAt(start);
+        
+        if (c == '"' || c == '\'') {
+            char quote = c;
+            int end = start + 1;
+            while (end < json.length() && json.charAt(end) != quote) {
+                if (json.charAt(end) == '\\' && end + 1 < json.length()) end++;
+                end++;
+            }
+            return end - start + 1; // +1 for closing quote
+        }
+        
+        int end = start;
+        while (end < json.length()) {
+            char ch = json.charAt(end);
+            if (ch == ':' || Character.isWhitespace(ch)) break;
+            end++;
+        }
+        return end - start;
+    }
+    
+    /**
+     * 解析 JSON 值（支持字符串、数字、布尔、null、对象、数组）
+     */
+    private ParseResult parseJsonValue(String json, int start) {
+        if (start >= json.length()) return null;
+        
+        char c = json.charAt(start);
+        
+        // 字符串
+        if (c == '"' || c == '\'') {
+            char quote = c;
+            int end = start + 1;
+            StringBuilder sb = new StringBuilder();
+            while (end < json.length()) {
+                char ch = json.charAt(end);
+                if (ch == '\\' && end + 1 < json.length()) {
+                    sb.append(json.charAt(end + 1));
+                    end += 2;
+                } else if (ch == quote) {
+                    end++;
+                    break;
+                } else {
+                    sb.append(ch);
+                    end++;
+                }
+            }
+            return new ParseResult(sb.toString(), end);
+        }
+        
+        // 对象
+        if (c == '{') {
+            int braceCount = 1;
+            int end = start + 1;
+            while (end < json.length() && braceCount > 0) {
+                char ch = json.charAt(end);
+                if (ch == '{') braceCount++;
+                else if (ch == '}') braceCount--;
+                else if (ch == '"' || ch == '\'') {
+                    // 跳过字符串内容
+                    char quote = ch;
+                    end++;
+                    while (end < json.length() && json.charAt(end) != quote) {
+                        if (json.charAt(end) == '\\' && end + 1 < json.length()) end++;
+                        end++;
+                    }
+                }
+                end++;
+            }
+            String objStr = json.substring(start, end);
+            java.util.Map<String, Object> nestedMap = parseJsonToMap(objStr);
+            return new ParseResult(nestedMap, end);
+        }
+        
+        // 数组
+        if (c == '[') {
+            int bracketCount = 1;
+            int end = start + 1;
+            while (end < json.length() && bracketCount > 0) {
+                char ch = json.charAt(end);
+                if (ch == '[') bracketCount++;
+                else if (ch == ']') bracketCount--;
+                else if (ch == '"' || ch == '\'') {
+                    char quote = ch;
+                    end++;
+                    while (end < json.length() && json.charAt(end) != quote) {
+                        if (json.charAt(end) == '\\' && end + 1 < json.length()) end++;
+                        end++;
+            }
+        }
+                end++;
+            }
+            String arrContent = json.substring(start + 1, end - 1).trim();
+            java.util.List<Object> list = parseJsonArray(arrContent);
+            return new ParseResult(list, end);
+        }
+        
+        // 数字、布尔、null
+        int end = start;
+        while (end < json.length()) {
+            char ch = json.charAt(end);
+            if (ch == ',' || ch == '}' || ch == ']' || Character.isWhitespace(ch)) break;
+            end++;
+        }
+        String valueStr = json.substring(start, end).trim();
+        
+        // 布尔值
+        if ("true".equalsIgnoreCase(valueStr)) {
+            return new ParseResult(true, end);
+        }
+        if ("false".equalsIgnoreCase(valueStr)) {
+            return new ParseResult(false, end);
+        }
+        
+        // null
+        if ("null".equalsIgnoreCase(valueStr)) {
+            return new ParseResult(null, end);
+        }
+        
+        // 数字
+        try {
+            if (valueStr.contains(".")) {
+                return new ParseResult(Double.parseDouble(valueStr), end);
+            } else {
+                // 尝试 Long，如果溢出则用 Double
+                try {
+                    return new ParseResult(Long.parseLong(valueStr), end);
+                } catch (NumberFormatException e) {
+                    return new ParseResult(Double.parseDouble(valueStr), end);
+                }
+            }
+        } catch (NumberFormatException e) {
+            // 作为字符串返回
+            return new ParseResult(valueStr, end);
+        }
+    }
+    
+    /**
+     * 解析 JSON 数组
+     */
+    private java.util.List<Object> parseJsonArray(String arrContent) {
+        java.util.List<Object> list = new java.util.ArrayList<>();
+        if (arrContent.isEmpty()) return list;
+        
+        int i = 0;
+        while (i < arrContent.length()) {
+            // 跳过空白
+            while (i < arrContent.length() && Character.isWhitespace(arrContent.charAt(i))) i++;
+            if (i >= arrContent.length()) break;
+            
+            ParseResult pr = parseJsonValue(arrContent, i);
+            if (pr != null) {
+                list.add(pr.value);
+                i = pr.endIndex;
+            } else {
+                break;
+            }
+            
+            // 跳过逗号和空白
+            while (i < arrContent.length() && (Character.isWhitespace(arrContent.charAt(i)) || arrContent.charAt(i) == ',')) i++;
+        }
+        
+        return list;
     }
     
     /**
@@ -264,12 +666,12 @@ public class AgentApiClient {
             chatModel = null;
         }
         // 重新初始化 chatModel，使用最新的 enableSearch 和 enableThinking 值
-        initializeChatModel();
+        initializeChatModel(); // 根据 apiProvider 选择初始化方法
         // Assistant 会在下次调用 ensureAssistantInitialized() 时自动创建
         // 新的 Assistant 会使用同一个 chatMemory 实例，从而保留上下文记忆
         if (api != null) {
-            api.logging().logToOutput("[AgentApiClient] ChatModel 已更新，使用新的配置 (EnableThinking: " + enableThinking + ", EnableSearch: " + enableSearch + ")");
-            api.logging().logToOutput("[AgentApiClient] Assistant 将在下次使用时使用新的 ChatModel（保留上下文记忆）");
+            logInfo(" ChatModel 已更新，使用新的配置 (Provider: " + apiProvider + ", EnableThinking: " + enableThinking + ", EnableSearch: " + enableSearch + ")");
+            logInfo(" Assistant 将在下次使用时使用新的 ChatModel（保留上下文记忆）");
         }
     }
     
@@ -288,10 +690,10 @@ public class AgentApiClient {
                 chatModel = null;
             }
             // 重新初始化，使用最新的 enableSearch 和 enableThinking 值
-            initializeChatModel();
+            initializeChatModel(); // 根据 apiProvider 选择初始化方法
             needsReinitialization = false;
             if (api != null) {
-                api.logging().logToOutput("[AgentApiClient] ChatModel 已重新初始化，使用新的配置 (EnableThinking: " + enableThinking + ", EnableSearch: " + enableSearch + ")");
+                logInfo(" ChatModel 已重新初始化，使用新的配置 (Provider: " + apiProvider + ", EnableThinking: " + enableThinking + ", EnableSearch: " + enableSearch + ")");
             }
         }
     }
@@ -338,11 +740,11 @@ public class AgentApiClient {
                             mappingConfig = McpToolMappingConfig.createBurpMapping();
                             
                             if (api != null) {
-                                api.logging().logToOutput("[AgentApiClient] Burp MCP 客户端已添加，地址: " + burpMcpUrlValue);
+                                logInfo(" Burp MCP 客户端已添加，地址: " + burpMcpUrlValue);
                             }
                         } catch (Exception e) {
                             if (api != null) {
-                                api.logging().logToOutput("[AgentApiClient] Burp MCP 客户端初始化失败: " + e.getMessage());
+                                logInfo(" Burp MCP 客户端初始化失败: " + e.getMessage());
                             }
                         }
                     }
@@ -357,11 +759,11 @@ public class AgentApiClient {
                             allFilterTools.addAll(List.of("index_document","query_document"));
                             
                             if (api != null) {
-                                api.logging().logToOutput("[AgentApiClient] RAG MCP 客户端已添加，知识库路径: " + ragMcpDocumentsPath);
+                                logInfo(" RAG MCP 客户端已添加，知识库路径: " + ragMcpDocumentsPath);
                             }
                         } catch (Exception e) {
                             if (api != null) {
-                                api.logging().logToOutput("[AgentApiClient] RAG MCP 客户端初始化失败: " + e.getMessage());
+                                logInfo(" RAG MCP 客户端初始化失败: " + e.getMessage());
                             }
                         }
                     }
@@ -377,11 +779,11 @@ public class AgentApiClient {
                             // 如需过滤，可在此添加: allFilterTools.addAll(List.of(...));
                             
                             if (api != null) {
-                                api.logging().logToOutput("[AgentApiClient] Chrome MCP 客户端已添加，地址: " + chromeMcpUrl);
+                                logInfo(" Chrome MCP 客户端已添加，地址: " + chromeMcpUrl);
                             }
                         } catch (Exception e) {
                             if (api != null) {
-                                api.logging().logToOutput("[AgentApiClient] Chrome MCP 客户端初始化失败: " + e.getMessage());
+                                logInfo(" Chrome MCP 客户端初始化失败: " + e.getMessage());
                             }
                         }
                     }
@@ -399,13 +801,13 @@ public class AgentApiClient {
                         );
 
                     if (api != null) {
-                            api.logging().logToOutput("[AgentApiClient] MCP 工具提供者初始化成功，已添加 " + allMcpClients.size() + " 个 MCP 客户端");
+                            logInfo(" MCP 工具提供者初始化成功，已添加 " + allMcpClients.size() + " 个 MCP 客户端");
                         }
                     }
                 } catch (Exception e) {
                     // MCP 服务器不可用，不影响主要功能
                     if (api != null) {
-                        api.logging().logToOutput("[AgentApiClient] MCP 工具提供者初始化失败: " + e.getMessage());
+                        logInfo(" MCP 工具提供者初始化失败: " + e.getMessage());
                     }
                     mcpToolProvider = null;
                 }
@@ -421,7 +823,7 @@ public class AgentApiClient {
                         .maxMessages(20) // 增加到20条，保留更多上下文
                         .build();
                 if (api != null) {
-                    api.logging().logToOutput("[AgentApiClient] ChatMemory 已创建（最大20条消息）");
+                    logInfo(" ChatMemory 已创建（最大20条消息）");
                 }
             }
             
@@ -437,7 +839,7 @@ public class AgentApiClient {
             if (mcpToolProvider != null) {
                 assistantBuilder.toolProvider(mcpToolProvider);
                 if (api != null) {
-                    api.logging().logToOutput("[AgentApiClient] 已启用 MCP 工具支持");
+                    logInfo(" 已启用 MCP 工具支持");
                 }
             }
             
@@ -446,7 +848,7 @@ public class AgentApiClient {
                 // 1. BurpExtTools - Intruder 批量 payload 支持（始终添加）
                 com.ai.analyzer.Tools.BurpExtTools burpExtTools = new com.ai.analyzer.Tools.BurpExtTools(api);
                 assistantBuilder.tools(burpExtTools);
-                api.logging().logToOutput("[AgentApiClient] 已添加 BurpExtTools");
+                logInfo(" 已添加 BurpExtTools");
                 
                 // 2. FileSystemAccessTools - 让 AI 主动探索知识库（按需添加）
                 if (enableFileSystemAccess) {
@@ -454,10 +856,19 @@ public class AgentApiClient {
                         com.ai.analyzer.Tools.FileSystemAccessTools fsaTools = new com.ai.analyzer.Tools.FileSystemAccessTools(api);
                         fsaTools.setAllowedRootPath(ragMcpDocumentsPath);
                         assistantBuilder.tools(fsaTools);
-                        api.logging().logToOutput("[AgentApiClient] 已添加 FileSystemAccessTools (知识库: " + ragMcpDocumentsPath + ")");
+                        logInfo(" 已添加 FileSystemAccessTools (知识库: " + ragMcpDocumentsPath + ")");
                     } else {
-                        api.logging().logToOutput("[AgentApiClient] 警告: 直接查找知识库已启用但未配置路径");
+                        logInfo(" 警告: 直接查找知识库已启用但未配置路径");
                     }
+                }
+                
+                // 3. SkillToolsProvider - 用户自定义的可执行工具（按需添加）
+                if (enableSkills && skillManager != null && skillManager.hasEnabledTools()) {
+                    if (skillToolsProvider == null) {
+                        skillToolsProvider = new SkillToolsProvider(skillManager, api);
+                    }
+                    assistantBuilder.tools(skillToolsProvider);
+                    logInfo(" 已添加 SkillToolsProvider (工具数: " + skillManager.getEnabledToolCount() + ")");
                 }
             }
             
@@ -468,16 +879,16 @@ public class AgentApiClient {
             //     if (ragContentManager != null && ragContentManager.isReady()) {
             //         assistantBuilder.contentRetriever(ragContentManager.getContentRetriever());
             //         if (api != null) {
-            //             api.logging().logToOutput("[AgentApiClient] 已启用 RAG 内容检索");
+            //             logInfo(" 已启用 RAG 内容检索");
             //         }
             //     } else if (api != null) {
-            //         api.logging().logToOutput("[AgentApiClient] 警告: RAG 已启用但内容检索器尚未就绪");
+            //         logInfo(" 警告: RAG 已启用但内容检索器尚未就绪");
             //     }
             // }
             
             assistant = assistantBuilder.build();
             if (api != null) {
-                api.logging().logToOutput("[AgentApiClient] Assistant 实例已创建（共享实例，保持上下文）");
+                logInfo(" Assistant 实例已创建（共享实例，保持上下文）");
             }
         }
     }
@@ -488,16 +899,19 @@ public class AgentApiClient {
      * 使用 LangChain4j 推荐的 StreamingHandle.cancel() 方法
      */
     public void cancelStreaming() {
+        // 首先设置取消标志，确保回调中不再处理新的数据
+        streamingCancelled = true;
+        
         // 优先使用 StreamingHandle 取消（推荐方式）
         if (streamingHandle != null) {
             try {
                 streamingHandle.cancel();
                 if (api != null) {
-                    api.logging().logToOutput("[AgentApiClient] 流式输出已取消（通过 StreamingHandle）");
+                    logInfo(" 流式输出已取消（通过 StreamingHandle）");
                 }
             } catch (Exception e) {
                 if (api != null) {
-                    api.logging().logToError("[AgentApiClient] 取消流式输出失败: " + e.getMessage());
+                    logError(" 取消流式输出失败: " + e.getMessage());
                 }
             } finally {
                 streamingHandle = null;
@@ -507,13 +921,20 @@ public class AgentApiClient {
             // 兼容旧逻辑：如果 StreamingHandle 不可用，清空 TokenStream 引用
             currentTokenStream = null;
             if (api != null) {
-                api.logging().logToOutput("[AgentApiClient] TokenStream 引用已清空");
+                logInfo(" TokenStream 引用已清空");
             }
         } else {
             if (api != null) {
-                api.logging().logToOutput("[AgentApiClient] 没有活动的流式输出可以取消");
+                logInfo(" 没有活动的流式输出可以取消");
             }
         }
+    }
+    
+    /**
+     * 检查流式输出是否已被取消
+     */
+    public boolean isStreamingCancelled() {
+        return streamingCancelled;
     }
     
     /**
@@ -533,7 +954,7 @@ public class AgentApiClient {
             chatMemory = null; // 创建新的 ChatMemory 以清空记忆
         }
         if (api != null) {
-            api.logging().logToOutput("[AgentApiClient] 聊天上下文已清空");
+            logInfo(" 聊天上下文已清空");
         }
     }
     
@@ -649,6 +1070,28 @@ public class AgentApiClient {
         }
     }
     
+    /**
+     * 设置 API 提供者（DashScope 或 OpenAI 兼容）
+     * 如果提供者改变，需要重新初始化 ChatModel
+     */
+    public void setApiProvider(ApiProvider apiProvider) {
+        if (this.apiProvider != apiProvider) {
+            this.apiProvider = apiProvider;
+            // 立即重新创建 chatModel 和 Assistant
+            updateChatModelAndAssistant();
+            if (api != null) {
+                logInfo(" API 提供者已切换为: " + apiProvider.getDisplayName());
+            }
+        }
+    }
+    
+    /**
+     * 设置 API 提供者（通过字符串）
+     */
+    public void setApiProvider(String providerName) {
+        setApiProvider(ApiProvider.fromDisplayName(providerName));
+    }
+    
     public void setEnableThinking(boolean enableThinking) {
         // 只有值真的改变时才更新
         if (this.enableThinking != enableThinking) {
@@ -668,6 +1111,25 @@ public class AgentApiClient {
     }
     
     /**
+     * 设置自定义参数（JSON 格式）
+     * 用于配置模型专有参数，如 top_p, max_tokens, frequency_penalty 等
+     * 示例: {"top_p": 0.9, "max_tokens": 4096}
+     */
+    public void setCustomParameters(String customParameters) {
+        if (customParameters == null) {
+            customParameters = "";
+        }
+        if (!this.customParameters.equals(customParameters.trim())) {
+            this.customParameters = customParameters.trim();
+            // 自定义参数改变，需要重新初始化 ChatModel
+            reinitializeChatModel();
+            if (api != null && !customParameters.isEmpty()) {
+                logInfo(" 自定义参数已更新: " + customParameters);
+            }
+        }
+    }
+    
+    /**
      * 设置是否启用 MCP 工具调用
      * 如果启用状态改变，需要重新初始化 Assistant
      */
@@ -678,10 +1140,12 @@ public class AgentApiClient {
             if (!enableMcp) {
                 mcpToolProvider = null;
             }
-            // 清空 Assistant，下次使用时重新创建（会根据新的 enableMcp 状态决定是否启用 MCP）
+            // 清空 Assistant 和 ChatMemory，下次使用时重新创建
+            // 清空 ChatMemory 是因为旧的上下文中可能包含 MCP 工具的提示词
             assistant = null;
+            chatMemory = null; // 清空聊天记忆，避免 LLM 从旧上下文中"幻觉"出工具调用
             if (api != null) {
-                api.logging().logToOutput("[AgentApiClient] MCP 工具调用已" + (enableMcp ? "启用" : "禁用"));
+                logInfo(" MCP 工具调用已" + (enableMcp ? "启用" : "禁用") + "，已清空聊天记忆");
             }
         }
     }
@@ -701,7 +1165,7 @@ public class AgentApiClient {
                 mcpToolProvider = null;
                 assistant = null; // 清空 Assistant，下次使用时重新创建
                 if (api != null) {
-                    api.logging().logToOutput("[AgentApiClient] Burp MCP 地址已更新: " + mcpUrl);
+                    logInfo(" Burp MCP 地址已更新: " + mcpUrl);
                 }
             }
         }
@@ -717,7 +1181,7 @@ public class AgentApiClient {
             // 清空 Assistant，下次使用时重新创建
             assistant = null;
             if (api != null) {
-                api.logging().logToOutput("[AgentApiClient] RAG MCP 工具调用已" + (enableRagMcp ? "启用" : "禁用"));
+                logInfo(" RAG MCP 工具调用已" + (enableRagMcp ? "启用" : "禁用"));
             }
         }
     }
@@ -735,7 +1199,7 @@ public class AgentApiClient {
             if (enableRagMcp) {
                 assistant = null; // 清空 Assistant，下次使用时重新创建
             if (api != null) {
-                    api.logging().logToOutput("[AgentApiClient] RAG MCP 地址已更新: " + ragMcpUrl);
+                    logInfo(" RAG MCP 地址已更新: " + ragMcpUrl);
                 }
             }
         }
@@ -754,7 +1218,7 @@ public class AgentApiClient {
             if (enableRagMcp) {
                 assistant = null; // 清空 Assistant，下次使用时重新创建
                 if (api != null) {
-                    api.logging().logToOutput("[AgentApiClient] RAG MCP 文档路径已更新: " + ragMcpDocumentsPath);
+                    logInfo(" RAG MCP 文档路径已更新: " + ragMcpDocumentsPath);
                 }
             }
         }
@@ -770,7 +1234,7 @@ public class AgentApiClient {
             // 清空 Assistant，下次使用时重新创建
             assistant = null;
             if (api != null) {
-                api.logging().logToOutput("[AgentApiClient] Chrome MCP 工具调用已" + (enableChromeMcp ? "启用" : "禁用"));
+                logInfo(" Chrome MCP 工具调用已" + (enableChromeMcp ? "启用" : "禁用"));
             }
         }
     }
@@ -788,7 +1252,7 @@ public class AgentApiClient {
             if (enableChromeMcp) {
                 assistant = null; // 清空 Assistant，下次使用时重新创建
                 if (api != null) {
-                    api.logging().logToOutput("[AgentApiClient] Chrome MCP 地址已更新: " + chromeMcpUrl);
+                    logInfo(" Chrome MCP 地址已更新: " + chromeMcpUrl);
                 }
             }
         }
@@ -804,9 +1268,63 @@ public class AgentApiClient {
             // 清空 Assistant，下次使用时重新创建
             assistant = null;
             if (api != null) {
-                api.logging().logToOutput("[AgentApiClient] 直接查找知识库已" + (enableFileSystemAccess ? "启用" : "禁用"));
+                logInfo(" 直接查找知识库已" + (enableFileSystemAccess ? "启用" : "禁用"));
             }
         }
+    }
+    
+    /**
+     * 设置是否启用 Skills
+     * 启用后 AI 会加载用户自定义的技能指令
+     */
+    public void setEnableSkills(boolean enableSkills) {
+        if (this.enableSkills != enableSkills) {
+            this.enableSkills = enableSkills;
+            // 清空 Assistant，下次使用时重新创建（系统提示词会更新）
+            assistant = null;
+            if (api != null) {
+                logInfo(" Skills 已" + (enableSkills ? "启用" : "禁用"));
+            }
+        }
+    }
+    
+    /**
+     * 获取 SkillManager 实例
+     * 如果不存在则创建
+     */
+    public SkillManager getSkillManager() {
+        if (skillManager == null) {
+            skillManager = new SkillManager();
+            if (api != null) {
+                skillManager.setApi(api);
+            }
+        }
+        return skillManager;
+    }
+    
+    /**
+     * 设置 Skills 目录路径并重新加载
+     */
+    public void setSkillsDirectoryPath(String path) {
+        getSkillManager().setSkillsDirectoryPath(path);
+        // 重新创建 SkillToolsProvider
+        skillToolsProvider = null;
+        // 清空 Assistant，下次使用时重新创建
+        assistant = null;
+        if (api != null) {
+            logInfo(" Skills 目录已设置: " + path);
+        }
+    }
+    
+    /**
+     * 刷新 Skills（重新加载）
+     */
+    public void refreshSkills() {
+        getSkillManager().loadSkills();
+        // 重新创建 SkillToolsProvider
+        skillToolsProvider = null;
+        // 清空 Assistant，下次使用时重新创建
+        assistant = null;
     }
     
     // ========== 默认 RAG 功能暂时禁用，改用 RAG MCP ==========
@@ -826,7 +1344,7 @@ public class AgentApiClient {
     //         // 清空 Assistant，下次使用时重新创建
     //         assistant = null;
     //         if (api != null) {
-    //             api.logging().logToOutput("[AgentApiClient] RAG 已" + (enableRag ? "启用" : "禁用"));
+    //             logInfo(" RAG 已" + (enableRag ? "启用" : "禁用"));
     //         }
     //     }
     // }
@@ -845,7 +1363,7 @@ public class AgentApiClient {
     //             loadRagContent();
     //             assistant = null;
     //             if (api != null) {
-    //                 api.logging().logToOutput("[AgentApiClient] RAG 文档路径已更新: " + ragDocumentsPath);
+    //                 logInfo(" RAG 文档路径已更新: " + ragDocumentsPath);
     //             }
     //         } else {
     //             clearRagContentManager();
@@ -878,6 +1396,57 @@ public class AgentApiClient {
     // ========== 默认 RAG 功能暂时禁用结束 ==========
 
 
+    // ========== 新架构：使用 ChatSessionManager ==========
+    
+    /**
+     * 流式分析请求 - 新架构版本
+     * 数据写入 ChatSessionManager，由监听器模式通知 UI
+     * 
+     * @param requestResponse HTTP 请求响应对象
+     * @param userPrompt 用户提示词
+     */
+    public void analyzeWithSessionManager(HttpRequestResponse requestResponse, String userPrompt) throws Exception {
+        ChatSessionManager manager = ChatSessionManager.getInstance();
+        
+        // 开始流式响应
+        manager.startStreaming();
+        
+        try {
+            // 使用回调方式，将数据写入 ChatSessionManager
+            analyzeRequestStream(requestResponse, userPrompt, chunk -> {
+                manager.appendChunk(chunk);
+            });
+            
+            // 完成响应
+            manager.finalizeResponse();
+        } catch (Exception e) {
+            manager.reportError(e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * 流式分析请求 - 新架构版本（纯文本）
+     */
+    public void analyzeWithSessionManager(String httpRequest, String userPrompt) throws Exception {
+        ChatSessionManager manager = ChatSessionManager.getInstance();
+        
+        manager.startStreaming();
+        
+        try {
+            analyzeRequestStream(httpRequest, userPrompt, chunk -> {
+                manager.appendChunk(chunk);
+            });
+            
+            manager.finalizeResponse();
+        } catch (Exception e) {
+            manager.reportError(e.getMessage());
+            throw e;
+        }
+    }
+    
+    // ========== 旧架构：使用回调（保持向后兼容） ==========
+
     // 流式输出方法 - 使用LangChain4j（带请求来源检测）
     public void analyzeRequestStream(HttpRequestResponse requestResponse, String userPrompt, Consumer<String> onChunk) throws Exception {
         // 检测请求来源
@@ -886,7 +1455,7 @@ public class AgentApiClient {
             sourceInfo = RequestSourceDetector.detectSource(api, requestResponse);
         }
 
-        api.logging().logToOutput("[AgentApiClient] 请求来源: " + sourceInfo.format());
+        logInfo(" 请求来源: " + sourceInfo.format());
         
         // 格式化 HTTP 内容
         String httpRequest = requestResponse != null 
@@ -929,28 +1498,71 @@ public class AgentApiClient {
 
         while (retryCount < maxRetries) {
             try {
+                logInfo("开始第 " + (retryCount + 1) + " 次尝试...");
+                
+                // 重置取消标志（开始新的流式输出）
+                streamingCancelled = false;
+                
                 // 确保 Assistant 实例已创建（共享实例，保持上下文）
                 // 系统消息通过 systemMessageProvider 自动注入
+                logInfo("正在初始化 Assistant...");
                 ensureAssistantInitialized();
+                logInfo("Assistant 初始化完成");
                 
                 // 只传入用户消息，系统消息由 systemMessageProvider 提供
                 List<ChatMessage> messages = List.of(userMessage);
 
                 // 使用共享的 Assistant 实例
                 Assistant assistant = this.assistant;
+                if (assistant == null) {
+                    logError("Assistant 实例为 null！");
+                    throw new Exception("Assistant 实例未初始化");
+                }
+                logInfo("准备调用 Assistant.chat()... (assistant != null)");
 
                 // 调用流式聊天方法
-                TokenStream tokenStream = assistant.chat(messages);
+                TokenStream tokenStream;
+                try {
+                    logInfo("正在调用 assistant.chat(messages)...");
+                    tokenStream = assistant.chat(messages);
+                    logInfo("TokenStream 已创建: " + (tokenStream != null ? "非null" : "null"));
+                } catch (Throwable t) {
+                    // 捕获所有 Throwable（包括 Error）
+                    logError("创建 TokenStream 失败: " + t.getClass().getName() + " - " + t.getMessage());
+                    if (api != null) {
+                        logError(" assistant.chat() 异常堆栈:");
+                        t.printStackTrace();
+                        for (StackTraceElement ste : t.getStackTrace()) {
+                            logError("  at " + ste.toString());
+                        }
+                        if (t.getCause() != null) {
+                            logError("Caused by: " + t.getCause().getClass().getName() + " - " + t.getCause().getMessage());
+                        }
+                    }
+                    throw new Exception("创建 TokenStream 失败: " + t.getMessage(), t);
+                }
+                
+                if (tokenStream == null) {
+                    logError("TokenStream 为 null！");
+                    throw new Exception("assistant.chat() 返回了 null");
+                }
+                
                 CompletableFuture<ChatResponse> futureResponse = new CompletableFuture<>();
                 
                 // 保存当前 TokenStream 引用，以便可以取消
                 currentTokenStream = tokenStream;
 
                 // 使用链式调用配置所有回调
+                logInfo("配置 TokenStream 回调...");
                 tokenStream
                     // 处理部分响应（流式输出的主要内容）+ 获取 StreamingHandle 用于取消
                     .onPartialResponseWithContext((PartialResponse partialResponse, 
                             PartialResponseContext context) -> {
+                        try {
+                            // 检查是否已取消
+                            if (streamingCancelled) {
+                                return; // 已取消，不再处理新数据
+                            }
                         // 保存 StreamingHandle 引用，用于后续取消操作
                         if (streamingHandle == null && context != null) {
                             streamingHandle = context.streamingHandle();
@@ -959,23 +1571,43 @@ public class AgentApiClient {
                         if (text != null && !text.isEmpty()) {
                             onChunk.accept(text);
                         contentChunkCount[0]++;
+                            }
+                        } catch (Exception e) {
+                            logError("onPartialResponse 回调异常: " + e.getMessage());
+                            e.printStackTrace();
                     }
                     })
                     // 可选：处理思考过程
                     .onPartialThinking((PartialThinking partialThinking) -> {
+                        try {
+                            if (streamingCancelled) return; // 已取消
                         logDebug("Thinking: " + partialThinking);
+                        } catch (Exception e) {
+                            logError("onPartialThinking 回调异常: " + e.getMessage());
+                        }
                     })
                     // 注意：移除了 onIntermediateResponse 回调，避免可能的重复输出问题
                     // 工具执行前的回调
                     .beforeToolExecution((BeforeToolExecution beforeToolExecution) -> {
+                        try {
+                            if (streamingCancelled) return; // 已取消
                         logDebug("Before tool execution: " + beforeToolExecution);
                         String toolInfoHtml = ToolExecutionFormatter.formatToolExecutionInfo(beforeToolExecution);
+                            logDebug("工具信息HTML长度: " + (toolInfoHtml != null ? toolInfoHtml.length() : 0));
                         if (toolInfoHtml != null && !toolInfoHtml.isEmpty()) {
+                                logDebug("准备调用 onChunk.accept()...");
                             onChunk.accept(toolInfoHtml);
+                                logDebug("onChunk.accept() 调用完成");
+                            }
+                        } catch (Exception e) {
+                            logError("beforeToolExecution 回调异常: " + e.getMessage());
+                            e.printStackTrace();
                         }
                     })
                     // 工具执行后的回调
                     .onToolExecuted((ToolExecution toolExecution) -> {
+                        try {
+                            if (streamingCancelled) return; // 已取消
                         logDebug("Tool executed: " + toolExecution);
                         // 工具执行完成后，AI 会基于工具结果继续输出
                         // 这些输出会通过 onIntermediateResponse 和 onPartialResponse 传递
@@ -985,15 +1617,23 @@ public class AgentApiClient {
                             if (resultText != null && !resultText.isEmpty()) {
                                 logDebug("Tool execution result: " + (resultText.length() > 200 ? resultText.substring(0, 200) + "..." : resultText));
                             }
+                            }
+                        } catch (Exception e) {
+                            logError("onToolExecuted 回调异常: " + e.getMessage());
                         }
                     })
                     // 完成响应时
                     .onCompleteResponse((ChatResponse response) -> {
+                        try {
                         logInfo("流式输出完成，共收到 " + contentChunkCount[0] + " 个chunk");
                         futureResponse.complete(response);
+                        } catch (Exception e) {
+                            logError("onCompleteResponse 回调异常: " + e.getMessage());
+                        }
                     })
                     // 错误处理
                     .onError((Throwable error) -> {
+                        try {
                         String errorMsg = error.getMessage();
                         String fullErrorMsg = errorMsg;
                         
@@ -1002,7 +1642,7 @@ public class AgentApiClient {
                             fullErrorMsg = errorMsg + " | Cause: " + error.getCause().getMessage();
                             // 打印堆栈跟踪
                             if (api != null) {
-                                api.logging().logToError("[AgentApiClient] TokenStream错误堆栈:");
+                                    logError(" TokenStream错误堆栈:");
                                 error.printStackTrace();
                             }
                         }
@@ -1017,8 +1657,22 @@ public class AgentApiClient {
                         }
                         
                         futureResponse.completeExceptionally(error);
-                    })
-                    .start();
+                        } catch (Exception e) {
+                            logError("onError 回调异常: " + e.getMessage());
+                            futureResponse.completeExceptionally(error);
+                        }
+                    });
+                
+                // 启动流式输出
+                logInfo("启动 TokenStream...");
+                try {
+                    tokenStream.start();
+                    logInfo("TokenStream 已启动，等待响应...");
+                } catch (Exception e) {
+                    logError("TokenStream.start() 失败: " + e.getMessage());
+                    e.printStackTrace();
+                    throw e;
+                }
 
                 // 等待流式输出完成（最多等待10分钟，因为工具执行可能需要较长时间）
                 ChatResponse finalResponse = futureResponse.get(10, java.util.concurrent.TimeUnit.MINUTES);
@@ -1057,7 +1711,7 @@ public class AgentApiClient {
                     logError("异常消息: " + cause.getMessage());
                     // 打印堆栈跟踪
                     if (api != null) {
-                        api.logging().logToError("[AgentApiClient] ExecutionException堆栈:");
+                        logError(" ExecutionException堆栈:");
                         cause.printStackTrace();
                     }
                 }
@@ -1096,7 +1750,7 @@ public class AgentApiClient {
                 logError("请求异常: " + e.getClass().getSimpleName() + " - " + e.getMessage());
                 // 打印堆栈跟踪
                 if (api != null) {
-                    api.logging().logToError("[AgentApiClient] 异常堆栈:");
+                    logError(" 异常堆栈:");
                     e.printStackTrace();
                 }
             }
@@ -1181,12 +1835,21 @@ public class AgentApiClient {
         prompt.append("3. 评估风险等级：只报告中危及以上的风险\n");
         prompt.append("4. 根据风险自动决定是否需要测试验证\n\n");
         
+        // 只有启用工具时才添加执行流程
+        if (enableMcp) {
         prompt.append("## 第三步：执行流程（发现可测试风险时）\n");
         prompt.append("1. 构造测试 payload（基于识别的风险类型）\n");
         prompt.append("2. 使用 `send_http1_request` 发送测试请求\n");
         prompt.append("3. 分析响应，判断漏洞是否存在\n");
         prompt.append("4. **必须**将测试请求发送到 `create_repeater_tab`，便于用户手动验证\n");
         prompt.append("5. 如需批量测试，额外发送到 `send_to_intruder`\n\n");
+        } else {
+            prompt.append("## 第三步：建议（发现风险时）\n");
+            prompt.append("由于工具未启用，请向用户提供：\n");
+            prompt.append("1. 详细的漏洞分析报告\n");
+            prompt.append("2. 测试建议和 POC 代码\n");
+            prompt.append("3. 修复建议\n\n");
+        }
         
         // ========== 工具使用规则 ==========
         if (enableMcp || enableRagMcp || enableChromeMcp) {
@@ -1262,12 +1925,18 @@ public class AgentApiClient {
         prompt.append("| 工具 | 使用场景 | 说明 |\n");
         prompt.append("|------|---------|------|\n");
         prompt.append("| `BurpExtTools_send_to_intruder` | 需要批量 fuzz 测试时 | AI 生成 payloads 并发送到 Intruder |\n\n");
-        prompt.append("**使用方法**：\n");
-        prompt.append("1. 在请求中用 `§` 标记插入点，例如：`id=§1§`\n");
-        prompt.append("2. 提供 payloads 数组，例如：`[\"' OR '1'='1\", \"admin'--\"]`\n");
-        prompt.append("3. AI 会自动将请求发送到 Intruder 并配置 payloads\n");
-        prompt.append("4. 用户只需在 Intruder 中选择 \"Extension-generated\" → \"AI Analyzer Payloads\" 即可开始攻击\n\n");
-        prompt.append("**适用场景**：SQL 注入批量测试、XSS fuzz、参数枚举、弱口令爆破等\n\n");
+        prompt.append("**关键参数**：\n");
+        prompt.append("- `requestContent`: 原始 HTTP 请求（不需要添加任何标记）\n");
+        prompt.append("- `targetParameters`: **【重要】要注入的参数名列表**，如 `[\"id\", \"name\"]`，工具会自动找到并标记\n");
+        prompt.append("- `payloads`: AI 生成的 payload 列表，如 `[\"' OR '1'='1\", \"<script>alert(1)</script>\"]`\n\n");
+        prompt.append("**使用示例**：\n");
+        prompt.append("```\n");
+        prompt.append("targetParameters: [\"userId\", \"search\"]\n");
+        prompt.append("payloads: [\"' OR '1'='1\", \"1' AND SLEEP(5)--\", \"<script>alert(1)</script>\"]\n");
+        prompt.append("```\n");
+        prompt.append("工具会自动在请求中找到 userId 和 search 参数，并将它们标记为插入点。\n\n");
+        prompt.append("**支持的参数位置**：URL 查询参数、POST 表单、JSON 字段、Cookie 值\n\n");
+        prompt.append("**适用场景**：SQL 注入、XSS、命令注入、目录遍历等批量测试\n\n");
         
         // FileSystemAccessTools - 按需启用
         if (enableFileSystemAccess && ragMcpDocumentsPath != null && !ragMcpDocumentsPath.isEmpty()) {
@@ -1328,26 +1997,60 @@ public class AgentApiClient {
         prompt.append("1. **先分析后执行**：收到请求先分析风险，发现高危风险时主动测试验证\n");
         prompt.append("2. **解释决策**：调用工具前简要说明原因\n");
         prompt.append("3. **报告结果**：工具执行后清晰报告发现\n");
-        prompt.append("4. **保持上下文**：记住之前的对话和测试结果\n");
+        prompt.append("4. **保持上下文**：记住之前的对话和测试结果\n\n");
+        
+        // ========== 用户自定义 Skills ==========
+        if (enableSkills && skillManager != null && skillManager.hasEnabledSkills()) {
+            String skillsPrompt = skillManager.buildSkillsPrompt();
+            if (skillsPrompt != null && !skillsPrompt.isEmpty()) {
+                prompt.append(skillsPrompt);
+            }
+            
+            // 如果有可执行工具，添加工具使用说明
+            if (skillManager.hasEnabledTools()) {
+                prompt.append("### Skill 可执行工具\n\n");
+                prompt.append("用户定义了可执行的命令行工具，你可以通过以下方式调用：\n\n");
+                prompt.append("1. **查看可用工具**: 调用 `list_skill_tools` 查看所有可用的 Skill 工具及其参数\n");
+                prompt.append("2. **执行工具**: 调用 `execute_skill_tool(toolName, parameters)` 执行指定工具\n");
+                prompt.append("   - `toolName`: 工具名称（从 list_skill_tools 获取）\n");
+                prompt.append("   - `parameters`: JSON 格式的参数，如 `{\"target\": \"192.168.1.1\"}`\n\n");
+                prompt.append("**注意事项**:\n");
+                prompt.append("- 执行前先了解工具的功能和参数要求\n");
+                prompt.append("- 某些工具可能需要较长的执行时间\n");
+                prompt.append("- 分析工具输出结果并向用户报告发现\n\n");
+            }
+        }
         
         return prompt.toString();
     }
     
     private void logInfo(String message) {
-        if (api != null) {
-            api.logging().logToOutput("[AgentApiClient] " + message);
+        try {
+            if (api != null && api.logging() != null) {
+                api.logging().logToOutput("[AgentApiClient]" + message);
+            }
+        } catch (Exception e) {
+            // Burp API 可能在组件销毁后不可用，忽略日志错误
         }
     }
 
     private void logError(String message) {
-        if (api != null) {
-            api.logging().logToError("[AgentApiClient] " + message);
+        try {
+            if (api != null && api.logging() != null) {
+                api.logging().logToError("[AgentApiClient]" + message);
+            }
+        } catch (Exception e) {
+            // Burp API 可能在组件销毁后不可用，忽略日志错误
         }
     }
 
     private void logDebug(String message) {
-        if (api != null) {
-            api.logging().logToOutput("[AgentApiClient] " + message);
+        try {
+            if (api != null && api.logging() != null) {
+                api.logging().logToOutput("[AgentApiClient]" + message);
+            }
+        } catch (Exception e) {
+            // Burp API 可能在组件销毁后不可用，忽略日志错误
         }
     }
     
