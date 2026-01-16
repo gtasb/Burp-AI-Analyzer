@@ -844,11 +844,12 @@ public class AgentApiClient {
             
             // ========== 添加扩展工具 ==========
             if (api != null) {
-                // 1. BurpExtTools - Intruder 批量 payload 支持（始终添加）
-                com.ai.analyzer.Tools.BurpExtTools burpExtTools = new com.ai.analyzer.Tools.BurpExtTools(api);
-                assistantBuilder.tools(burpExtTools);
-                api.logging().logToOutput("[AgentApiClient] 已添加 BurpExtTools");
-                
+                if (enableMcp){
+                    // 1. BurpExtTools - Intruder 批量 payload 支持（始终添加）
+                    com.ai.analyzer.Tools.BurpExtTools burpExtTools = new com.ai.analyzer.Tools.BurpExtTools(api);
+                    assistantBuilder.tools(burpExtTools);
+                    api.logging().logToOutput("[AgentApiClient] 已添加 BurpExtTools");
+                }
                 // 2. FileSystemAccessTools - 让 AI 主动探索知识库（按需添加）
                 if (enableFileSystemAccess) {
                     if (ragMcpDocumentsPath != null && !ragMcpDocumentsPath.isEmpty()) {
@@ -1786,24 +1787,25 @@ public class AgentApiClient {
         // ========== 扩展工具 ==========
         prompt.append("## 扩展工具\n\n");
         
-        // BurpExtTools - 始终可用
-        prompt.append("### Intruder 批量测试工具\n");
-        prompt.append("| 工具 | 使用场景 | 说明 |\n");
-        prompt.append("|------|---------|------|\n");
-        prompt.append("| `BurpExtTools_send_to_intruder` | 需要批量 fuzz 测试时 | AI 生成 payloads 并发送到 Intruder |\n\n");
-        prompt.append("**关键参数**：\n");
-        prompt.append("- `requestContent`: 原始 HTTP 请求（不需要添加任何标记）\n");
-        prompt.append("- `targetParameters`: **【重要】要注入的参数名列表**，如 `[\"id\", \"name\"]`，工具会自动找到并标记\n");
-        prompt.append("- `payloads`: AI 生成的 payload 列表，如 `[\"' OR '1'='1\", \"<script>alert(1)</script>\"]`\n\n");
-        prompt.append("**使用示例**：\n");
-        prompt.append("```\n");
-        prompt.append("targetParameters: [\"userId\", \"search\"]\n");
-        prompt.append("payloads: [\"' OR '1'='1\", \"1' AND SLEEP(5)--\", \"<script>alert(1)</script>\"]\n");
-        prompt.append("```\n");
-        prompt.append("工具会自动在请求中找到 userId 和 search 参数，并将它们标记为插入点。\n\n");
-        prompt.append("**支持的参数位置**：URL 查询参数、POST 表单、JSON 字段、Cookie 值\n\n");
-        prompt.append("**适用场景**：SQL 注入、XSS、命令注入、目录遍历等批量测试\n\n");
-        
+        if (enableMcp){
+            // BurpExtTools 按需启用
+            prompt.append("### Intruder 批量测试工具\n");
+            prompt.append("| 工具 | 使用场景 | 说明 |\n");
+            prompt.append("|------|---------|------|\n");
+            prompt.append("| `BurpExtTools_send_to_intruder` | 需要批量 fuzz 测试时 | AI 生成 payloads 并发送到 Intruder |\n\n");
+            prompt.append("**关键参数**：\n");
+            prompt.append("- `requestContent`: 原始 HTTP 请求（不需要添加任何标记）\n");
+            prompt.append("- `targetParameters`: **【重要】要注入的参数名列表**，如 `[\"id\", \"name\"]`，工具会自动找到并标记\n");
+            prompt.append("- `payloads`: AI 生成的 payload 列表，如 `[\"' OR '1'='1\", \"<script>alert(1)</script>\"]`\n\n");
+            prompt.append("**使用示例**：\n");
+            prompt.append("```\n");
+            prompt.append("targetParameters: [\"userId\", \"search\"]\n");
+            prompt.append("payloads: [\"' OR '1'='1\", \"1' AND SLEEP(5)--\", \"<script>alert(1)</script>\"]\n");
+            prompt.append("```\n");
+            prompt.append("工具会自动在请求中找到 userId 和 search 参数，并将它们标记为插入点。\n\n");
+            prompt.append("**支持的参数位置**：URL 查询参数、POST 表单、JSON 字段、Cookie 值\n\n");
+            prompt.append("**适用场景**：SQL 注入、XSS、命令注入、目录遍历等批量测试\n\n");
+        }
         // FileSystemAccessTools - 按需启用
         if (enableFileSystemAccess && ragMcpDocumentsPath != null && !ragMcpDocumentsPath.isEmpty()) {
             prompt.append("### 知识库探索工具\n");
