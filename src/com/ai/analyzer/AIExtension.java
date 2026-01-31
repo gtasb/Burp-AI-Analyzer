@@ -35,5 +35,6 @@ public class AIExtension implements BurpExtension {
         api.logging().logToOutput("2. 在任意HTTP请求上右键选择'发送到AI分析'");
         api.logging().logToOutput("3. 填写分析提示词，点击'开始分析'按钮");
         api.logging().logToOutput("4. 在Proxy和Repeater中使用AI Side Panel进行实时对话");
+        api.logging().logToOutput("5. 启用被动扫描功能自动从HTTP History获取流量进行AI安全分析");
     }
 }

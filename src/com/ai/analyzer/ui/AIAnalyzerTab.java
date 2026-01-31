@@ -1,9 +1,12 @@
 package com.ai.analyzer.ui;
 
 import burp.api.montoya.MontoyaApi;
+import burp.api.montoya.http.message.HttpRequestResponse;
 import com.ai.analyzer.api.AgentApiClient;
 import com.ai.analyzer.model.PluginSettings;
 import com.ai.analyzer.model.RequestData;
+import com.ai.analyzer.pscan.PassiveScanManager;
+import com.ai.analyzer.pscan.ScanResult;
 import com.ai.analyzer.skills.Skill;
 import com.ai.analyzer.skills.SkillManager;
 import com.ai.analyzer.utils.MarkdownRenderer;
@@ -14,6 +17,7 @@ import javax.swing.*;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.event.ListSelectionEvent;
+import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
 import javax.swing.table.TableCellRenderer;
 import javax.swing.text.BadLocationException;
@@ -24,6 +28,7 @@ import java.io.FileOutputStream;
 import java.io.ObjectOutputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import burp.api.montoya.http.message.requests.HttpRequest;
 import burp.api.montoya.http.message.responses.HttpResponse;
@@ -64,8 +69,9 @@ public class AIAnalyzerTab extends JPanel {
     private JButton refreshSkillsButton;
     private JButton createExampleSkillButton;
     
-    private JTable requestListTable;
-    private DefaultTableModel requestTableModel;
+    // 已替换为 passiveScanTable 和 passiveScanTableModel
+    // private JTable requestListTable;
+    // private DefaultTableModel requestTableModel;
     private HttpRequestEditor requestEditor;
     private HttpResponseEditor responseEditor;
     private JTextArea userPromptArea;
@@ -84,6 +90,18 @@ public class AIAnalyzerTab extends JPanel {
     private boolean isAnalyzing = false;
     private SwingWorker<Void, String> currentWorker;
     // private ToolExecutor toolExecutor;
+    
+    // 被动扫描相关组件
+    private PassiveScanManager passiveScanManager;
+    private JCheckBox enablePassiveScanCheckBox;
+    private JSpinner threadCountSpinner;
+    private JButton startPassiveScanButton;
+    private JButton stopPassiveScanButton;
+    private JLabel passiveScanStatusLabel;
+    private JProgressBar passiveScanProgressBar;
+    private JTable passiveScanTable;
+    private DefaultTableModel passiveScanTableModel;
+    private JTextPane passiveScanResultPane;
 
     public AIAnalyzerTab(MontoyaApi api) {
         this.api = api;
@@ -139,16 +157,20 @@ public class AIAnalyzerTab extends JPanel {
     
     /**
      * 创建主功能面板（第一个标签页）
-     * 包含请求列表、请求/响应显示、分析结果等
+     * 包含被动扫描控制、请求列表（带风险等级）、请求/响应显示、分析结果等
      */
     private JPanel createMainPanel() {
         JPanel mainPanel = new JPanel(new BorderLayout(10, 10));
         
+        // 顶部：被动扫描控制面板
+        JPanel passiveScanControlPanel = createPassiveScanControlPanel();
+        mainPanel.add(passiveScanControlPanel, BorderLayout.NORTH);
+        
         // 创建主分割面板
         JSplitPane mainSplitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
-        mainSplitPane.setDividerLocation(400);
+        mainSplitPane.setDividerLocation(450);
 
-        // 左侧面板：请求列表
+        // 左侧面板：请求列表（包含风险等级列）
         JPanel requestListPanel = createRequestListPanel();
         mainSplitPane.setLeftComponent(requestListPanel);
         
@@ -171,7 +193,212 @@ public class AIAnalyzerTab extends JPanel {
         JPanel buttonPanel = createButtonPanel();
         mainPanel.add(buttonPanel, BorderLayout.SOUTH);
         
+        // 初始化被动扫描管理器
+        initializePassiveScanManager();
+        
         return mainPanel;
+    }
+    
+    /**
+     * 创建被动扫描控制面板
+     */
+    private JPanel createPassiveScanControlPanel() {
+        JPanel panel = new JPanel(new BorderLayout(5, 5));
+        panel.setBorder(BorderFactory.createTitledBorder("被动扫描"));
+        
+        // 左侧：控制选项
+        JPanel controlPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
+        
+        enablePassiveScanCheckBox = new JCheckBox("启用被动扫描", false);
+        enablePassiveScanCheckBox.setToolTipText("启用后可以自动从HTTP History获取流量进行AI安全扫描");
+        enablePassiveScanCheckBox.addActionListener(e -> {
+            boolean enabled = enablePassiveScanCheckBox.isSelected();
+            threadCountSpinner.setEnabled(enabled);
+            startPassiveScanButton.setEnabled(enabled && !passiveScanManager.isRunning());
+            stopPassiveScanButton.setEnabled(enabled && passiveScanManager.isRunning());
+        });
+        controlPanel.add(enablePassiveScanCheckBox);
+        
+        controlPanel.add(new JLabel("线程数:"));
+        SpinnerModel spinnerModel = new SpinnerNumberModel(3, 1, 10, 1);
+        threadCountSpinner = new JSpinner(spinnerModel);
+        threadCountSpinner.setEnabled(false);
+        threadCountSpinner.setPreferredSize(new Dimension(60, 25));
+        threadCountSpinner.addChangeListener(e -> {
+            if (passiveScanManager != null) {
+                passiveScanManager.setThreadCount((Integer) threadCountSpinner.getValue());
+            }
+        });
+        controlPanel.add(threadCountSpinner);
+        
+        startPassiveScanButton = new JButton("开始扫描");
+        startPassiveScanButton.setEnabled(false);
+        startPassiveScanButton.addActionListener(e -> startPassiveScan());
+        controlPanel.add(startPassiveScanButton);
+        
+        stopPassiveScanButton = new JButton("停止扫描");
+        stopPassiveScanButton.setEnabled(false);
+        stopPassiveScanButton.addActionListener(e -> stopPassiveScan());
+        controlPanel.add(stopPassiveScanButton);
+        
+        JButton clearPassiveScanButton = new JButton("清空结果");
+        clearPassiveScanButton.addActionListener(e -> clearPassiveScanResults());
+        controlPanel.add(clearPassiveScanButton);
+        
+        panel.add(controlPanel, BorderLayout.WEST);
+        
+        // 右侧：状态和进度
+        JPanel statusPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 5));
+        
+        passiveScanStatusLabel = new JLabel("就绪");
+        passiveScanStatusLabel.setPreferredSize(new Dimension(200, 20));
+        statusPanel.add(passiveScanStatusLabel);
+        
+        passiveScanProgressBar = new JProgressBar(0, 100);
+        passiveScanProgressBar.setPreferredSize(new Dimension(150, 20));
+        passiveScanProgressBar.setStringPainted(true);
+        statusPanel.add(passiveScanProgressBar);
+        
+        panel.add(statusPanel, BorderLayout.EAST);
+        
+        return panel;
+    }
+    
+    /**
+     * 初始化被动扫描管理器
+     */
+    private void initializePassiveScanManager() {
+        passiveScanManager = new PassiveScanManager(api);
+        passiveScanManager.setThreadCount((Integer) threadCountSpinner.getValue());
+        
+        // 设置结果更新回调
+        passiveScanManager.setOnResultUpdated(result -> {
+            SwingUtilities.invokeLater(() -> updatePassiveScanTable(result));
+        });
+        
+        // 设置状态变化回调
+        passiveScanManager.setOnStatusChanged(status -> {
+            SwingUtilities.invokeLater(() -> {
+                passiveScanStatusLabel.setText(status);
+                boolean running = passiveScanManager.isRunning();
+                startPassiveScanButton.setEnabled(enablePassiveScanCheckBox.isSelected() && !running);
+                stopPassiveScanButton.setEnabled(enablePassiveScanCheckBox.isSelected() && running);
+            });
+        });
+        
+        // 设置进度变化回调
+        passiveScanManager.setOnProgressChanged(progress -> {
+            SwingUtilities.invokeLater(() -> passiveScanProgressBar.setValue(progress));
+        });
+        
+        // 同步API配置到被动扫描客户端
+        syncApiConfigToPassiveScan();
+    }
+    
+    /**
+     * 同步API配置到被动扫描客户端
+     * 包括所有基础配置和MCP相关配置
+     */
+    private void syncApiConfigToPassiveScan() {
+        if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
+            com.ai.analyzer.pscan.PassiveScanApiClient psClient = passiveScanManager.getApiClient();
+            
+            // 基础 API 配置
+            psClient.setApiUrl(apiClient.getApiUrl());
+            psClient.setApiKey(apiClient.getApiKey());
+            psClient.setModel(apiClient.getModel());
+            psClient.setApiProvider(apiClient.getApiProvider().getDisplayName());
+            psClient.setEnableThinking(apiClient.isEnableThinking());
+            psClient.setEnableSearch(apiClient.isEnableSearch());
+            
+            // MCP 配置（关键：这些配置决定了工具是否可用）
+            psClient.setEnableMcp(apiClient.isEnableMcp());
+            psClient.setBurpMcpUrl(apiClient.getBurpMcpUrl());
+            
+            // RAG MCP 配置
+            psClient.setEnableRagMcp(apiClient.isEnableRagMcp());
+            psClient.setRagMcpUrl(apiClient.getRagMcpUrl());
+            psClient.setRagMcpDocumentsPath(apiClient.getRagMcpDocumentsPath());
+            
+            // Chrome MCP 配置
+            psClient.setEnableChromeMcp(apiClient.isEnableChromeMcp());
+            psClient.setChromeMcpUrl(apiClient.getChromeMcpUrl());
+            
+            // 文件系统访问配置
+            psClient.setEnableFileSystemAccess(apiClient.isEnableFileSystemAccess());
+            
+            api.logging().logToOutput("[AIAnalyzerTab] 已同步所有配置到被动扫描客户端");
+            api.logging().logToOutput("[AIAnalyzerTab] MCP配置 - EnableMcp: " + apiClient.isEnableMcp() + 
+                                     ", EnableRagMcp: " + apiClient.isEnableRagMcp() + 
+                                     ", EnableChromeMcp: " + apiClient.isEnableChromeMcp());
+        }
+    }
+    
+    /**
+     * 开始被动扫描
+     */
+    private void startPassiveScan() {
+        if (!enablePassiveScanCheckBox.isSelected()) {
+            return;
+        }
+        
+        // 同步最新的API配置
+        syncApiConfigToPassiveScan();
+        
+        // 开始扫描（生产者-消费者模型）
+        passiveScanManager.startPassiveScan();
+    }
+    
+    /**
+     * 停止被动扫描
+     */
+    private void stopPassiveScan() {
+        passiveScanManager.stopPassiveScan();
+    }
+    
+    /**
+     * 清空被动扫描结果
+     */
+    private void clearPassiveScanResults() {
+        passiveScanManager.clearResults();
+        passiveScanTableModel.setRowCount(0);
+        passiveScanProgressBar.setValue(0);
+        passiveScanStatusLabel.setText("就绪");
+    }
+    
+    /**
+     * 更新被动扫描表格
+     */
+    private void updatePassiveScanTable(ScanResult result) {
+        // 查找是否已存在该行
+        int existingRow = -1;
+        for (int i = 0; i < passiveScanTableModel.getRowCount(); i++) {
+            Integer id = (Integer) passiveScanTableModel.getValueAt(i, 0);
+            if (id != null && id == result.getId()) {
+                existingRow = i;
+                break;
+            }
+        }
+        
+        Object[] rowData = {
+            result.getId(),
+            result.getMethod(),
+            result.getShortUrl(),
+            result.getFormattedTimestamp(),
+            result.hasResponse() ? "是" : "否",
+            result.getRiskLevel().getDisplayName(),
+            result.getStatus().getDisplayName()
+        };
+        
+        if (existingRow >= 0) {
+            // 更新现有行
+            for (int i = 0; i < rowData.length; i++) {
+                passiveScanTableModel.setValueAt(rowData[i], existingRow, i);
+            }
+        } else {
+            // 添加新行
+            passiveScanTableModel.addRow(rowData);
+        }
     }
     
     /**
@@ -922,31 +1149,64 @@ public class AIAnalyzerTab extends JPanel {
 
     private JPanel createRequestListPanel() {
         JPanel panel = new JPanel(new BorderLayout());
-        panel.setBorder(BorderFactory.createTitledBorder("请求列表"));
+        panel.setBorder(BorderFactory.createTitledBorder("请求列表（被动扫描）"));
 
-        // 创建表格
-        String[] columnNames = {"ID", "方法", "URL", "时间", "有响应"};
-        requestTableModel = new DefaultTableModel(columnNames, 0) {
+        // 创建带风险等级的表格
+        String[] columnNames = {"ID", "方法", "URL", "时间", "有响应", "风险等级", "状态"};
+        passiveScanTableModel = new DefaultTableModel(columnNames, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
                 return false;
             }
+            
+            @Override
+            public Class<?> getColumnClass(int columnIndex) {
+                if (columnIndex == 0) return Integer.class;
+                return String.class;
+            }
         };
-        requestListTable = new JTable(requestTableModel);
-        requestListTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        requestListTable.getSelectionModel().addListSelectionListener(e -> {
+        
+        passiveScanTable = new JTable(passiveScanTableModel);
+        passiveScanTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        
+        // 设置列宽
+        passiveScanTable.getColumnModel().getColumn(0).setPreferredWidth(40);  // ID
+        passiveScanTable.getColumnModel().getColumn(0).setMaxWidth(50);
+        passiveScanTable.getColumnModel().getColumn(1).setPreferredWidth(50);  // 方法
+        passiveScanTable.getColumnModel().getColumn(1).setMaxWidth(60);
+        passiveScanTable.getColumnModel().getColumn(2).setPreferredWidth(200); // URL
+        passiveScanTable.getColumnModel().getColumn(3).setPreferredWidth(60);  // 时间
+        passiveScanTable.getColumnModel().getColumn(3).setMaxWidth(70);
+        passiveScanTable.getColumnModel().getColumn(4).setPreferredWidth(50);  // 有响应
+        passiveScanTable.getColumnModel().getColumn(4).setMaxWidth(60);
+        passiveScanTable.getColumnModel().getColumn(5).setPreferredWidth(60);  // 风险等级
+        passiveScanTable.getColumnModel().getColumn(5).setMaxWidth(70);
+        passiveScanTable.getColumnModel().getColumn(6).setPreferredWidth(60);  // 状态
+        passiveScanTable.getColumnModel().getColumn(6).setMaxWidth(70);
+        
+        // 设置风险等级列的颜色渲染器
+        passiveScanTable.getColumnModel().getColumn(5).setCellRenderer(new RiskLevelCellRenderer());
+        
+        // 选择行时显示详细信息
+        passiveScanTable.getSelectionModel().addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) {
-                int selectedRow = requestListTable.getSelectedRow();
-                if (selectedRow >= 0 && selectedRow < requestList.size()) {
-                    RequestData requestData = requestList.get(selectedRow);
-                    updateRequestDisplay(requestData);
+                int selectedRow = passiveScanTable.getSelectedRow();
+                if (selectedRow >= 0 && passiveScanManager != null) {
+                    Integer id = (Integer) passiveScanTableModel.getValueAt(selectedRow, 0);
+                    if (id != null) {
+                        ScanResult result = passiveScanManager.getResultById(id);
+                        if (result != null) {
+                            displayScanResult(result);
+                        }
+                    }
                 } else {
                     clearHttpEditors();
+                    resultTextPane.setText("");
                 }
             }
         });
 
-        JScrollPane scrollPane = new JScrollPane(requestListTable);
+        JScrollPane scrollPane = new JScrollPane(passiveScanTable);
         panel.add(scrollPane, BorderLayout.CENTER);
 
         // 请求列表按钮
@@ -954,15 +1214,138 @@ public class AIAnalyzerTab extends JPanel {
         deleteRequestButton = new JButton("删除选中");
         clearAllRequestsButton = new JButton("清空所有");
         
-        deleteRequestButton.addActionListener(e -> deleteSelectedRequest());
-        clearAllRequestsButton.addActionListener(e -> clearAllRequests());
+        deleteRequestButton.addActionListener(e -> deleteSelectedPassiveScanResult());
+        clearAllRequestsButton.addActionListener(e -> clearPassiveScanResults());
 
         requestListButtonPanel.add(deleteRequestButton);
         requestListButtonPanel.add(clearAllRequestsButton);
         
+        // 添加统计信息
+        JButton showStatsButton = new JButton("统计信息");
+        showStatsButton.addActionListener(e -> showPassiveScanStats());
+        requestListButtonPanel.add(showStatsButton);
+        
         panel.add(requestListButtonPanel, BorderLayout.SOUTH);
 
         return panel;
+    }
+    
+    /**
+     * 风险等级单元格渲染器
+     * 根据风险等级显示不同的背景颜色
+     */
+    private class RiskLevelCellRenderer extends DefaultTableCellRenderer {
+        @Override
+        public Component getTableCellRendererComponent(JTable table, Object value,
+                boolean isSelected, boolean hasFocus, int row, int column) {
+            Component c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+            
+            String riskLevel = value != null ? value.toString() : "";
+            
+            if (!isSelected) {
+                switch (riskLevel) {
+                    case "严重":
+                        c.setBackground(new Color(255, 100, 100)); // 红色
+                        c.setForeground(Color.WHITE);
+                        break;
+                    case "高":
+                        c.setBackground(new Color(255, 165, 0)); // 橙色
+                        c.setForeground(Color.BLACK);
+                        break;
+                    case "中":
+                        c.setBackground(new Color(100, 149, 237)); // 蓝色
+                        c.setForeground(Color.WHITE);
+                        break;
+                    case "低":
+                        c.setBackground(new Color(144, 238, 144)); // 浅绿色
+                        c.setForeground(Color.BLACK);
+                        break;
+                    case "信息":
+                        c.setBackground(new Color(200, 200, 200)); // 灰色
+                        c.setForeground(Color.BLACK);
+                        break;
+                    default:
+                        c.setBackground(Color.WHITE);
+                        c.setForeground(Color.BLACK);
+                        break;
+                }
+            }
+            
+            setHorizontalAlignment(CENTER);
+            return c;
+        }
+    }
+    
+    /**
+     * 显示扫描结果详情
+     */
+    private void displayScanResult(ScanResult result) {
+        // 显示HTTP请求/响应
+        HttpRequestResponse requestResponse = result.getRequestResponse();
+        if (requestResponse != null) {
+            if (requestResponse.request() != null) {
+                requestEditor.setRequest(requestResponse.request());
+            } else {
+                requestEditor.setRequest(HttpRequest.httpRequest());
+            }
+            
+            if (requestResponse.response() != null) {
+                responseEditor.setResponse(requestResponse.response());
+            } else {
+                responseEditor.setResponse(HttpResponse.httpResponse());
+            }
+        }
+        
+        // 显示AI分析结果
+        String analysisResult = result.getAnalysisResult();
+        if (analysisResult != null && !analysisResult.isEmpty()) {
+            try {
+                resultTextPane.setText("");
+                MarkdownRenderer.appendMarkdown(resultTextPane, analysisResult);
+            } catch (Exception e) {
+                resultTextPane.setText(analysisResult);
+            }
+        } else if (result.getErrorMessage() != null) {
+            resultTextPane.setText("扫描错误: " + result.getErrorMessage());
+        } else {
+            resultTextPane.setText("状态: " + result.getStatus().getDisplayName());
+        }
+    }
+    
+    /**
+     * 删除选中的被动扫描结果
+     */
+    private void deleteSelectedPassiveScanResult() {
+        int selectedRow = passiveScanTable.getSelectedRow();
+        if (selectedRow >= 0) {
+            passiveScanTableModel.removeRow(selectedRow);
+            clearHttpEditors();
+            resultTextPane.setText("");
+        }
+    }
+    
+    /**
+     * 显示被动扫描统计信息
+     */
+    private void showPassiveScanStats() {
+        if (passiveScanManager == null) return;
+        
+        Map<ScanResult.RiskLevel, Integer> stats = passiveScanManager.getStatsByRiskLevel();
+        
+        StringBuilder sb = new StringBuilder();
+        sb.append("被动扫描统计\n");
+        sb.append("================\n\n");
+        sb.append("总扫描数: ").append(passiveScanManager.getTotalCount()).append("\n");
+        sb.append("已完成: ").append(passiveScanManager.getCompletedCount()).append("\n\n");
+        sb.append("风险分布:\n");
+        sb.append("  严重: ").append(stats.get(ScanResult.RiskLevel.CRITICAL)).append("\n");
+        sb.append("  高: ").append(stats.get(ScanResult.RiskLevel.HIGH)).append("\n");
+        sb.append("  中: ").append(stats.get(ScanResult.RiskLevel.MEDIUM)).append("\n");
+        sb.append("  低: ").append(stats.get(ScanResult.RiskLevel.LOW)).append("\n");
+        sb.append("  信息: ").append(stats.get(ScanResult.RiskLevel.INFO)).append("\n");
+        sb.append("  无: ").append(stats.get(ScanResult.RiskLevel.NONE)).append("\n");
+        
+        JOptionPane.showMessageDialog(this, sb.toString(), "扫描统计", JOptionPane.INFORMATION_MESSAGE);
     }
 
     private JPanel createRequestPanel() {
@@ -1084,16 +1467,31 @@ public class AIAnalyzerTab extends JPanel {
     }
 
     private void refreshRequestTable() {
-        requestTableModel.setRowCount(0);
+        // 使用新的 passiveScanTableModel 刷新手动添加的请求
+        // 注意：不清空整个表，只更新手动添加的请求
         for (RequestData requestData : requestList) {
-            Object[] row = {
-                requestData.getId(),
-                requestData.getMethod(),
-                requestData.getUrl(),
-                requestData.getTimestamp().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")),
-                requestData.hasResponse() ? "是" : "否"
-            };
-            requestTableModel.addRow(row);
+            // 检查是否已存在
+            boolean exists = false;
+            for (int i = 0; i < passiveScanTableModel.getRowCount(); i++) {
+                Integer id = (Integer) passiveScanTableModel.getValueAt(i, 0);
+                if (id != null && id == requestData.getId()) {
+                    exists = true;
+                    break;
+                }
+            }
+            
+            if (!exists) {
+                Object[] row = {
+                    requestData.getId(),
+                    requestData.getMethod(),
+                    requestData.getUrl().length() > 60 ? requestData.getUrl().substring(0, 60) + "..." : requestData.getUrl(),
+                    requestData.getTimestamp().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")),
+                    requestData.hasResponse() ? "是" : "否",
+                    "待分析",  // 风险等级
+                    "手动添加"  // 状态
+                };
+                passiveScanTableModel.addRow(row);
+            }
         }
     }
 
@@ -1104,15 +1502,24 @@ public class AIAnalyzerTab extends JPanel {
 
         // 允许没有选择请求时也能进行分析（自由对话模式）
         RequestData requestData = null;
-        int selectedRow = requestListTable.getSelectedRow();
-        if (selectedRow >= 0 && selectedRow < requestList.size()) {
-            requestData = requestList.get(selectedRow);
+        ScanResult scanResult = null;
+        int selectedRow = passiveScanTable.getSelectedRow();
+        if (selectedRow >= 0) {
+            // 优先从被动扫描结果获取
+            Integer id = (Integer) passiveScanTableModel.getValueAt(selectedRow, 0);
+            if (id != null && passiveScanManager != null) {
+                scanResult = passiveScanManager.getResultById(id);
+            }
+            // 如果是手动添加的请求，尝试从 requestList 获取
+            if (scanResult == null && selectedRow < requestList.size()) {
+                requestData = requestList.get(selectedRow);
+            }
         }
 
         String userPrompt = userPromptArea.getText().trim();
         if (userPrompt.isEmpty()) {
-            if (requestData != null) {
-            userPrompt = "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议";
+            if (requestData != null || scanResult != null) {
+                userPrompt = "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议";
             } else {
                 userPrompt = "";
             }
@@ -1128,7 +1535,7 @@ public class AIAnalyzerTab extends JPanel {
         apiClient.setEnableSearch(enableSearchCheckBox.isSelected());
         
         // 如果没有选择请求，提示用户
-        if (requestData == null) {
+        if (requestData == null && scanResult == null) {
             api.logging().logToOutput("当前没有选择请求，将以自由对话模式进行分析");
         }
 
@@ -1139,6 +1546,7 @@ public class AIAnalyzerTab extends JPanel {
         
         String finalUserPrompt = userPrompt;
         final RequestData finalRequestData = requestData; // 创建final引用供内部类使用
+        final ScanResult finalScanResult = scanResult; // 创建final引用供内部类使用
         currentWorker = new SwingWorker<Void, String>() {
             private StringBuilder fullResponse = new StringBuilder();
             private int aiMessageStartPos = 0; // 记录AI消息开始位置（分析开始时resultTextPane被清空，所以从0开始）
@@ -1147,9 +1555,13 @@ public class AIAnalyzerTab extends JPanel {
             protected Void doInBackground() throws Exception {
                 try {
                     // 构建HTTP内容（使用统一的格式化工具）
-                    String httpContent = finalRequestData != null 
-                        ? finalRequestData.getFullRequestResponse() 
-                        : "";
+                    String httpContent = "";
+                    if (finalScanResult != null && finalScanResult.getRequestResponse() != null) {
+                        httpContent = com.ai.analyzer.utils.HttpFormatter.formatHttpRequestResponse(
+                            finalScanResult.getRequestResponse());
+                    } else if (finalRequestData != null) {
+                        httpContent = finalRequestData.getFullRequestResponse();
+                    }
                     
                     // 在开始分析前清空结果面板
                     SwingUtilities.invokeLater(() -> {
@@ -1351,22 +1763,15 @@ public class AIAnalyzerTab extends JPanel {
     }
 
     private void deleteSelectedRequest() {
-        int selectedRow = requestListTable.getSelectedRow();
-        if (selectedRow >= 0) {
-            requestList.remove(selectedRow);
-            refreshRequestTable();
-            clearHttpEditors();
-            resultTextPane.setText("");
-        }
+        // 已被 deleteSelectedPassiveScanResult() 替代
+        deleteSelectedPassiveScanResult();
     }
 
     private void clearAllRequests() {
+        // 已被 clearPassiveScanResults() 替代
         int result = JOptionPane.showConfirmDialog(this, "确定要清空所有请求吗？", "确认", JOptionPane.YES_NO_OPTION);
         if (result == JOptionPane.YES_OPTION) {
-            requestList.clear();
-            refreshRequestTable();
-            clearHttpEditors();
-            resultTextPane.setText("");
+            clearPassiveScanResults();
         }
     }
 
@@ -1566,19 +1971,48 @@ public class AIAnalyzerTab extends JPanel {
     
     public void addRequestFromHttpRequestResponse(String method, String url, burp.api.montoya.http.message.HttpRequestResponse requestResponse) {
         try {
-            RequestData requestData = new RequestData(
-                nextRequestId++,
-                method,
-                url,
-                requestResponse.request().toString(),
-                requestResponse.response() != null ? requestResponse.response().toString() : null
-            );
-            requestList.add(requestData);
-            refreshRequestTable();
-
-            updateRequestDisplay(requestData);
-
-            api.logging().logToOutput("请求已添加到AI分析器: " + method + " " + url);
+            // 同时添加到 passiveScanManager（用于统一管理和显示）
+            if (passiveScanManager != null) {
+                ScanResult scanResult = passiveScanManager.addRequest(requestResponse);
+                if (scanResult != null) {
+                    // 手动添加的请求标记为 "手动添加" 状态
+                    Object[] rowData = {
+                        scanResult.getId(),
+                        scanResult.getMethod(),
+                        scanResult.getShortUrl(),
+                        scanResult.getFormattedTimestamp(),
+                        scanResult.hasResponse() ? "是" : "否",
+                        "待分析",  // 风险等级
+                        "手动添加"  // 状态
+                    };
+                    passiveScanTableModel.addRow(rowData);
+                    
+                    // 选中新添加的行
+                    int newRow = passiveScanTableModel.getRowCount() - 1;
+                    passiveScanTable.setRowSelectionInterval(newRow, newRow);
+                    passiveScanTable.scrollRectToVisible(passiveScanTable.getCellRect(newRow, 0, true));
+                    
+                    // 显示请求详情
+                    displayScanResult(scanResult);
+                    
+                    api.logging().logToOutput("请求已添加到AI分析器: " + method + " " + url);
+                } else {
+                    api.logging().logToOutput("请求已存在，跳过添加: " + method + " " + url);
+                }
+            } else {
+                // 兼容旧逻辑
+                RequestData requestData = new RequestData(
+                    nextRequestId++,
+                    method,
+                    url,
+                    requestResponse.request().toString(),
+                    requestResponse.response() != null ? requestResponse.response().toString() : null
+                );
+                requestList.add(requestData);
+                refreshRequestTable();
+                updateRequestDisplay(requestData);
+                api.logging().logToOutput("请求已添加到AI分析器: " + method + " " + url);
+            }
         } catch (Exception e) {
             api.logging().logToError("添加请求到AI分析器失败: " + e.getMessage());
         }
