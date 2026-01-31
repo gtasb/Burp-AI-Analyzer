@@ -82,38 +82,52 @@ public class AISidePanelProvider implements HttpRequestEditorProvider, HttpRespo
     }
 
     /**
-     * 生成缓存键：使用 ToolSource 和 EditorMode 组合
-     * 这样可以区分不同工具和不同模式的 Editor
+     * 生成缓存键：使用 ToolType 作为主键（简化策略）
+     * 为每个工具类型（Proxy、Repeater等）只创建一个全局的 Editor 实例
+     * 这样可以避免Burp多次调用时创建重复的Editor，防止侧栏重置
      */
     private String generateCacheKey(EditorCreationContext context) {
         if (context == null) {
+            api.logging().logToOutput("[AISidePanelProvider] WARNING: context为null，使用默认缓存键");
             return "default";
         }
+        
         ToolSource toolSource = context.toolSource();
-        String toolName = "unknown";
-        if (toolSource != null && toolSource.toolType() != null) {
-            toolName = toolSource.toolType().toolName();
+        if (toolSource == null || toolSource.toolType() == null) {
+            api.logging().logToOutput("[AISidePanelProvider] WARNING: toolSource或toolType为null，使用默认缓存键");
+            return "default";
         }
-        String editorMode = context.editorMode() != null ? context.editorMode().name() : "default";
-        return toolName + ":" + editorMode;
+        
+        // 只使用工具类型作为缓存键（例如："Proxy", "Repeater"）
+        // 这样同一个工具的所有调用都会复用同一个Editor实例
+        String toolName = toolSource.toolType().toolName();
+        
+        api.logging().logToOutput("[AISidePanelProvider] 生成缓存键: " + toolName);
+        return toolName;
     }
     
     @Override
     public ExtensionProvidedHttpRequestEditor provideHttpRequestEditor(EditorCreationContext creationContext) {
         String cacheKey = generateCacheKey(creationContext);
         
+        // 记录详细的调用信息（用于调试侧栏重置问题）
+        api.logging().logToOutput("[AISidePanelProvider] provideHttpRequestEditor 被调用，缓存键: " + cacheKey);
+        if (creationContext != null && creationContext.toolSource() != null) {
+            api.logging().logToOutput("  - 工具类型: " + 
+                (creationContext.toolSource().toolType() != null ? creationContext.toolSource().toolType().toolName() : "null"));
+            api.logging().logToOutput("  - 编辑器模式: " + 
+                (creationContext.editorMode() != null ? creationContext.editorMode().name() : "null"));
+        }
+        
         // 检查缓存中是否已存在对应的 Editor
         ExtensionProvidedHttpRequestEditor cachedEditor = requestEditorCache.get(cacheKey);
         if (cachedEditor != null) {
-            // 检查 Editor 是否仍然有效（没有被垃圾回收）
-            // 注意：如果 Burp Suite 强制重建，旧的 Editor 可能已经失效
-            // 但我们可以尝试复用，减少不必要的重建
-            api.logging().logToOutput("[AISidePanelProvider] 复用缓存的 Request Editor: " + cacheKey);
+            api.logging().logToOutput("[AISidePanelProvider] ✓ 复用缓存的 Request Editor: " + cacheKey + " (避免侧栏重置)");
             return cachedEditor;
         }
         
         // 创建新的 Editor 实例
-        api.logging().logToOutput("[AISidePanelProvider] 创建新的 Request Editor: " + cacheKey);
+        api.logging().logToOutput("[AISidePanelProvider] ✗ 创建新的 Request Editor: " + cacheKey);
         AgentApiClient sharedApiClient = getApiClient();
         ChatPanel newChatPanel = new ChatPanel(api, sharedApiClient);
         // 设置analyzerTab引用，使ChatPanel能够动态更新API配置
@@ -124,6 +138,7 @@ public class AISidePanelProvider implements HttpRequestEditorProvider, HttpRespo
         
         // 缓存新创建的 Editor
         requestEditorCache.put(cacheKey, editor);
+        api.logging().logToOutput("[AISidePanelProvider] Editor 已缓存，缓存大小: " + requestEditorCache.size());
         
         return editor;
     }
@@ -132,15 +147,24 @@ public class AISidePanelProvider implements HttpRequestEditorProvider, HttpRespo
     public ExtensionProvidedHttpResponseEditor provideHttpResponseEditor(EditorCreationContext creationContext) {
         String cacheKey = generateCacheKey(creationContext);
         
+        // 记录详细的调用信息（用于调试侧栏重置问题）
+        api.logging().logToOutput("[AISidePanelProvider] provideHttpResponseEditor 被调用，缓存键: " + cacheKey);
+        if (creationContext != null && creationContext.toolSource() != null) {
+            api.logging().logToOutput("  - 工具类型: " + 
+                (creationContext.toolSource().toolType() != null ? creationContext.toolSource().toolType().toolName() : "null"));
+            api.logging().logToOutput("  - 编辑器模式: " + 
+                (creationContext.editorMode() != null ? creationContext.editorMode().name() : "null"));
+        }
+        
         // 检查缓存中是否已存在对应的 Editor
         ExtensionProvidedHttpResponseEditor cachedEditor = responseEditorCache.get(cacheKey);
         if (cachedEditor != null) {
-            api.logging().logToOutput("[AISidePanelProvider] 复用缓存的 Response Editor: " + cacheKey);
+            api.logging().logToOutput("[AISidePanelProvider] ✓ 复用缓存的 Response Editor: " + cacheKey + " (避免侧栏重置)");
             return cachedEditor;
         }
         
         // 创建新的 Editor 实例
-        api.logging().logToOutput("[AISidePanelProvider] 创建新的 Response Editor: " + cacheKey);
+        api.logging().logToOutput("[AISidePanelProvider] ✗ 创建新的 Response Editor: " + cacheKey);
         AgentApiClient sharedApiClient = getApiClient();
         ChatPanel newChatPanel = new ChatPanel(api, sharedApiClient);
         // 设置analyzerTab引用，使ChatPanel能够动态更新API配置
@@ -151,6 +175,7 @@ public class AISidePanelProvider implements HttpRequestEditorProvider, HttpRespo
         
         // 缓存新创建的 Editor
         responseEditorCache.put(cacheKey, editor);
+        api.logging().logToOutput("[AISidePanelProvider] Editor 已缓存，缓存大小: " + responseEditorCache.size());
         
         return editor;
     }

@@ -6,7 +6,7 @@ import java.util.List;
 
 public class PluginSettings implements Serializable {
     
-    private static final long serialVersionUID = 4L; // 版本号更新以支持 customParameters
+    private static final long serialVersionUID = 5L; // 版本号更新以支持前置扫描器配置
     private String apiUrl;
     private String apiKey;
     private String model;
@@ -16,8 +16,7 @@ public class PluginSettings implements Serializable {
     private String userPrompt;
     private boolean enableThinking = true; // 默认启用思考过程
     private boolean enableSearch = true; // 默认启用搜索
-    private boolean enableMcp = false; // 默认禁用 Burp MCP 工具调用
-    private String BurpMcpUrl = "http://127.0.0.1:9876/sse"; // Burp MCP 服务器地址
+    // Burp MCP 已移除（Burp 工具现在直接使用 Montoya API）
     private boolean enableRagMcp = false; // 默认禁用 RAG MCP 工具调用
     private String ragMcpUrl = " "; // RAG MCP 服务器地址
     private String ragMcpDocumentsPath = ""; // RAG MCP 知识库文档路径
@@ -26,6 +25,9 @@ public class PluginSettings implements Serializable {
     private String chromeMcpUrl = " "; // Chrome MCP 服务器地址
     private boolean enableRag = false; // 默认禁用 RAG
     private String ragDocumentsPath = ""; // RAG 文档路径
+    
+    // 前置扫描器配置
+    private boolean enablePreScanFilter = false; // 默认禁用前置扫描器（快速规则匹配）
     
     // Skills 配置
     private boolean enableSkills = false; // 默认禁用 Skills
@@ -40,8 +42,7 @@ public class PluginSettings implements Serializable {
         this.userPrompt = "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议";
         this.enableThinking = true;
         this.enableSearch = true;
-        this.enableMcp = false;
-        this.BurpMcpUrl = "http://127.0.0.1:9876/sse";
+        // Burp MCP 已移除
         this.enableRagMcp = false;
         this.ragMcpUrl = " ";
         this.ragMcpDocumentsPath = "";
@@ -65,12 +66,14 @@ public class PluginSettings implements Serializable {
         this.userPrompt = userPrompt;
         this.enableThinking = enableThinking;
         this.enableSearch = enableSearch;
-        this.enableMcp = false;
-        this.BurpMcpUrl = "http://127.0.0.1:9876/sse";
+        // Burp MCP 已移除
         this.enableRag = false;
         this.ragDocumentsPath = "";
     }
     
+    // 注意：此构造函数已弃用，保留是为了向后兼容旧的配置文件
+    // enableMcp 和 mcpUrl 参数会被忽略（Burp 工具现在直接使用 Montoya API）
+    @Deprecated
     public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt, boolean enableThinking, boolean enableSearch, boolean enableMcp, String mcpUrl) {
         this.apiUrl = apiUrl;
         this.apiKey = apiKey;
@@ -78,12 +81,14 @@ public class PluginSettings implements Serializable {
         this.userPrompt = userPrompt;
         this.enableThinking = enableThinking;
         this.enableSearch = enableSearch;
-        this.enableMcp = enableMcp;
-        this.BurpMcpUrl = mcpUrl;
+        // Burp MCP 参数被忽略
         this.enableRag = false;
         this.ragDocumentsPath = "";
     }
     
+    // 注意：此构造函数已弃用，保留是为了向后兼容旧的配置文件
+    // enableMcp 和 mcpUrl 参数会被忽略
+    @Deprecated
     public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt, boolean enableThinking, boolean enableSearch, boolean enableMcp, String mcpUrl, boolean enableRag, String ragDocumentsPath) {
         this.apiUrl = apiUrl;
         this.apiKey = apiKey;
@@ -91,8 +96,7 @@ public class PluginSettings implements Serializable {
         this.userPrompt = userPrompt;
         this.enableThinking = enableThinking;
         this.enableSearch = enableSearch;
-        this.enableMcp = enableMcp;
-        this.BurpMcpUrl = mcpUrl;
+        // Burp MCP 参数被忽略
         this.enableRagMcp = false;
         this.ragMcpUrl = " ";
         this.enableChromeMcp = false;
@@ -101,6 +105,9 @@ public class PluginSettings implements Serializable {
         this.ragDocumentsPath = ragDocumentsPath;
     }
     
+    // 注意：此构造函数已弃用，保留是为了向后兼容旧的配置文件
+    // enableMcp 和 mcpUrl 参数会被忽略
+    @Deprecated
     public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt, boolean enableThinking, boolean enableSearch, 
             boolean enableMcp, String mcpUrl, boolean enableRagMcp, String ragMcpUrl, boolean enableChromeMcp, String chromeMcpUrl, 
             boolean enableRag, String ragDocumentsPath) {
@@ -110,8 +117,7 @@ public class PluginSettings implements Serializable {
         this.userPrompt = userPrompt;
         this.enableThinking = enableThinking;
         this.enableSearch = enableSearch;
-        this.enableMcp = enableMcp;
-        this.BurpMcpUrl = mcpUrl;
+        // Burp MCP 参数被忽略
         this.enableRagMcp = enableRagMcp;
         this.ragMcpUrl = ragMcpUrl;
         this.ragMcpDocumentsPath = "";
@@ -121,8 +127,9 @@ public class PluginSettings implements Serializable {
         this.ragDocumentsPath = ragDocumentsPath;
     }
     
+    // 新的构造函数（不包含 Burp MCP 参数）
     public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt, boolean enableThinking, boolean enableSearch, 
-            boolean enableMcp, String mcpUrl, boolean enableRagMcp, String ragMcpUrl, String ragMcpDocumentsPath, 
+            boolean enableRagMcp, String ragMcpUrl, String ragMcpDocumentsPath, 
             boolean enableChromeMcp, String chromeMcpUrl, boolean enableRag, String ragDocumentsPath) {
         this.apiUrl = apiUrl;
         this.apiKey = apiKey;
@@ -130,8 +137,7 @@ public class PluginSettings implements Serializable {
         this.userPrompt = userPrompt;
         this.enableThinking = enableThinking;
         this.enableSearch = enableSearch;
-        this.enableMcp = enableMcp;
-        this.BurpMcpUrl = mcpUrl;
+        // Burp MCP 已移除
         this.enableRagMcp = enableRagMcp;
         this.ragMcpUrl = ragMcpUrl;
         this.ragMcpDocumentsPath = ragMcpDocumentsPath;
@@ -139,6 +145,18 @@ public class PluginSettings implements Serializable {
         this.chromeMcpUrl = chromeMcpUrl;
         this.enableRag = enableRag;
         this.ragDocumentsPath = ragDocumentsPath;
+    }
+    
+    // 注意：此构造函数已弃用，保留是为了向后兼容旧的配置文件
+    // enableMcp 和 mcpUrl 参数会被忽略
+    @Deprecated
+    public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt, boolean enableThinking, boolean enableSearch, 
+            boolean enableMcp, String mcpUrl, boolean enableRagMcp, String ragMcpUrl, String ragMcpDocumentsPath, 
+            boolean enableChromeMcp, String chromeMcpUrl, boolean enableRag, String ragDocumentsPath) {
+        // 调用新的构造函数（忽略 Burp MCP 参数）
+        this(apiUrl, apiKey, model, userPrompt, enableThinking, enableSearch,
+             enableRagMcp, ragMcpUrl, ragMcpDocumentsPath,
+             enableChromeMcp, chromeMcpUrl, enableRag, ragDocumentsPath);
     }
     
     // Getters and Setters
@@ -206,21 +224,7 @@ public class PluginSettings implements Serializable {
         this.enableSearch = enableSearch;
     }
     
-    public boolean isEnableMcp() {
-        return enableMcp;
-    }
-    
-    public void setEnableMcp(boolean enableMcp) {
-        this.enableMcp = enableMcp;
-    }
-    
-    public String getMcpUrl() {
-        return BurpMcpUrl;
-    }
-    
-    public void setMcpUrl(String mcpUrl) {
-        this.BurpMcpUrl = mcpUrl;
-    }
+    // Burp MCP getter/setter 已移除（Burp 工具现在直接使用 Montoya API）
     
     public boolean isEnableRagMcp() {
         return enableRagMcp;
@@ -309,5 +313,14 @@ public class PluginSettings implements Serializable {
     
     public void setEnabledSkillNames(List<String> enabledSkillNames) {
         this.enabledSkillNames = enabledSkillNames != null ? enabledSkillNames : new ArrayList<>();
+    }
+    
+    // 前置扫描器配置
+    public boolean isEnablePreScanFilter() {
+        return enablePreScanFilter;
+    }
+    
+    public void setEnablePreScanFilter(boolean enablePreScanFilter) {
+        this.enablePreScanFilter = enablePreScanFilter;
     }
 }

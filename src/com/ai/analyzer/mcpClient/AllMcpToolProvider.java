@@ -30,6 +30,12 @@ public class AllMcpToolProvider {
      * GET /sse 返回 SSE 流，服务器会提供动态的 /message?sessionId=xxx 端点
      * 注意：HttpMcpTransport 虽然已弃用，但这是唯一能连接 Burp MCP Server 的方式
      * 
+     * 【智能超时策略】：
+     * - 默认超时：30 秒（足够处理大多数 HTTP 请求）
+     * - 如果请求格式正确（末尾有空行），通常 5-10 秒内完成
+     * - 如果请求格式错误（缺少末尾空行），服务器会等待直到超时
+     * - 建议：确保 HTTP 请求格式正确，避免不必要的超时
+     * 
      * @param sseUrl MCP 服务器的 SSE 端点 URL
      * @return McpTransport 实例
      */
@@ -39,20 +45,22 @@ public class AllMcpToolProvider {
                 .sseUrl(sseUrl)   // MCP Server SSE endpoint
                 .logRequests(true)  // 在日志中查看请求流量
                 .logResponses(true)  // 在日志中查看响应流量
-                .timeout(java.time.Duration.ofSeconds(60))  // 超时设置为 60 秒，给 HTTP 请求足够时间
+                .timeout(java.time.Duration.ofSeconds(30))  // 超时设置为 30 秒，给 HTTP 请求足够时间（包括慢速响应）
                 .build();
     }
 
 
     /**
      * 创建 Streamable HTTP Transport（用于 Chrome MCP）
+     * 【智能超时策略】：30 秒，与 Burp MCP Transport 保持一致
+     * 
      * @param httpUrl MCP 服务器的 HTTP 端点 URL
      * @return McpTransport 实例
      */
     public McpTransport createStreamableHttpTransport(String httpUrl) {
         return new StreamableHttpMcpTransport.Builder()
                 .url(httpUrl)
-                .timeout(java.time.Duration.ofSeconds(60))  // 超时设置为 60 秒
+                .timeout(java.time.Duration.ofSeconds(30))  // 超时设置为 30 秒，与 Burp MCP 保持一致
                 .build();
     }
     

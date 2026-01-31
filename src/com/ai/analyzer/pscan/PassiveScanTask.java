@@ -106,9 +106,7 @@ public class PassiveScanTask implements Callable<ScanResult> {
     /**
      * 静态方法：检查请求是否应该跳过（供外部调用）
      * 
-     * 跳过以下类型的请求：
-     * 1. 静态资源（css、图片、字体等）
-     * 2. 无参数的简单GET请求（非API路径）
+     * 仅跳过静态资源（css、图片、字体等）
      */
     public static boolean shouldSkipRequest(HttpRequestResponse requestResponse) {
         if (requestResponse == null || requestResponse.request() == null) {
@@ -116,34 +114,15 @@ public class PassiveScanTask implements Callable<ScanResult> {
         }
         
         String url = requestResponse.request().url();
-        String method = requestResponse.request().method();
         
-        if (url == null || method == null) {
+        if (url == null) {
             return true;
         }
         
         String lowerUrl = url.toLowerCase();
         
-        // 跳过静态资源
-        if (isStaticResourceStatic(lowerUrl)) {
-            return true;
-        }
-        
-        // 跳过无参数的GET请求（除非URL看起来像API）
-        if ("GET".equalsIgnoreCase(method)) {
-            boolean hasQueryParams = url.contains("?") && url.indexOf("?") < url.length() - 1;
-            boolean looksLikeApi = lowerUrl.contains("/api/") || 
-                                   lowerUrl.contains("/v1/") || 
-                                   lowerUrl.contains("/v2/") ||
-                                   lowerUrl.contains("/rest/") ||
-                                   lowerUrl.contains("/graphql");
-            
-            if (!hasQueryParams && !looksLikeApi) {
-                return true;
-            }
-        }
-        
-        return false;
+        // 仅跳过静态资源
+        return isStaticResourceStatic(lowerUrl);
     }
     
     /**
@@ -183,10 +162,7 @@ public class PassiveScanTask implements Callable<ScanResult> {
     /**
      * 实例方法：检查是否应该跳过扫描（内部使用）
      * 
-     * 跳过以下类型的请求：
-     * 1. 静态资源（css、图片、字体等）
-     * 2. 无参数的简单GET请求
-     * 3. WebSocket请求
+     * 仅跳过静态资源（css、图片、字体等）
      */
     private boolean shouldSkipScan(HttpRequestResponse requestResponse) {
         if (requestResponse == null || requestResponse.request() == null) {
@@ -194,42 +170,15 @@ public class PassiveScanTask implements Callable<ScanResult> {
         }
         
         String url = requestResponse.request().url();
-        String method = requestResponse.request().method();
         
-        if (url == null || method == null) {
+        if (url == null) {
             return true;
         }
         
         String lowerUrl = url.toLowerCase();
         
-        // 跳过静态资源
-        if (isStaticResource(lowerUrl)) {
-            return true;
-        }
-        
-        // 跳过无参数的GET请求（除非URL看起来像API）
-        if ("GET".equalsIgnoreCase(method)) {
-            boolean hasQueryParams = url.contains("?") && url.indexOf("?") < url.length() - 1;
-            boolean looksLikeApi = lowerUrl.contains("/api/") || 
-                                   lowerUrl.contains("/v1/") || 
-                                   lowerUrl.contains("/v2/") ||
-                                   lowerUrl.contains("/rest/") ||
-                                   lowerUrl.contains("/graphql");
-            
-            if (!hasQueryParams && !looksLikeApi) {
-                // 检查响应是否包含敏感信息
-                if (requestResponse.response() != null) {
-                    String responseBody = requestResponse.response().bodyToString();
-                    if (responseBody != null && !containsSensitivePatterns(responseBody)) {
-                        return true;
-                    }
-                } else {
-                    return true;
-                }
-            }
-        }
-        
-        return false;
+        // 仅跳过静态资源
+        return isStaticResource(lowerUrl);
     }
     
     /**
@@ -265,35 +214,6 @@ public class PassiveScanTask implements Callable<ScanResult> {
         
         for (String staticPath : staticPaths) {
             if (url.contains(staticPath)) {
-                return true;
-            }
-        }
-        
-        return false;
-    }
-    
-    /**
-     * 检查响应是否包含敏感模式（用于决定是否扫描无参数GET请求）
-     */
-    private boolean containsSensitivePatterns(String content) {
-        if (content == null || content.length() < 50) {
-            return false;
-        }
-        
-        String lower = content.toLowerCase();
-        
-        // 敏感关键词
-        String[] sensitivePatterns = {
-            "password", "passwd", "secret", "token", "api_key", "apikey",
-            "private_key", "privatekey", "access_token", "refresh_token",
-            "session", "auth", "credential", "admin", "root",
-            "database", "mysql", "postgresql", "mongodb",
-            "aws_", "azure_", "gcp_", "s3://", "jdbc:",
-            "internal", "debug", "trace", "stack", "exception"
-        };
-        
-        for (String pattern : sensitivePatterns) {
-            if (lower.contains(pattern)) {
                 return true;
             }
         }

@@ -6,7 +6,11 @@ import com.ai.analyzer.Agent.Assistant;
 import com.ai.analyzer.mcpClient.AllMcpToolProvider;
 import com.ai.analyzer.mcpClient.McpToolMappingConfig;
 import com.ai.analyzer.model.PluginSettings;
+import com.ai.analyzer.Tools.BurpTools;
 import com.ai.analyzer.utils.HttpFormatter;
+import com.ai.analyzer.rulesMatch.PreScanFilterManager;
+import com.ai.analyzer.rulesMatch.PreScanFilter;
+import com.ai.analyzer.rulesMatch.ScanMatch;
 import dev.langchain4j.community.model.dashscope.QwenChatRequestParameters;
 import dev.langchain4j.community.model.dashscope.QwenStreamingChatModel;
 import dev.langchain4j.data.message.ChatMessage;
@@ -96,15 +100,15 @@ public class PassiveScanApiClient {
     // Burp API引用
     private MontoyaApi api;
     
+    // 前置扫描过滤器管理器
+    private PreScanFilterManager preScanFilterManager;
+    
     // 功能开关
     @Getter
     private boolean enableThinking = false;
     @Getter
     private boolean enableSearch = false;
-    @Getter
-    private boolean enableMcp = false;
-    @Getter
-    private String BurpMcpUrl = "http://127.0.0.1:9876/sse";
+    // Burp MCP 已移除（Burp 工具现在直接使用 Montoya API）
     @Getter
     private boolean enableRagMcp = false;
     @Getter
@@ -196,8 +200,7 @@ public class PassiveScanApiClient {
         this.enableThinking = settings.isEnableThinking();
         this.enableSearch = settings.isEnableSearch();
         this.apiProvider = ApiProvider.fromDisplayName(settings.getApiProvider());
-        this.enableMcp = settings.isEnableMcp();
-        this.BurpMcpUrl = settings.getMcpUrl();
+        // Burp MCP 已移除（Burp 工具现在直接使用 Montoya API）
         this.enableRagMcp = settings.isEnableRagMcp();
         this.ragMcpUrl = settings.getRagMcpUrl();
         this.ragMcpDocumentsPath = settings.getRagMcpDocumentsPath();
@@ -262,32 +265,7 @@ public class PassiveScanApiClient {
         }
     }
     
-    public void setEnableMcp(boolean enableMcp) {
-        if (this.enableMcp != enableMcp) {
-            this.enableMcp = enableMcp;
-            synchronized (assistantLock) {
-                assistant = null;
-                if (!enableMcp) {
-                    mcpToolProvider = null;
-                }
-            }
-        }
-    }
-    
-    public void setBurpMcpUrl(String mcpUrl) {
-        if (mcpUrl == null || mcpUrl.trim().isEmpty()) {
-            mcpUrl = "http://127.0.0.1:9876/sse";
-        }
-        if (!this.BurpMcpUrl.equals(mcpUrl.trim())) {
-            this.BurpMcpUrl = mcpUrl.trim();
-            if (enableMcp) {
-                synchronized (assistantLock) {
-                    mcpToolProvider = null;
-                    assistant = null;
-                }
-            }
-        }
-    }
+    // Burp MCP setter 方法已移除（Burp 工具现在直接使用 Montoya API）
     
     public void setEnableRagMcp(boolean enableRagMcp) {
         if (this.enableRagMcp != enableRagMcp) {
@@ -350,6 +328,13 @@ public class PassiveScanApiClient {
                 assistant = null;
             }
         }
+    }
+    
+    /**
+     * 设置前置扫描过滤器管理器
+     */
+    public void setPreScanFilterManager(PreScanFilterManager preScanFilterManager) {
+        this.preScanFilterManager = preScanFilterManager;
     }
     
     /**
@@ -506,11 +491,11 @@ public class PassiveScanApiClient {
                     
                     // 添加扩展工具
                     if (api != null) {
-                        if (enableMcp) {
-                            com.ai.analyzer.Tools.BurpExtTools burpExtTools = new com.ai.analyzer.Tools.BurpExtTools(api);
-                            assistantBuilder.tools(burpExtTools);
-                            logInfo("已添加 BurpExtTools");
-                        }
+                        // BurpTools - Burp Suite 原生工具（直接使用 Montoya API）
+                        // 已包含所有 Burp 工具功能，包括 Intruder 批量测试
+                        BurpTools burpTools = new BurpTools(api);
+                        assistantBuilder.tools(burpTools);
+                        logInfo("已添加 BurpTools（Burp Suite 完整工具集，包括 HTTP 请求、Intruder 批量测试等）");
                         
                         if (enableFileSystemAccess && ragMcpDocumentsPath != null && !ragMcpDocumentsPath.isEmpty()) {
                             com.ai.analyzer.Tools.FileSystemAccessTools fsaTools = new com.ai.analyzer.Tools.FileSystemAccessTools(api);
@@ -546,84 +531,62 @@ public class PassiveScanApiClient {
     
     /**
      * 初始化MCP工具提供者
+     * 注意：Burp MCP 已移除，现在只初始化 RAG MCP 和 Chrome MCP
      */
     private void initializeMcpToolProvider() {
-        if ((enableMcp || enableRagMcp || enableChromeMcp) && mcpToolProvider == null) {
-            try {
-                AllMcpToolProvider mcpProviderHelper = new AllMcpToolProvider();
-                List<McpClient> allMcpClients = new ArrayList<>();
-                List<String> allFilterTools = new ArrayList<>();
-                McpToolMappingConfig mappingConfig = null;
-                
-                // 1. Burp MCP 客户端
-                if (enableMcp) {
-                    try {
-                        String burpMcpUrlValue = (this.BurpMcpUrl != null && !this.BurpMcpUrl.trim().isEmpty()) 
-                            ? this.BurpMcpUrl.trim() 
-                            : "http://127.0.0.1:9876/sse";
-                        McpTransport burpTransport = mcpProviderHelper.createHttpTransport(burpMcpUrlValue);
-                        McpClient burpMcpClient = mcpProviderHelper.createMcpClient(burpTransport, "BurpMCPClient");
-                        allMcpClients.add(burpMcpClient);
-                        
-                        allFilterTools.addAll(List.of(
-                            "send_http1_request", "send_http2_request", 
-                            "get_proxy_http_history", "get_proxy_http_history_regex",
-                            "get_proxy_websocket_history", "get_proxy_websocket_history_regex", 
-                            "get_scanner_issues", "set_task_execution_engine_state",
-                            "get_active_editor_contents", "set_active_editor_contents",
-                            "create_repeater_tab"
-                        ));
-                        
-                        mappingConfig = McpToolMappingConfig.createBurpMapping();
-                        logInfo("Burp MCP 客户端已添加，地址: " + burpMcpUrlValue);
-                    } catch (Exception e) {
-                        logError("Burp MCP 客户端初始化失败: " + e.getMessage());
-                    }
+        // 检查是否需要初始化 MCP（只检查 RAG 和 Chrome MCP）
+        boolean needRagMcp = enableRagMcp && ragMcpDocumentsPath != null && !ragMcpDocumentsPath.trim().isEmpty();
+        boolean needChromeMcp = enableChromeMcp && chromeMcpUrl != null && !chromeMcpUrl.trim().isEmpty();
+        
+        if (!needRagMcp && !needChromeMcp) {
+            mcpToolProvider = null;
+            return;
+        }
+        
+        if (mcpToolProvider != null) {
+            return; // 已初始化
+        }
+        
+        try {
+            AllMcpToolProvider mcpProviderHelper = new AllMcpToolProvider();
+            List<McpClient> allMcpClients = new ArrayList<>();
+            List<String> allFilterTools = new ArrayList<>();
+            
+            // RAG MCP - 知识库文档查询
+            if (needRagMcp) {
+                try {
+                    McpTransport ragTransport = mcpProviderHelper.createRagMcpTransport(ragMcpDocumentsPath.trim());
+                    McpClient ragMcpClient = mcpProviderHelper.createMcpClient(ragTransport, "RagMCPClient");
+                    allMcpClients.add(ragMcpClient);
+                    allFilterTools.addAll(List.of("index_document", "query_document"));
+                    logInfo("RAG MCP 客户端已添加，知识库路径: " + ragMcpDocumentsPath);
+                } catch (Exception e) {
+                    logError("RAG MCP 客户端初始化失败: " + e.getMessage());
                 }
-                
-                // 2. RAG MCP 客户端
-                if (enableRagMcp && ragMcpDocumentsPath != null && !ragMcpDocumentsPath.trim().isEmpty()) {
-                    try {
-                        McpTransport ragTransport = mcpProviderHelper.createRagMcpTransport(ragMcpDocumentsPath.trim());
-                        McpClient ragMcpClient = mcpProviderHelper.createMcpClient(ragTransport, "RagMCPClient");
-                        allMcpClients.add(ragMcpClient);
-                        allFilterTools.addAll(List.of("index_document", "query_document"));
-                        logInfo("RAG MCP 客户端已添加，知识库路径: " + ragMcpDocumentsPath);
-                    } catch (Exception e) {
-                        logError("RAG MCP 客户端初始化失败: " + e.getMessage());
-                    }
-                }
-                
-                // 3. Chrome MCP 客户端
-                if (enableChromeMcp && chromeMcpUrl != null && !chromeMcpUrl.trim().isEmpty()) {
-                    try {
-                        McpTransport chromeTransport = mcpProviderHelper.createStreamableHttpTransport(chromeMcpUrl.trim());
-                        McpClient chromeMcpClient = mcpProviderHelper.createMcpClient(chromeTransport, "ChromeMCPClient");
-                        allMcpClients.add(chromeMcpClient);
-                        logInfo("Chrome MCP 客户端已添加，地址: " + chromeMcpUrl);
-                    } catch (Exception e) {
-                        logError("Chrome MCP 客户端初始化失败: " + e.getMessage());
-                    }
-                }
-                
-                // 等待连接稳定
-                if (!allMcpClients.isEmpty()) {
-                    Thread.sleep(1000);
-                    
-                    String[] filterToolsArray = allFilterTools.isEmpty() ? null : allFilterTools.toArray(new String[0]);
-                    mcpToolProvider = mcpProviderHelper.createToolProviderWithMapping(
-                        allMcpClients, 
-                        mappingConfig, 
-                        filterToolsArray
-                    );
-                    
-                    logInfo("MCP 工具提供者初始化成功，已添加 " + allMcpClients.size() + " 个 MCP 客户端");
-                }
-            } catch (Exception e) {
-                logError("MCP 工具提供者初始化失败: " + e.getMessage());
-                mcpToolProvider = null;
             }
-        } else if (!enableMcp && !enableRagMcp && !enableChromeMcp) {
+            
+            // Chrome MCP - 浏览器控制
+            if (needChromeMcp) {
+                try {
+                    McpTransport chromeTransport = mcpProviderHelper.createStreamableHttpTransport(chromeMcpUrl.trim());
+                    McpClient chromeMcpClient = mcpProviderHelper.createMcpClient(chromeTransport, "ChromeMCPClient");
+                    allMcpClients.add(chromeMcpClient);
+                    logInfo("Chrome MCP 客户端已添加，地址: " + chromeMcpUrl);
+                } catch (Exception e) {
+                    logError("Chrome MCP 客户端初始化失败: " + e.getMessage());
+                }
+            }
+            
+            if (!allMcpClients.isEmpty()) {
+                Thread.sleep(1000); // 等待 MCP 连接稳定
+                String[] filterToolsArray = allFilterTools.isEmpty() ? null : allFilterTools.toArray(new String[0]);
+                mcpToolProvider = mcpProviderHelper.createToolProviderWithMapping(
+                    allMcpClients, null, filterToolsArray
+                );
+                logInfo("MCP 工具提供者初始化成功，已添加 " + allMcpClients.size() + " 个 MCP 客户端");
+            }
+        } catch (Exception e) {
+            logError("MCP 工具提供者初始化失败: " + e.getMessage());
             mcpToolProvider = null;
         }
     }
@@ -681,6 +644,28 @@ public class PassiveScanApiClient {
         // 构建用户消息
         String userContent = buildScanPrompt(httpContent);
         
+        // ========== 前置扫描器集成 ==========
+        if (preScanFilterManager != null && preScanFilterManager.isEnabled()) {
+            try {
+                PreScanFilter filter = preScanFilterManager.getFilter();
+                if (filter != null) {
+                    // 执行前置扫描（500ms超时）
+                    List<ScanMatch> matches = filter.scan(requestResponse, 
+                        preScanFilterManager.getDefaultScanTimeout());
+                    
+                    if (!matches.isEmpty()) {
+                        // 生成提示文本追加到扫描提示词
+                        String promptHint = PreScanFilter.buildPromptHint(matches);
+                        userContent += promptHint;
+                        
+                        logInfo("[PassiveScan-PreScan] 检测到 " + matches.size() + " 个疑似漏洞特征");
+                    }
+                }
+            } catch (Exception e) {
+                logError("[PassiveScan-PreScan] 扫描失败: " + e.getMessage());
+            }
+        }
+        
         // 最终检查：确保用户消息不为空
         if (userContent == null || userContent.trim().isEmpty()) {
             logInfo("用户消息为空，跳过分析");
@@ -688,65 +673,112 @@ public class PassiveScanApiClient {
         }
         
         UserMessage userMessage = new UserMessage(userContent);
-        
-        // 执行分析（使用共享的Assistant和ChatMemory）
         List<ChatMessage> messages = List.of(userMessage);
-        TokenStream tokenStream;
         
-        synchronized (assistantLock) {
-            tokenStream = assistant.chat(messages);
-        }
+        // 将整个分析流程包裹在重试逻辑中
+        int retryCount = 0;
+        String result = null;
+        Exception lastException = null;
         
-        // 收集结果
-        StringBuilder resultBuilder = new StringBuilder();
-        CompletableFuture<ChatResponse> futureResponse = new CompletableFuture<>();
-        
-        tokenStream
-            .onPartialResponse(text -> {
-                // 检查取消标志
-                if (cancelFlag != null && cancelFlag.get()) {
-                    return;
+        while (result == null && retryCount < 2) {
+            try {
+                // 执行分析（使用共享的Assistant和ChatMemory）
+                TokenStream tokenStream;
+                synchronized (assistantLock) {
+                    tokenStream = assistant.chat(messages);
                 }
-                // text 已经是 String 类型
-                if (text != null && !text.isEmpty()) {
-                    resultBuilder.append(text);
-                    if (onChunk != null) {
-                        onChunk.accept(text);
+                
+                if (tokenStream == null) {
+                    throw new Exception("无法创建 TokenStream");
+                }
+                
+                // 收集结果
+                StringBuilder resultBuilder = new StringBuilder();
+                CompletableFuture<ChatResponse> futureResponse = new CompletableFuture<>();
+                
+                tokenStream
+                    .onPartialResponse(text -> {
+                        // 检查取消标志
+                        if (cancelFlag != null && cancelFlag.get()) {
+                            return;
+                        }
+                        // text 已经是 String 类型
+                        if (text != null && !text.isEmpty()) {
+                            resultBuilder.append(text);
+                            if (onChunk != null) {
+                                onChunk.accept(text);
+                            }
+                        }
+                    })
+                    .onCompleteResponse(response -> {
+                        futureResponse.complete(response);
+                    })
+                    .onError(error -> {
+                        String errorMsg = error != null ? error.getMessage() : "未知错误";
+                        logError("TokenStream错误: " + errorMsg);
+                        // 如果是输入长度错误，提供更友好的错误信息
+                        if (errorMsg != null && errorMsg.contains("Range of input length")) {
+                            futureResponse.completeExceptionally(new Exception("API输入长度超出限制（1-30720字符），请检查请求内容大小"));
+                        } else {
+                            futureResponse.completeExceptionally(error);
+                        }
+                    })
+                    .start();
+                
+                // 等待完成（最多10分钟，因为可能有工具调用）
+                try {
+                    futureResponse.get(10, TimeUnit.MINUTES);
+                } catch (java.util.concurrent.TimeoutException e) {
+                    // 超时异常：记录详细信息
+                    String url = requestResponse != null ? requestResponse.request().url() : "未知";
+                    logError("被动扫描超时（10分钟）: " + url);
+                    if (cancelFlag != null && cancelFlag.get()) {
+                        throw new Exception("扫描已取消");
                     }
+                    throw new Exception("被动扫描超时（10分钟），请求可能包含大量工具调用或响应较慢: " + url, e);
+                } catch (Exception e) {
+                    if (cancelFlag != null && cancelFlag.get()) {
+                        throw new Exception("扫描已取消");
+                    }
+                    // 提供更详细的错误信息
+                    String errorMsg = e.getMessage();
+                    if (errorMsg != null && errorMsg.contains("Range of input length")) {
+                        throw new Exception("API输入长度超出限制（1-30720字符）。原始HTTP内容长度: " + 
+                            (httpContent != null ? httpContent.length() : 0) + " 字符", e);
+                    }
+                    throw e;
                 }
-            })
-            .onCompleteResponse(response -> {
-                futureResponse.complete(response);
-            })
-            .onError(error -> {
-                String errorMsg = error != null ? error.getMessage() : "未知错误";
-                logError("TokenStream错误: " + errorMsg);
-                // 如果是输入长度错误，提供更友好的错误信息
-                if (errorMsg != null && errorMsg.contains("Range of input length")) {
-                    futureResponse.completeExceptionally(new Exception("API输入长度超出限制（1-30720字符），请检查请求内容大小"));
+                
+                result = resultBuilder.toString();
+                
+            } catch (Exception e) {
+                lastException = e;
+                String errMsg = e.getMessage();
+                
+                // 如果是消息格式错误且未重试过，清空 ChatMemory 后重试
+                if (retryCount == 0 && errMsg != null && 
+                    (errMsg.contains("content field is") || 
+                     (errMsg.contains("content") && errMsg.contains("required")) ||
+                     errMsg.contains("The first message should be"))) {
+                    logInfo("检测到消息格式错误（" + errMsg + "），清空 ChatMemory 后重试...");
+                    clearContext();
+                    ensureAssistantInitialized(); // 重新初始化
+                    retryCount++;
+                    // 继续循环，进行重试
                 } else {
-                    futureResponse.completeExceptionally(error);
+                    // 其他错误或已重试过，直接抛出
+                    throw e;
                 }
-            })
-            .start();
-        
-        // 等待完成（最多10分钟，因为可能有工具调用）
-        try {
-            futureResponse.get(10, TimeUnit.MINUTES);
-        } catch (Exception e) {
-            if (cancelFlag != null && cancelFlag.get()) {
-                throw new Exception("扫描已取消");
             }
-            // 提供更详细的错误信息
-            String errorMsg = e.getMessage();
-            if (errorMsg != null && errorMsg.contains("Range of input length")) {
-                throw new Exception("API输入长度超出限制（1-30720字符）。原始HTTP内容长度: " + 
-                    (httpContent != null ? httpContent.length() : 0) + " 字符", e);
-            }
-            throw e;
         }
         
-        String result = resultBuilder.toString();
+        // 如果重试后仍然失败
+        if (result == null) {
+            if (lastException != null) {
+                throw lastException;
+            }
+            throw new Exception("分析失败：未知错误");
+        }
         // 如果结果为空，返回默认消息
         if (result == null || result.trim().isEmpty()) {
             return "## 风险等级: 无\n未收到AI分析结果。";
@@ -786,9 +818,12 @@ public class PassiveScanApiClient {
         }
         
         // ========== 工具使用规则 ==========
-        if (enableMcp || enableRagMcp || enableChromeMcp) {
+        // Burp 工具现在直接使用 Montoya API，始终可用
+        if (enableRagMcp || enableChromeMcp) {
             buildToolsSection(prompt);
         }
+        // 始终添加 Burp 工具说明（因为 BurpTools 和 BurpExtTools 已直接集成）
+        buildBurpToolsSection(prompt);
         
         // ========== 扩展工具 ==========
         buildExtendedToolsSection(prompt);
@@ -845,9 +880,8 @@ public class PassiveScanApiClient {
     private void buildToolsSection(StringBuilder prompt) {
         prompt.append("# 工具使用规则（重要：必须主动测试）\n\n");
         
-        if (enableMcp) {
-            buildBurpToolsSection(prompt);
-        }
+        // 注意：Burp 工具说明在 buildSystemPrompt() 中直接调用 buildBurpToolsSection()
+        // 这里只处理 RAG MCP 和 Chrome MCP 的工具说明
         
         if (enableRagMcp) {
             buildRagToolsSection(prompt);
@@ -869,6 +903,11 @@ public class PassiveScanApiClient {
         
         prompt.append("### 执行类工具（主动测试验证，必须使用）\n");
         prompt.append("- `send_http1_request`: **核心测试工具，必须使用**。发现可测试的安全风险时使用\n");
+        prompt.append("  **⚠️ HTTP 请求格式要求（必须遵守，否则会超时）：**\n");
+        prompt.append("  - HTTP 请求头块末尾**必须**有一个空行（`\\r\\n\\r\\n` 或 `\\n\\n`）\n");
+        prompt.append("  - 正确格式：`请求行\\r\\n + 请求头\\r\\n + 空行\\r\\n + 请求体`\n");
+        prompt.append("  - 示例：`GET /path HTTP/1.1\\r\\nHost: example.com\\r\\n\\r\\n`\n");
+        prompt.append("  - **缺少末尾空行会导致请求超时失败！**\n");
         prompt.append("- `send_http2_request`: HTTP/2 协议测试\n\n");
         
         prompt.append("### 辅助工具（智能决策，按需调用）\n");
@@ -912,24 +951,23 @@ public class PassiveScanApiClient {
     private void buildExtendedToolsSection(StringBuilder prompt) {
         prompt.append("## 扩展工具\n\n");
         
-        if (enableMcp) {
-            prompt.append("### Intruder 批量测试工具\n");
-            prompt.append("- **工具名称**: `BurpExtTools_send_to_intruder`\n");
-            prompt.append("- **使用场景**: 需要批量 fuzz 测试时使用\n");
-            prompt.append("- **功能**: AI 生成 payloads 并发送到 Intruder\n\n");
-            prompt.append("**关键参数**：\n");
-            prompt.append("- `requestContent`: 原始 HTTP 请求（不需要添加任何标记）\n");
-            prompt.append("- `targetParameters`: **【重要】要注入的参数名列表**，如 [\"id\", \"name\"]，工具会自动找到并标记\n");
-            prompt.append("- `payloads`: AI 生成的 payload 列表，如 [\"' OR '1'='1\", \"<script>alert(1)</script>\"]\n\n");
-            prompt.append("**使用示例**：\n");
-            prompt.append("```\n");
-            prompt.append("targetParameters: [\"src\", \"url\"]\n");
-            prompt.append("payloads: [\"http://127.0.0.1\", \"http://169.254.169.254\", \"file:///etc/passwd\"]\n");
-            prompt.append("```\n");
-            prompt.append("工具会自动在请求中找到 src 和 url 参数，并将它们标记为插入点。\n\n");
-            prompt.append("**支持的参数位置**：URL 查询参数、POST 表单、JSON 字段、Cookie 值\n\n");
-            prompt.append("**适用场景**：SQL 注入、XSS、命令注入、目录遍历、SSRF等批量测试\n\n");
-        }
+        // BurpExtTools - 现在直接使用 Montoya API，始终可用
+        prompt.append("### Intruder 批量测试工具\n");
+        prompt.append("- **工具名称**: `send_to_intruder`\n");
+        prompt.append("- **使用场景**: 需要批量 fuzz 测试时使用\n");
+        prompt.append("- **功能**: AI 生成 payloads 并发送到 Intruder\n\n");
+        prompt.append("**关键参数**：\n");
+        prompt.append("- `requestContent`: 原始 HTTP 请求（不需要添加任何标记）\n");
+        prompt.append("- `targetParameters`: **【重要】要注入的参数名列表**，如 [\"id\", \"name\"]，工具会自动找到并标记\n");
+        prompt.append("- `payloads`: AI 生成的 payload 列表，如 [\"' OR '1'='1\", \"<script>alert(1)</script>\"]\n\n");
+        prompt.append("**使用示例**：\n");
+        prompt.append("```\n");
+        prompt.append("targetParameters: [\"src\", \"url\"]\n");
+        prompt.append("payloads: [\"http://127.0.0.1\", \"http://169.254.169.254\", \"file:///etc/passwd\"]\n");
+        prompt.append("```\n");
+        prompt.append("工具会自动在请求中找到 src 和 url 参数，并将它们标记为插入点。\n\n");
+        prompt.append("**支持的参数位置**：URL 查询参数、POST 表单、JSON 字段、Cookie 值\n\n");
+        prompt.append("**适用场景**：SQL 注入、XSS、命令注入、目录遍历、SSRF等批量测试\n\n");
         
         // FileSystemAccessTools - 按需启用
         if (enableFileSystemAccess && ragMcpDocumentsPath != null && !ragMcpDocumentsPath.isEmpty()) {
@@ -1030,8 +1068,21 @@ public class PassiveScanApiClient {
         prompt.append("- 如果URL参数中包含URL（如 `src=http://...`、`url=https://...`、`redirect=...`），这是潜在的SSRF漏洞，**必须主动测试验证**\n");
         prompt.append("- 不要只报告可能存在，必须实际发送测试请求验证\n");
         prompt.append("- 如果发现可测试的高危漏洞，使用工具主动测试\n\n");
-        prompt.append(httpContent);
+        // 转义页面中的模板语法（如 {{data.tablename}}），避免被 LangChain4j/API 当作占位符导致 "Value for the variable ... is missing"
+        prompt.append(escapeTemplateDelimiters(httpContent));
         return prompt.toString();
+    }
+    
+    /**
+     * 转义 HTTP 内容中的模板分隔符，避免被解析为占位符。
+     * 页面中常见的 {{variable}}、${variable} 等会被转义为字面量。
+     */
+    private String escapeTemplateDelimiters(String content) {
+        if (content == null || content.isEmpty()) return content;
+        return content
+            .replace("{{", "\u200B{\u200B{")  // {{ -> ZWSP{ZWSP{
+            .replace("}}", "}\u200B}\u200B")  // }} -> }ZWSP}ZWSP
+            .replace("${", "$\u200B{");       // ${ -> $ZWSP{
     }
     
     // ========== 日志方法 ==========

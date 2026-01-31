@@ -10,6 +10,7 @@ import com.ai.analyzer.pscan.ScanResult;
 import com.ai.analyzer.skills.Skill;
 import com.ai.analyzer.skills.SkillManager;
 import com.ai.analyzer.utils.MarkdownRenderer;
+import com.ai.analyzer.rulesMatch.PreScanFilterManager;
 // import com.example.ai.analyzer.Tools.ToolDefinitions;
 // import com.example.ai.analyzer.Tools.ToolExecutor;
 
@@ -38,6 +39,7 @@ import burp.api.montoya.ui.editor.HttpResponseEditor;
 public class AIAnalyzerTab extends JPanel {
     private final MontoyaApi api;
     private final AgentApiClient apiClient;
+    private final PreScanFilterManager preScanFilterManager;
     
     // UI组件
     private JComboBox<String> apiProviderComboBox; // API 提供者下拉框
@@ -47,8 +49,7 @@ public class AIAnalyzerTab extends JPanel {
     private JTextField customParametersField; // 自定义参数输入框
     private JCheckBox enableThinkingCheckBox;
     private JCheckBox enableSearchCheckBox;
-    private JCheckBox enableMcpCheckBox;
-    private JTextField BurpMcpUrlField;
+    // Burp MCP 相关组件已移除（Burp 工具现在直接使用 Montoya API）
     private JCheckBox enableRagMcpCheckBox;
     // private JTextField ragMcpUrlField; // RAG MCP 地址暂时隐藏
     private JTextField ragMcpDocumentsPathField;
@@ -65,6 +66,9 @@ public class AIAnalyzerTab extends JPanel {
     private JTable skillsTable;
     private DefaultTableModel skillsTableModel;
     private JTextPane skillPreviewPane;
+    
+    // 前置扫描器组件
+    private JCheckBox enablePreScanCheckbox;
     private JButton browseSkillsDirButton;
     private JButton refreshSkillsButton;
     private JButton createExampleSkillButton;
@@ -102,9 +106,12 @@ public class AIAnalyzerTab extends JPanel {
     private JTable passiveScanTable;
     private DefaultTableModel passiveScanTableModel;
     private JTextPane passiveScanResultPane;
+    private final StringBuilder passiveScanStreamBuffer = new StringBuilder(); // 累积流式输出的buffer
+    private Integer currentStreamingId = null; // 当前流式输出的请求ID
 
-    public AIAnalyzerTab(MontoyaApi api) {
+    public AIAnalyzerTab(MontoyaApi api, PreScanFilterManager preScanFilterManager) {
         this.api = api;
+        this.preScanFilterManager = preScanFilterManager;
         this.apiClient = new AgentApiClient(
             api,
             "https://dashscope.aliyuncs.com/api/v1",
@@ -291,6 +298,49 @@ public class AIAnalyzerTab extends JPanel {
             SwingUtilities.invokeLater(() -> passiveScanProgressBar.setValue(progress));
         });
         
+        // ========== 设置流式输出回调（新增） ==========
+        passiveScanManager.setOnStreamingChunk(chunk -> {
+            SwingUtilities.invokeLater(() -> {
+                if (passiveScanResultPane == null) return;
+                // 检查当前选中的行是否正在流式输出
+                int selectedRow = passiveScanTable.getSelectedRow();
+                if (selectedRow >= 0) {
+                    Integer selectedId = (Integer) passiveScanTableModel.getValueAt(selectedRow, 0);
+                    ScanResult currentStreaming = passiveScanManager.getCurrentStreamingScanResult();
+                    
+                    // 只有当前选中的行正在流式输出时，才显示流式输出
+                    if (currentStreaming != null && selectedId != null && selectedId.equals(currentStreaming.getId())) {
+                        // 如果是新的流式请求（ID不匹配或为null），初始化
+                        if (currentStreamingId == null || !currentStreamingId.equals(selectedId)) {
+                            passiveScanStreamBuffer.setLength(0);
+                            currentStreamingId = selectedId;
+                        }
+                        
+                        // 累积chunk到buffer
+                        passiveScanStreamBuffer.append(chunk);
+                        
+                        try {
+                            // 使用流式Markdown渲染 - 传入完整累积的内容
+                            MarkdownRenderer.appendMarkdownStreaming(
+                                passiveScanResultPane, 
+                                passiveScanStreamBuffer.toString(),  // 传入完整累积内容
+                                0  // 从头开始渲染
+                            );
+                            passiveScanResultPane.setCaretPosition(passiveScanResultPane.getStyledDocument().getLength());
+                        } catch (Exception e) {
+                            // 如果Markdown渲染失败，使用纯文本
+                            try {
+                                passiveScanResultPane.setText(passiveScanStreamBuffer.toString());
+                                passiveScanResultPane.setCaretPosition(passiveScanResultPane.getText().length());
+                            } catch (Exception ex) {
+                                api.logging().logToError("流式输出失败: " + ex.getMessage());
+                            }
+                        }
+                    }
+                }
+            });
+        });
+        
         // 同步API配置到被动扫描客户端
         syncApiConfigToPassiveScan();
     }
@@ -311,10 +361,7 @@ public class AIAnalyzerTab extends JPanel {
             psClient.setEnableThinking(apiClient.isEnableThinking());
             psClient.setEnableSearch(apiClient.isEnableSearch());
             
-            // MCP 配置（关键：这些配置决定了工具是否可用）
-            psClient.setEnableMcp(apiClient.isEnableMcp());
-            psClient.setBurpMcpUrl(apiClient.getBurpMcpUrl());
-            
+            // MCP 配置（Burp MCP 已移除，只同步 RAG 和 Chrome MCP）
             // RAG MCP 配置
             psClient.setEnableRagMcp(apiClient.isEnableRagMcp());
             psClient.setRagMcpUrl(apiClient.getRagMcpUrl());
@@ -327,9 +374,15 @@ public class AIAnalyzerTab extends JPanel {
             // 文件系统访问配置
             psClient.setEnableFileSystemAccess(apiClient.isEnableFileSystemAccess());
             
+            // ========== 同步前置扫描管理器 ==========
+            if (preScanFilterManager != null) {
+                psClient.setPreScanFilterManager(preScanFilterManager);
+                apiClient.setPreScanFilterManager(preScanFilterManager);
+                api.logging().logToOutput("[AIAnalyzerTab] 已将前置扫描管理器同步到主动/被动扫描客户端");
+            }
+            
             api.logging().logToOutput("[AIAnalyzerTab] 已同步所有配置到被动扫描客户端");
-            api.logging().logToOutput("[AIAnalyzerTab] MCP配置 - EnableMcp: " + apiClient.isEnableMcp() + 
-                                     ", EnableRagMcp: " + apiClient.isEnableRagMcp() + 
+            api.logging().logToOutput("[AIAnalyzerTab] MCP配置 - EnableRagMcp: " + apiClient.isEnableRagMcp() + 
                                      ", EnableChromeMcp: " + apiClient.isEnableChromeMcp());
         }
     }
@@ -514,64 +567,8 @@ public class AIAnalyzerTab extends JPanel {
         JSeparator mcpSeparator = new JSeparator();
         apiConfigPanel.add(mcpSeparator, gbc);
         
-        // Burp MCP 工具调用开关
-        gbc.gridx = 0;
-        gbc.gridy = 6;
-        gbc.gridwidth = 1;
-        gbc.fill = GridBagConstraints.NONE;
-        gbc.weightx = 0;
-        apiConfigPanel.add(new JLabel("启用 Burp MCP 工具:"), gbc);
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
-        enableMcpCheckBox = new JCheckBox("启用 Burp MCP 工具调用", false);
-        enableMcpCheckBox.addActionListener(e -> {
-            boolean enabled = enableMcpCheckBox.isSelected();
-            BurpMcpUrlField.setEnabled(enabled);
-            apiClient.setEnableMcp(enabled);
-            if (enabled && !BurpMcpUrlField.getText().trim().isEmpty()) {
-                apiClient.setBurpMcpUrl(BurpMcpUrlField.getText().trim());
-            }
-        });
-        apiConfigPanel.add(enableMcpCheckBox, gbc);
+        // Burp MCP 相关 UI 已移除（Burp 工具现在直接使用 Montoya API，无需配置）
         
-        // Burp MCP 地址
-        gbc.gridx = 0;
-        gbc.gridy = 7;
-        gbc.fill = GridBagConstraints.NONE;
-        gbc.weightx = 0;
-        apiConfigPanel.add(new JLabel("Burp MCP 地址:"), gbc);
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
-        BurpMcpUrlField = new JTextField("http://127.0.0.1:9876/sse", 30);
-        BurpMcpUrlField.setEnabled(false); // 默认禁用，只有启用 MCP 时才可用
-        BurpMcpUrlField.addActionListener(e -> {
-            if (enableMcpCheckBox.isSelected()) {
-                apiClient.setBurpMcpUrl(BurpMcpUrlField.getText().trim());
-            }
-        });
-        BurpMcpUrlField.getDocument().addDocumentListener(new DocumentListener() {
-            @Override
-            public void insertUpdate(DocumentEvent e) {
-                updateBurpMcpUrl();
-            }
-            @Override
-            public void removeUpdate(DocumentEvent e) {
-                updateBurpMcpUrl();
-            }
-            @Override
-            public void changedUpdate(DocumentEvent e) {
-                updateBurpMcpUrl();
-            }
-            private void updateBurpMcpUrl() {
-                if (enableMcpCheckBox.isSelected() && !BurpMcpUrlField.getText().trim().isEmpty()) {
-                    apiClient.setBurpMcpUrl(BurpMcpUrlField.getText().trim());
-                }
-            }
-        });
-        apiConfigPanel.add(BurpMcpUrlField, gbc);
-
         // 知识库检索工具开关（两个选项放同一行）
         gbc.gridx = 0;
         gbc.gridy = 8;
@@ -757,6 +754,36 @@ public class AIAnalyzerTab extends JPanel {
         JSeparator ragSeparator = new JSeparator();
         apiConfigPanel.add(ragSeparator, gbc);
         
+        // ========== 前置扫描器配置 ==========
+        // 前置扫描器开关
+        gbc.gridx = 0;
+        gbc.gridy = 13;
+        gbc.gridwidth = 2;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        enablePreScanCheckbox = new JCheckBox("启用前置扫描器", false);
+        enablePreScanCheckbox.setToolTipText("<html><b>前置扫描器</b>：在AI分析前快速匹配已知漏洞特征<br/>" +
+            "• 支持35+种漏洞类型（SQL注入、命令注入、文件包含、XXE、SSRF等）<br/>" +
+            "• 硬编码规则库（130+条规则，570+个模式）<br/>" +
+            "• 多线程并发扫描（默认500ms超时）<br/>" +
+            "• 匹配结果会自动追加到AI提示词中<br/>" +
+            "• 配置会自动保存，无需每次手动勾选</html>");
+        enablePreScanCheckbox.addActionListener(e -> {
+            boolean enabled = enablePreScanCheckbox.isSelected();
+            if (preScanFilterManager != null) {
+                if (enabled) {
+                    preScanFilterManager.enable();
+                    api.logging().logToOutput("[PreScan] 前置扫描器已启用");
+                } else {
+                    preScanFilterManager.disable();
+                    api.logging().logToOutput("[PreScan] 前置扫描器已禁用");
+                }
+            } else {
+                api.logging().logToError("[PreScan] 前置扫描管理器未初始化");
+            }
+        });
+        apiConfigPanel.add(enablePreScanCheckbox, gbc);
+        
         // ========== 默认 RAG 功能暂时禁用，改用 RAG MCP ==========
         // // RAG 工具调用开关
         // gbc.gridx = 0;
@@ -810,7 +837,7 @@ public class AIAnalyzerTab extends JPanel {
         
         // 设置按钮
         gbc.gridx = 0;
-        gbc.gridy = 13;
+        gbc.gridy = 14;
         gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -1196,12 +1223,29 @@ public class AIAnalyzerTab extends JPanel {
                     if (id != null) {
                         ScanResult result = passiveScanManager.getResultById(id);
                         if (result != null) {
+                            // 如果切换到不同的请求，清空流式buffer（但不清空 currentStreamingId，让 displayScanResult 处理）
+                            Integer selectedId = (Integer) passiveScanTableModel.getValueAt(selectedRow, 0);
+                            if (currentStreamingId != null && !selectedId.equals(currentStreamingId)) {
+                                passiveScanStreamBuffer.setLength(0);
+                            }
+                            
                             displayScanResult(result);
+                            
+                            // 如果选中的行正在扫描中，清空结果区域准备接收流式输出
+                            if (result.getStatus() == ScanResult.ScanStatus.SCANNING) {
+                                passiveScanResultPane.setText("");
+                                passiveScanStreamBuffer.setLength(0);
+                                currentStreamingId = selectedId;
+                            } else if (currentStreamingId != null && currentStreamingId.equals(selectedId)) {
+                                // 如果这个请求之前在流式输出，但现在已经完成，清理状态
+                                currentStreamingId = null;
+                                passiveScanStreamBuffer.setLength(0);
+                            }
                         }
                     }
                 } else {
                     clearHttpEditors();
-                    resultTextPane.setText("");
+                    passiveScanResultPane.setText("");
                 }
             }
         });
@@ -1299,16 +1343,30 @@ public class AIAnalyzerTab extends JPanel {
         // 显示AI分析结果
         String analysisResult = result.getAnalysisResult();
         if (analysisResult != null && !analysisResult.isEmpty()) {
+            // 扫描完成，清理流式输出状态
+            if (currentStreamingId != null && currentStreamingId == result.getId()) {
+                currentStreamingId = null;
+                passiveScanStreamBuffer.setLength(0);
+            }
+            
             try {
-                resultTextPane.setText("");
-                MarkdownRenderer.appendMarkdown(resultTextPane, analysisResult);
+                passiveScanResultPane.setText("");
+                MarkdownRenderer.appendMarkdown(passiveScanResultPane, analysisResult);
             } catch (Exception e) {
-                resultTextPane.setText(analysisResult);
+                passiveScanResultPane.setText(analysisResult);
             }
         } else if (result.getErrorMessage() != null) {
-            resultTextPane.setText("扫描错误: " + result.getErrorMessage());
+            // 扫描出错，清理流式输出状态
+            if (currentStreamingId != null && currentStreamingId == result.getId()) {
+                currentStreamingId = null;
+                passiveScanStreamBuffer.setLength(0);
+            }
+            passiveScanResultPane.setText("扫描错误: " + result.getErrorMessage());
+        } else if (result.getStatus() == ScanResult.ScanStatus.SCANNING) {
+            // 如果正在扫描，显示提示信息（等待流式输出）
+            passiveScanResultPane.setText("正在分析中，请稍候...\n\n");
         } else {
-            resultTextPane.setText("状态: " + result.getStatus().getDisplayName());
+            passiveScanResultPane.setText("状态: " + result.getStatus().getDisplayName());
         }
     }
     
@@ -1384,6 +1442,8 @@ public class AIAnalyzerTab extends JPanel {
         resultTextPane.setContentType("text/plain");
         resultTextPane.setBackground(Color.WHITE);
         resultTextPane.setForeground(Color.BLACK);
+        // 被动扫描与主动分析共用同一结果区域
+        passiveScanResultPane = resultTextPane;
         JScrollPane resultScrollPane = new JScrollPane(resultTextPane);
         panel.add(resultScrollPane, BorderLayout.CENTER);
 
@@ -1784,8 +1844,7 @@ public class AIAnalyzerTab extends JPanel {
                 userPromptArea.getText().trim(),
                 enableThinkingCheckBox.isSelected(),
                 enableSearchCheckBox.isSelected(),
-                enableMcpCheckBox.isSelected(),
-                BurpMcpUrlField.getText().trim(),
+                // Burp MCP 参数已移除
                 enableRagMcpCheckBox.isSelected(),
                 "", // ragMcpUrlField.getText().trim(), // RAG MCP 地址暂时隐藏
                 ragMcpDocumentsPathField.getText().trim(),
@@ -1800,6 +1859,9 @@ public class AIAnalyzerTab extends JPanel {
             settings.setCustomParameters(customParametersField.getText().trim());
             // 设置直接查找知识库选项
             settings.setEnableFileSystemAccess(enableFileSystemAccessCheckBox.isSelected());
+            
+            // 设置前置扫描器选项
+            settings.setEnablePreScanFilter(enablePreScanCheckbox != null && enablePreScanCheckbox.isSelected());
             
             // 设置 Skills 选项
             settings.setEnableSkills(enableSkillsCheckBox.isSelected());
@@ -1882,10 +1944,7 @@ public class AIAnalyzerTab extends JPanel {
         enableThinkingCheckBox.setSelected(isDashScope && settings.isEnableThinking());
         enableSearchCheckBox.setSelected(isDashScope && settings.isEnableSearch());
         
-        // Burp MCP 配置
-        enableMcpCheckBox.setSelected(settings.isEnableMcp());
-        BurpMcpUrlField.setText(settings.getMcpUrl());
-        BurpMcpUrlField.setEnabled(settings.isEnableMcp());
+        // Burp MCP 配置已移除（Burp 工具现在直接使用 Montoya API）
         
         // RAG MCP 配置
         enableRagMcpCheckBox.setSelected(settings.isEnableRagMcp());
@@ -1917,8 +1976,7 @@ public class AIAnalyzerTab extends JPanel {
         apiClient.setCustomParameters(settings.getCustomParameters());
         apiClient.setEnableThinking(isDashScope && settings.isEnableThinking());
         apiClient.setEnableSearch(isDashScope && settings.isEnableSearch());
-        apiClient.setEnableMcp(settings.isEnableMcp());
-        apiClient.setBurpMcpUrl(settings.getMcpUrl());
+        // Burp MCP 配置已移除（Burp 工具现在直接使用 Montoya API）
         apiClient.setEnableRagMcp(settings.isEnableRagMcp());
         apiClient.setRagMcpUrl(settings.getRagMcpUrl());
         apiClient.setRagMcpDocumentsPath(settings.getRagMcpDocumentsPath());
@@ -1947,6 +2005,18 @@ public class AIAnalyzerTab extends JPanel {
                 apiClient.getSkillManager().setEnabledSkillNames(settings.getEnabledSkillNames());
             }
             updateSkillsTable();
+        }
+        
+        // 前置扫描器配置
+        if (enablePreScanCheckbox != null) {
+            enablePreScanCheckbox.setSelected(settings.isEnablePreScanFilter());
+            if (preScanFilterManager != null) {
+                if (settings.isEnablePreScanFilter()) {
+                    preScanFilterManager.enable();
+                } else {
+                    preScanFilterManager.disable();
+                }
+            }
         }
     }
     

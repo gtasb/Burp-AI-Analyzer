@@ -3,7 +3,6 @@ package com.ai.analyzer.pscan;
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.http.handler.*;
 import burp.api.montoya.http.message.HttpRequestResponse;
-import burp.api.montoya.proxy.ProxyHttpRequestResponse;
 
 import java.util.*;
 import java.util.concurrent.*;
@@ -64,6 +63,8 @@ public class PassiveScanManager {
     private Consumer<String> onStatusChanged;
     private Consumer<Integer> onProgressChanged;
     private Consumer<ScanResult> onNewRequestQueued; // 新请求入队回调
+    private Consumer<String> onStreamingChunk; // 流式输出回调（新增）
+    private ScanResult currentStreamingScanResult; // 当前正在流式输出的扫描结果
     
     /**
      * 构造函数
@@ -110,6 +111,21 @@ public class PassiveScanManager {
         this.onNewRequestQueued = callback;
     }
     
+    /**
+     * 设置流式输出回调
+     * @param callback 接收流式输出文本块的回调函数
+     */
+    public void setOnStreamingChunk(Consumer<String> callback) {
+        this.onStreamingChunk = callback;
+    }
+    
+    /**
+     * 获取当前正在流式输出的扫描结果
+     */
+    public ScanResult getCurrentStreamingScanResult() {
+        return currentStreamingScanResult;
+    }
+    
     // ========== 生产者-消费者核心方法 ==========
     
     /**
@@ -136,11 +152,11 @@ public class PassiveScanManager {
         // 2. 启动生产者（HTTP监听）
         startProducer();
         
-        // 3. 可选：加载现有的 HTTP History
-        loadExistingHistory();
+        // 注意：不加载历史记录，只扫描开启后新到达的流量
+        // （原 loadExistingHistory() 已移除，符合“仅扫描新增流量”的设计）
         
         notifyStatusChanged("被动扫描已启动 - 监听中...");
-        logInfo("被动扫描已启动，等待流量...");
+        logInfo("被动扫描已启动，等待新流量...");
     }
     
     /**
@@ -261,7 +277,11 @@ public class PassiveScanManager {
      * 消费者任务 - 从队列取请求进行扫描
      */
     private void consumerTask() {
-        logInfo("消费者线程启动: " + Thread.currentThread().getName());
+        String threadName = Thread.currentThread().getName();
+        logInfo("消费者线程启动: " + threadName);
+        
+        int processedCount = 0;
+        int errorCount = 0;
         
         while (isRunning.get() && !cancelFlag.get()) {
             try {
@@ -269,7 +289,7 @@ public class PassiveScanManager {
                 ScanResult result = scanQueue.poll(1, TimeUnit.SECONDS);
                 
                 if (result == null) {
-                    // 超时，继续等待
+                    // 超时，继续等待（这是正常的，表示队列为空）
                     continue;
                 }
                 
@@ -278,23 +298,40 @@ public class PassiveScanManager {
                 
                 // 检查是否已取消
                 if (cancelFlag.get()) {
+                    logInfo("消费者线程检测到取消标志，取消扫描: " + result.getShortUrl());
+                    result.markCancelled();
+                    notifyResultUpdated(result);
+                    continue;
+                }
+                
+                // 检查是否还在运行
+                if (!isRunning.get()) {
+                    logInfo("消费者线程检测到停止标志，取消扫描: " + result.getShortUrl());
                     result.markCancelled();
                     notifyResultUpdated(result);
                     continue;
                 }
                 
                 // 执行扫描
+                processedCount++;
+                logInfo("消费者线程处理第 " + processedCount + " 个请求: " + result.getShortUrl());
                 scanRequest(result);
                 
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                logInfo("消费者线程被中断: " + threadName);
                 break;
             } catch (Exception e) {
-                logError("消费者任务异常: " + e.getMessage());
+                errorCount++;
+                logError("消费者任务异常 [" + errorCount + "]: " + e.getMessage());
+                e.printStackTrace(); // 打印完整堆栈，便于诊断
+                // 继续处理下一个请求，不退出循环
             }
         }
         
-        logInfo("消费者线程退出: " + Thread.currentThread().getName());
+        logInfo("消费者线程退出: " + threadName + 
+                " (处理: " + processedCount + ", 错误: " + errorCount + ", isRunning: " + isRunning.get() + 
+                ", cancelFlag: " + cancelFlag.get() + ")");
     }
     
     /**
@@ -349,32 +386,64 @@ public class PassiveScanManager {
      * 执行单个请求的扫描
      */
     private void scanRequest(ScanResult result) {
+        long startTime = System.currentTimeMillis();
         try {
             // 标记为扫描中
             result.markScanning();
             notifyResultUpdated(result);
             
-            // 调用 AI 分析
+            // 设置当前正在流式输出的扫描结果
+            currentStreamingScanResult = result;
+            
+            // 调用 AI 分析（支持流式输出）
             String aiResponse = apiClient.analyzeRequest(
                 result.getRequestResponse(),
                 cancelFlag,
-                null // 不需要流式回调
+                chunk -> {
+                    // 流式输出回调
+                    if (onStreamingChunk != null && currentStreamingScanResult == result) {
+                        try {
+                            onStreamingChunk.accept(chunk);
+                        } catch (Exception e) {
+                            logError("流式输出回调异常: " + e.getMessage());
+                        }
+                    }
+                }
             );
+            
+            // 清除当前流式输出的扫描结果
+            if (currentStreamingScanResult == result) {
+                currentStreamingScanResult = null;
+            }
             
             // 检查是否已取消
             if (cancelFlag.get()) {
+                logInfo("扫描过程中检测到取消标志: " + result.getShortUrl());
                 result.markCancelled();
             } else {
                 // 标记完成（会自动解析风险等级）
+                long duration = System.currentTimeMillis() - startTime;
+                logInfo("扫描完成: " + result.getShortUrl() + " (耗时: " + duration + "ms)");
                 result.markCompleted(aiResponse);
             }
             
         } catch (Exception e) {
+            // 清除当前流式输出的扫描结果
+            if (currentStreamingScanResult == result) {
+                currentStreamingScanResult = null;
+            }
+            
+            long duration = System.currentTimeMillis() - startTime;
             if (cancelFlag.get()) {
+                logInfo("扫描已取消: " + result.getShortUrl() + " (耗时: " + duration + "ms)");
                 result.markCancelled();
             } else {
                 result.markError(e.getMessage());
-                logError("扫描请求失败: " + result.getShortUrl() + " - " + e.getMessage());
+                logError("扫描请求失败: " + result.getShortUrl() + " (耗时: " + duration + "ms) - " + e.getMessage());
+                // 如果是超时异常，记录更详细的信息
+                if (e.getMessage() != null && e.getMessage().contains("超时")) {
+                    logError("  → 超时详情: 请求可能包含大量工具调用或响应较慢");
+                }
             }
         }
         
@@ -388,42 +457,6 @@ public class PassiveScanManager {
         if (total > 0) {
             notifyProgressChanged(completed * 100 / total);
         }
-    }
-    
-    /**
-     * 加载现有的 HTTP History 到队列
-     */
-    private void loadExistingHistory() {
-        CompletableFuture.runAsync(() -> {
-            try {
-                List<ProxyHttpRequestResponse> history = api.proxy().history();
-                if (history == null || history.isEmpty()) {
-                    logInfo("HTTP History 为空");
-                    return;
-                }
-                
-                logInfo("加载 HTTP History: " + history.size() + " 条记录");
-                
-                int added = 0;
-                for (ProxyHttpRequestResponse proxyRequest : history) {
-                    if (!isRunning.get() || cancelFlag.get()) {
-                        break;
-                    }
-                    
-                    HttpRequestResponse requestResponse = proxyRequest.finalRequest() != null 
-                        ? HttpRequestResponse.httpRequestResponse(proxyRequest.finalRequest(), proxyRequest.originalResponse())
-                        : HttpRequestResponse.httpRequestResponse(proxyRequest.request(), proxyRequest.response());
-                    
-                    enqueueRequest(requestResponse);
-                    added++;
-                }
-                
-                logInfo("从 HTTP History 添加了 " + added + " 条待扫描请求");
-                
-            } catch (Exception e) {
-                logError("加载 HTTP History 失败: " + e.getMessage());
-            }
-        });
     }
     
     /**

@@ -149,6 +149,15 @@
 
     <build>
         <sourceDirectory>src</sourceDirectory>
+        <resources>
+            <!-- 包含规则文件到JAR中 -->
+            <resource>
+                <directory>${project.basedir}</directory>
+                <includes>
+                    <include>scanners/**/*.json</include>
+                </includes>
+            </resource>
+        </resources>
         <plugins>
             <!-- Copy Burp API classes before compilation -->
             <plugin>

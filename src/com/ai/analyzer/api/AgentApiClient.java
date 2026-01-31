@@ -2,12 +2,16 @@ package com.ai.analyzer.api;
 
 import com.ai.analyzer.Agent.Assistant;
 import com.ai.analyzer.mcpClient.AllMcpToolProvider;
-import com.ai.analyzer.mcpClient.McpToolMappingConfig;
 import com.ai.analyzer.mcpClient.ToolExecutionFormatter;
+import com.ai.analyzer.Tools.BurpTools;
+import com.ai.analyzer.Tools.FileSystemAccessTools;
 import com.ai.analyzer.skills.SkillManager;
 import com.ai.analyzer.skills.SkillToolsProvider;
 import com.ai.analyzer.utils.JsonParser;
 import com.ai.analyzer.utils.RequestSourceDetector;
+import com.ai.analyzer.rulesMatch.PreScanFilterManager;
+import com.ai.analyzer.rulesMatch.PreScanFilter;
+import com.ai.analyzer.rulesMatch.ScanMatch;
 import burp.api.montoya.http.message.HttpRequestResponse;
 
 import java.util.concurrent.CompletableFuture;
@@ -57,10 +61,19 @@ public class AgentApiClient {
     private MontoyaApi api;
     private StreamingChatModel chatModel;
     private Assistant assistant;
-    private McpToolProvider mcpToolProvider;
+    private McpToolProvider mcpToolProvider; // 只用于 RAG MCP 和 Chrome MCP
     private MessageWindowChatMemory chatMemory;
     private SkillManager skillManager;
     private SkillToolsProvider skillToolsProvider;
+    private PreScanFilterManager preScanFilterManager;
+    
+    // ========== 并发控制锁 ==========
+    private final Object chatMemoryLock = new Object();
+    private final Object assistantLock = new Object();
+    private final Object streamingLock = new Object();
+    
+    // ========== Burp 工具 ==========
+    private BurpTools burpTools;
     
     // ========== 状态标志 ==========
     private boolean isFirstInitialization = true;
@@ -68,6 +81,7 @@ public class AgentApiClient {
     private volatile TokenStream currentTokenStream;
     private volatile StreamingHandle streamingHandle;
     private volatile boolean isStreamingCancelled = false;
+    private volatile boolean isStreaming = false; // 标记是否正在流式输出
 
     // ========== 构造函数 ==========
 
@@ -123,8 +137,7 @@ public class AgentApiClient {
     public ApiProvider getApiProvider() { return config.getApiProvider(); }
     public boolean isEnableThinking() { return config.isEnableThinking(); }
     public boolean isEnableSearch() { return config.isEnableSearch(); }
-    public boolean isEnableMcp() { return config.isEnableMcp(); }
-    public String getBurpMcpUrl() { return config.getBurpMcpUrl(); }
+    // Burp MCP 已移除，Burp 工具现在直接使用 Montoya API
     public boolean isEnableRagMcp() { return config.isEnableRagMcp(); }
     public String getRagMcpUrl() { return config.getRagMcpUrl(); }
     public String getRagMcpDocumentsPath() { return config.getRagMcpDocumentsPath(); }
@@ -192,28 +205,7 @@ public class AgentApiClient {
         }
     }
     
-    public void setEnableMcp(boolean enableMcp) {
-        if (config.isEnableMcp() != enableMcp) {
-            config.setEnableMcp(enableMcp);
-            if (!enableMcp) mcpToolProvider = null;
-            assistant = null;
-            logInfo("MCP 工具调用已" + (enableMcp ? "启用" : "禁用"));
-        }
-    }
-    
-    public void setBurpMcpUrl(String mcpUrl) {
-        if (mcpUrl == null || mcpUrl.trim().isEmpty()) {
-            mcpUrl = "http://127.0.0.1:9876/sse";
-        }
-        if (!config.getBurpMcpUrl().equals(mcpUrl.trim())) {
-            config.setBurpMcpUrl(mcpUrl.trim());
-            if (config.isEnableMcp()) {
-                mcpToolProvider = null;
-                assistant = null;
-                logInfo("Burp MCP 地址已更新: " + mcpUrl);
-            }
-        }
-    }
+    // Burp MCP 配置方法已移除（Burp 工具现在直接使用 Montoya API）
     
     public void setEnableRagMcp(boolean enableRagMcp) {
         if (config.isEnableRagMcp() != enableRagMcp) {
@@ -301,6 +293,13 @@ public class AgentApiClient {
         getSkillManager().loadSkills();
         skillToolsProvider = null;
         assistant = null;
+    }
+    
+    /**
+     * 设置前置扫描过滤器管理器
+     */
+    public void setPreScanFilterManager(PreScanFilterManager preScanFilterManager) {
+        this.preScanFilterManager = preScanFilterManager;
     }
 
     // ========== ChatModel 初始化 ==========
@@ -467,12 +466,14 @@ public class AgentApiClient {
         // 初始化 MCP 工具提供者
         initializeMcpToolProvider();
         
-        // 创建 ChatMemory
-        if (chatMemory == null) {
-            chatMemory = MessageWindowChatMemory.builder()
-                    .maxMessages(20)
-                    .build();
-            logInfo("ChatMemory 已创建（最大20条消息）");
+        // 创建 ChatMemory（线程安全）
+        synchronized (chatMemoryLock) {
+            if (chatMemory == null) {
+                chatMemory = MessageWindowChatMemory.builder()
+                        .maxMessages(20)
+                        .build();
+                logInfo("ChatMemory 已创建（最大20条消息）");
+            }
         }
         
         // 创建 Assistant
@@ -489,16 +490,17 @@ public class AgentApiClient {
         
         // 添加扩展工具
         if (api != null) {
-            // BurpExtTools
-            if (config.isEnableMcp()) {
-                com.ai.analyzer.Tools.BurpExtTools burpExtTools = new com.ai.analyzer.Tools.BurpExtTools(api);
-                assistantBuilder.tools(burpExtTools);
-                logInfo("已添加 BurpExtTools");
+            // BurpTools - Burp Suite 原生工具（直接使用 Montoya API）
+            // 已包含所有 Burp 工具功能，包括 Intruder 批量测试
+            if (burpTools == null) {
+                burpTools = new BurpTools(api);
             }
+            assistantBuilder.tools(burpTools);
+            logInfo("已添加 BurpTools（Burp Suite 完整工具集，包括 HTTP 请求、Intruder 批量测试等）");
             
             // FileSystemAccessTools
             if (config.isEnableFileSystemAccess() && config.hasRagDocumentsPath()) {
-                com.ai.analyzer.Tools.FileSystemAccessTools fsaTools = new com.ai.analyzer.Tools.FileSystemAccessTools(api);
+                FileSystemAccessTools fsaTools = new FileSystemAccessTools(api);
                 fsaTools.setAllowedRootPath(config.getRagMcpDocumentsPath());
                 assistantBuilder.tools(fsaTools);
                 logInfo("已添加 FileSystemAccessTools (知识库: " + config.getRagMcpDocumentsPath() + ")");
@@ -518,76 +520,70 @@ public class AgentApiClient {
         logInfo("Assistant 实例已创建（共享实例，保持上下文）");
     }
     
+    /**
+     * 初始化 MCP 工具提供者
+     * 注意：Burp MCP 已移除，现在只初始化 RAG MCP 和 Chrome MCP
+     */
     private void initializeMcpToolProvider() {
-        if (!config.hasAnyMcpEnabled() || mcpToolProvider != null) {
-            if (!config.hasAnyMcpEnabled()) mcpToolProvider = null;
+        // 检查是否需要初始化 MCP（只检查 RAG 和 Chrome MCP）
+        boolean needRagMcp = config.isEnableRagMcp() && config.hasRagDocumentsPath();
+        boolean needChromeMcp = config.isEnableChromeMcp() && config.hasChromeMcpUrl();
+        
+        if (!needRagMcp && !needChromeMcp) {
+            mcpToolProvider = null;
             return;
         }
         
+        if (mcpToolProvider != null) {
+            return; // 已初始化
+        }
+        
+        try {
+            AllMcpToolProvider mcpProviderHelper = new AllMcpToolProvider();
+            List<McpClient> allMcpClients = new ArrayList<>();
+            List<String> allFilterTools = new ArrayList<>();
+            
+            // RAG MCP - 知识库文档查询
+            if (needRagMcp) {
                 try {
-                    AllMcpToolProvider mcpProviderHelper = new AllMcpToolProvider();
-                    List<McpClient> allMcpClients = new ArrayList<>();
-                    List<String> allFilterTools = new ArrayList<>();
-                    McpToolMappingConfig mappingConfig = null;
-                    
-            // Burp MCP
-            if (config.isEnableMcp()) {
-                        try {
-                    McpTransport burpTransport = mcpProviderHelper.createHttpTransport(config.getEffectiveBurpMcpUrl());
-                            McpClient burpMcpClient = mcpProviderHelper.createMcpClient(burpTransport, "BurpMCPClient");
-                            allMcpClients.add(burpMcpClient);
-                            allFilterTools.addAll(List.of(
-                                "send_http1_request", "send_http2_request", 
-                                "get_proxy_http_history", "get_proxy_http_history_regex",
-                                "get_proxy_websocket_history", "get_proxy_websocket_history_regex", 
-                                "get_scanner_issues", "set_task_execution_engine_state",
-                                "get_active_editor_contents", "set_active_editor_contents",
-                        "create_repeater_tab"
-                            ));
-                            mappingConfig = McpToolMappingConfig.createBurpMapping();
-                    logInfo("Burp MCP 客户端已添加，地址: " + config.getEffectiveBurpMcpUrl());
-                        } catch (Exception e) {
-                    logInfo("Burp MCP 客户端初始化失败: " + e.getMessage());
-                        }
-                    }
-                    
-            // RAG MCP
-            if (config.isEnableRagMcp() && config.hasRagDocumentsPath()) {
-                        try {
-                    McpTransport ragTransport = mcpProviderHelper.createRagMcpTransport(config.getRagMcpDocumentsPath().trim());
-                            McpClient ragMcpClient = mcpProviderHelper.createMcpClient(ragTransport, "RagMCPClient");
-                            allMcpClients.add(ragMcpClient);
+                    McpTransport ragTransport = mcpProviderHelper.createRagMcpTransport(
+                        config.getRagMcpDocumentsPath().trim()
+                    );
+                    McpClient ragMcpClient = mcpProviderHelper.createMcpClient(ragTransport, "RagMCPClient");
+                    allMcpClients.add(ragMcpClient);
                     allFilterTools.addAll(List.of("index_document", "query_document"));
                     logInfo("RAG MCP 客户端已添加，知识库路径: " + config.getRagMcpDocumentsPath());
-                        } catch (Exception e) {
-                    logInfo("RAG MCP 客户端初始化失败: " + e.getMessage());
-                        }
-                    }
-                    
-            // Chrome MCP
-            if (config.isEnableChromeMcp() && config.hasChromeMcpUrl()) {
-                        try {
-                    McpTransport chromeTransport = mcpProviderHelper.createStreamableHttpTransport(config.getChromeMcpUrl().trim());
-                            McpClient chromeMcpClient = mcpProviderHelper.createMcpClient(chromeTransport, "ChromeMCPClient");
-                            allMcpClients.add(chromeMcpClient);
-                    logInfo("Chrome MCP 客户端已添加，地址: " + config.getChromeMcpUrl());
-                        } catch (Exception e) {
-                    logInfo("Chrome MCP 客户端初始化失败: " + e.getMessage());
-                        }
-                    }
-                    
-                    if (!allMcpClients.isEmpty()) {
-                    Thread.sleep(1000);
-                        String[] filterToolsArray = allFilterTools.isEmpty() ? null : allFilterTools.toArray(new String[0]);
-                        mcpToolProvider = mcpProviderHelper.createToolProviderWithMapping(
-                    allMcpClients, mappingConfig, filterToolsArray
-                        );
-                logInfo("MCP 工具提供者初始化成功，已添加 " + allMcpClients.size() + " 个 MCP 客户端");
-                    }
                 } catch (Exception e) {
-            logInfo("MCP 工具提供者初始化失败: " + e.getMessage());
-                    mcpToolProvider = null;
+                    logError("RAG MCP 客户端初始化失败: " + e.getMessage());
                 }
+            }
+            
+            // Chrome MCP - 浏览器控制
+            if (needChromeMcp) {
+                try {
+                    McpTransport chromeTransport = mcpProviderHelper.createStreamableHttpTransport(
+                        config.getChromeMcpUrl().trim()
+                    );
+                    McpClient chromeMcpClient = mcpProviderHelper.createMcpClient(chromeTransport, "ChromeMCPClient");
+                    allMcpClients.add(chromeMcpClient);
+                    logInfo("Chrome MCP 客户端已添加，地址: " + config.getChromeMcpUrl());
+                } catch (Exception e) {
+                    logError("Chrome MCP 客户端初始化失败: " + e.getMessage());
+                }
+            }
+            
+            if (!allMcpClients.isEmpty()) {
+                Thread.sleep(1000); // 等待 MCP 连接稳定
+                String[] filterToolsArray = allFilterTools.isEmpty() ? null : allFilterTools.toArray(new String[0]);
+                mcpToolProvider = mcpProviderHelper.createToolProviderWithMapping(
+                    allMcpClients, null, filterToolsArray
+                );
+                logInfo("MCP 工具提供者初始化成功，已添加 " + allMcpClients.size() + " 个 MCP 客户端");
+            }
+        } catch (Exception e) {
+            logError("MCP 工具提供者初始化失败: " + e.getMessage());
+            mcpToolProvider = null;
+        }
     }
     
     // ========== 流式输出控制 ==========
@@ -613,8 +609,12 @@ public class AgentApiClient {
     
     public void clearContext() {
         cancelStreaming();
+        synchronized (assistantLock) {
             assistant = null;
-        chatMemory = null;
+        }
+        synchronized (chatMemoryLock) {
+            chatMemory = null;
+        }
         logInfo("聊天上下文已清空");
     }
 
@@ -682,7 +682,41 @@ public class AgentApiClient {
             ? com.ai.analyzer.utils.HttpFormatter.formatHttpRequestResponse(requestResponse)
             : "";
         
-        analyzeRequestStream(httpRequest, userPrompt, sourceInfo, onChunk);
+        // ========== 前置扫描器集成 ==========
+        String preScanHint = "";
+        if (preScanFilterManager != null && preScanFilterManager.isEnabled() && requestResponse != null) {
+            try {
+                PreScanFilter filter = preScanFilterManager.getFilter();
+                if (filter != null) {
+                    // 执行扫描（500ms超时）
+                    List<ScanMatch> matches = filter.scan(requestResponse, 
+                        preScanFilterManager.getDefaultScanTimeout());
+                    
+                    if (!matches.isEmpty()) {
+                        // 在UI中显示匹配结果
+                        String uiMessage = PreScanFilter.buildUiMessage(matches);
+                        if (onChunk != null) {
+                            onChunk.accept("\n" + uiMessage + "\n");
+                        }
+                        
+                        // 生成提示文本追加到UserPrompt
+                        preScanHint = PreScanFilter.buildPromptHint(matches);
+                        
+                        logInfo("[PreScan] 检测到 " + matches.size() + " 个疑似漏洞特征");
+                    }
+                }
+            } catch (Exception e) {
+                logError("[PreScan] 扫描失败: " + e.getMessage());
+            }
+        }
+        
+        // 将前置扫描结果追加到 userPrompt
+        String enhancedUserPrompt = userPrompt;
+        if (!preScanHint.isEmpty()) {
+            enhancedUserPrompt = (userPrompt != null ? userPrompt : "") + preScanHint;
+        }
+        
+        analyzeRequestStream(httpRequest, enhancedUserPrompt, sourceInfo, onChunk);
     }
     
     public void analyzeRequestStream(String httpRequest, String userPrompt, Consumer<String> onChunk) throws Exception {
@@ -708,12 +742,34 @@ public class AgentApiClient {
         Exception lastException = null;
         final int[] contentChunkCount = {0};
 
-        while (retryCount < maxRetries) {
-            try {
-                ensureAssistantInitialized();
-                
-                List<ChatMessage> messages = List.of(userMessage);
-                TokenStream tokenStream = assistant.chat(messages);
+        // 等待之前的流式输出完成
+        synchronized (streamingLock) {
+            while (isStreaming) {
+                try {
+                    logInfo("等待之前的流式输出完成...");
+                    streamingLock.wait(5000); // 最多等待5秒
+                    if (isStreaming) {
+                        logInfo("等待超时，强制继续");
+                        break;
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new Exception("等待流式输出完成时被中断");
+                }
+            }
+            isStreaming = true;
+        }
+
+        try {
+            while (retryCount < maxRetries) {
+                try {
+                    ensureAssistantInitialized();
+                    
+                    TokenStream tokenStream;
+                    synchronized (assistantLock) {
+                        List<ChatMessage> messages = List.of(userMessage);
+                        tokenStream = assistant.chat(messages);
+                    }
                 CompletableFuture<ChatResponse> futureResponse = new CompletableFuture<>();
                 
                 currentTokenStream = tokenStream;
@@ -767,30 +823,38 @@ public class AgentApiClient {
                 }
                 break;
 
-            } catch (java.util.concurrent.TimeoutException e) {
-                cleanupStreamingState();
-                lastException = new Exception("流式输出超时（10分钟）", e);
-                retryCount++;
-            } catch (java.util.concurrent.ExecutionException e) {
-                cleanupStreamingState();
-                Throwable cause = e.getCause();
-                lastException = cause instanceof Exception ? (Exception) cause : new Exception("流式输出失败", cause);
-                retryCount++;
-            } catch (InterruptedException e) {
-                cleanupStreamingState();
-                Thread.currentThread().interrupt();
-                throw new Exception("等待流式输出被中断", e);
-            } catch (Exception e) {
-                cleanupStreamingState();
-                lastException = e;
-                retryCount++;
+                } catch (java.util.concurrent.TimeoutException e) {
+                    cleanupStreamingState();
+                    lastException = new Exception("流式输出超时（10分钟）", e);
+                    retryCount++;
+                } catch (java.util.concurrent.ExecutionException e) {
+                    cleanupStreamingState();
+                    Throwable cause = e.getCause();
+                    lastException = cause instanceof Exception ? (Exception) cause : new Exception("流式输出失败", cause);
+                    retryCount++;
+                } catch (InterruptedException e) {
+                    cleanupStreamingState();
+                    Thread.currentThread().interrupt();
+                    throw new Exception("等待流式输出被中断", e);
+                } catch (Exception e) {
+                    cleanupStreamingState();
+                    lastException = e;
+                    retryCount++;
                 }
             }
 
-        if (lastException != null && retryCount >= maxRetries) {
-            throw new Exception(lastException.getMessage() + " (已重试 " + maxRetries + " 次)", lastException);
+            if (lastException != null && retryCount >= maxRetries) {
+                throw new Exception(lastException.getMessage() + " (已重试 " + maxRetries + " 次)", lastException);
+            }
+        } finally {
+            // 释放流式输出锁
+            synchronized (streamingLock) {
+                isStreaming = false;
+                streamingLock.notifyAll();
+            }
+            logInfo("流式输出锁已释放");
         }
-        }
+    }
 
     private void cleanupStreamingState() {
         currentTokenStream = null;
@@ -829,7 +893,7 @@ public class AgentApiClient {
     private String buildSystemPrompt() {
         return new SystemPromptBuilder()
                 .enableSearch(config.isEnableSearch())
-                .enableMcp(config.isEnableMcp())
+                // Burp MCP 已移除（Burp 工具现在直接使用 Montoya API，无需配置）
                 .enableRagMcp(config.isEnableRagMcp())
                 .enableChromeMcp(config.isEnableChromeMcp())
                 .enableFileSystemAccess(config.isEnableFileSystemAccess())

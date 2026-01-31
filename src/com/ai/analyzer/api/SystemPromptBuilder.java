@@ -15,7 +15,7 @@ import com.ai.analyzer.skills.SkillManager;
 public class SystemPromptBuilder {
     
     private boolean enableSearch;
-    private boolean enableMcp;
+    // Burp MCP 已移除（Burp 工具现在直接使用 Montoya API，始终可用）
     private boolean enableRagMcp;
     private boolean enableChromeMcp;
     private boolean enableFileSystemAccess;
@@ -33,10 +33,7 @@ public class SystemPromptBuilder {
         return this;
     }
     
-    public SystemPromptBuilder enableMcp(boolean enableMcp) {
-        this.enableMcp = enableMcp;
-        return this;
-    }
+    // Burp MCP setter 已移除（Burp 工具现在直接使用 Montoya API）
     
     public SystemPromptBuilder enableRagMcp(boolean enableRagMcp) {
         this.enableRagMcp = enableRagMcp;
@@ -86,9 +83,8 @@ public class SystemPromptBuilder {
         }
         
         // ========== 工具使用规则 ==========
-        if (enableMcp || enableRagMcp || enableChromeMcp) {
-            buildToolsSection(prompt);
-        }
+        // Burp 工具现在始终可用（直接集成），不需要配置开关
+        buildToolsSection(prompt);
         
         // ========== 扩展工具 ==========
         buildExtendedToolsSection(prompt);
@@ -151,9 +147,8 @@ public class SystemPromptBuilder {
     private void buildToolsSection(StringBuilder prompt) {
         prompt.append("# 工具使用规则\n\n");
         
-        if (enableMcp) {
-            buildBurpToolsSection(prompt);
-        }
+        // Burp 工具说明（现在直接集成，始终可用）
+        buildBurpToolsSection(prompt);
         
         if (enableRagMcp) {
             buildRagToolsSection(prompt);
@@ -175,6 +170,11 @@ public class SystemPromptBuilder {
         
         prompt.append("### 执行类工具（主动测试验证）\n");
         prompt.append("- `send_http1_request`: **核心测试工具**，发现可测试的安全风险时使用\n");
+        prompt.append("  **⚠️ HTTP 请求格式要求（必须遵守，否则会超时）：**\n");
+        prompt.append("  - HTTP 请求头块末尾**必须**有一个空行（`\\r\\n\\r\\n` 或 `\\n\\n`）\n");
+        prompt.append("  - 正确格式：`请求行\\r\\n + 请求头\\r\\n + 空行\\r\\n + 请求体`\n");
+        prompt.append("  - 示例：`GET /path HTTP/1.1\\r\\nHost: example.com\\r\\n\\r\\n`\n");
+        prompt.append("  - **缺少末尾空行会导致请求超时失败！**\n");
         prompt.append("- `send_http2_request`: HTTP/2 协议测试\n\n");
         
         prompt.append("### 辅助工具（智能决策，按需调用）\n");
@@ -218,24 +218,23 @@ public class SystemPromptBuilder {
     private void buildExtendedToolsSection(StringBuilder prompt) {
         prompt.append("## 扩展工具\n\n");
         
-        if (enableMcp) {
-            prompt.append("### Intruder 批量测试工具\n");
-            prompt.append("- **工具名称**: `BurpExtTools_send_to_intruder`\n");
-            prompt.append("- **使用场景**: 需要批量 fuzz 测试时使用\n");
-            prompt.append("- **功能**: AI 生成 payloads 并发送到 Intruder\n\n");
-            prompt.append("**关键参数**：\n");
-            prompt.append("- `requestContent`: 原始 HTTP 请求（不需要添加任何标记）\n");
-            prompt.append("- `targetParameters`: **【重要】要注入的参数名列表**，如 [\"id\", \"name\"]，工具会自动找到并标记\n");
-            prompt.append("- `payloads`: AI 生成的 payload 列表，如 [\"' OR '1'='1\", \"<script>alert(1)</script>\"]\n\n");
-            prompt.append("**使用示例**：\n");
-            prompt.append("```\n");
-            prompt.append("targetParameters: [\"userId\", \"search\"]\n");
-            prompt.append("payloads: [\"' OR '1'='1\", \"1' AND SLEEP(5)--\", \"<script>alert(1)</script>\"]\n");
-            prompt.append("```\n");
-            prompt.append("工具会自动在请求中找到 userId 和 search 参数，并将它们标记为插入点。\n\n");
-            prompt.append("**支持的参数位置**：URL 查询参数、POST 表单、JSON 字段、Cookie 值\n\n");
-            prompt.append("**适用场景**：SQL 注入、XSS、命令注入、目录遍历等批量测试\n\n");
-        }
+        // Burp 扩展工具说明（现在直接集成到 BurpTools，始终可用）
+        prompt.append("### Intruder 批量测试工具\n");
+        prompt.append("- **工具名称**: `send_to_intruder`\n");
+        prompt.append("- **使用场景**: 需要批量 fuzz 测试时使用\n");
+        prompt.append("- **功能**: AI 生成 payloads 并自动标记插入点，发送到 Intruder\n\n");
+        prompt.append("**关键参数**：\n");
+        prompt.append("- `requestContent`: 原始 HTTP 请求（不需要添加任何标记）\n");
+        prompt.append("- `targetParameters`: **【重要】要注入的参数名列表**，如 [\"id\", \"name\"]，工具会自动找到并标记\n");
+        prompt.append("- `payloads`: AI 生成的 payload 列表，如 [\"' OR '1'='1\", \"<script>alert(1)</script>\"]\n\n");
+        prompt.append("**使用示例**：\n");
+        prompt.append("```\n");
+        prompt.append("targetParameters: [\"userId\", \"search\"]\n");
+        prompt.append("payloads: [\"' OR '1'='1\", \"1' AND SLEEP(5)--\", \"<script>alert(1)</script>\"]\n");
+        prompt.append("```\n");
+        prompt.append("工具会自动在请求中找到 userId 和 search 参数，并将它们标记为插入点。\n\n");
+        prompt.append("**支持的参数位置**：URL 查询参数、POST 表单、JSON 字段、Cookie 值\n\n");
+        prompt.append("**适用场景**：SQL 注入、XSS、命令注入、目录遍历等批量测试\n\n");
         
         // FileSystemAccessTools - 按需启用
         if (enableFileSystemAccess && ragMcpDocumentsPath != null && !ragMcpDocumentsPath.isEmpty()) {

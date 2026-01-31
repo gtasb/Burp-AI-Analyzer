@@ -212,7 +212,17 @@ public class McpToolMappingConfig {
                 "- targetHostname: 目标主机名（域名或 IP 地址）\n" +
                 "- targetPort: 目标端口号（如 80, 443, 8080 等）\n" +
                 "- usesHttps: 是否使用 HTTPS 协议（true/false）\n" +
-                "注意：请求内容中的 \\n 会自动转换为 \\r\\n。");
+                "【⚠️ 关键格式要求】：\n" +
+                "- HTTP 请求头块末尾**必须**有一个空行（\\r\\n\\r\\n 或 \\n\\n）\n" +
+                "- 格式：请求行\\r\\n + 请求头\\r\\n + 空行\\r\\n + 请求体（如果有）\n" +
+                "- 示例正确格式：\n" +
+                "  GET /path HTTP/1.1\\r\\n" +
+                "  Host: example.com\\r\\n" +
+                "  Content-Type: application/json\\r\\n" +
+                "  \\r\\n" +
+                "  {\\\"key\\\":\\\"value\\\"}\n" +
+                "- 如果缺少末尾空行，请求会超时失败！\n" +
+                "注意：请求内容中的 \\n 会自动转换为 \\r\\n，但**必须确保头块末尾有空行**。");
 
         descriptionMappings.put("send_http2_request", "发送 HTTP/2 请求到指定目标并返回响应。支持 HTTP/2 协议特性（如伪头部字段）。\n" +
                 "参数：\n" +
