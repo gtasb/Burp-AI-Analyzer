@@ -25,6 +25,19 @@ public class AllMcpToolProvider {
 
 
     /**
+     * 获取 Burp MCP 的备用 URL（用于 404 fallback）
+     * Burp 文档：URL 可能带或不带 /sse，取决于扩展配置
+     */
+    public static String getAlternateBurpMcpUrl(String url) {
+        if (url == null || url.trim().isEmpty()) return "http://127.0.0.1:9876/sse";
+        url = url.trim();
+        if (url.endsWith("/sse")) {
+            return url.substring(0, url.length() - 4).replaceAll("/+$", "");
+        }
+        return url.replaceAll("/+$", "") + "/sse";
+    }
+    
+    /**
      * 创建 Legacy HTTP Transport（用于 Burp MCP Server）
      * 根据 curl 测试：Burp MCP Server 使用 SSE (Server-Sent Events) 协议
      * GET /sse 返回 SSE 流，服务器会提供动态的 /message?sessionId=xxx 端点

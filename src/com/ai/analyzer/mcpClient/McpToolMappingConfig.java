@@ -212,16 +212,37 @@ public class McpToolMappingConfig {
                 "- targetHostname: 目标主机名（域名或 IP 地址）\n" +
                 "- targetPort: 目标端口号（如 80, 443, 8080 等）\n" +
                 "- usesHttps: 是否使用 HTTPS 协议（true/false）\n" +
-                "【⚠️ 关键格式要求】：\n" +
-                "- HTTP 请求头块末尾**必须**有一个空行（\\r\\n\\r\\n 或 \\n\\n）\n" +
-                "- 格式：请求行\\r\\n + 请求头\\r\\n + 空行\\r\\n + 请求体（如果有）\n" +
-                "- 示例正确格式：\n" +
-                "  GET /path HTTP/1.1\\r\\n" +
-                "  Host: example.com\\r\\n" +
-                "  Content-Type: application/json\\r\\n" +
-                "  \\r\\n" +
-                "  {\\\"key\\\":\\\"value\\\"}\n" +
-                "- 如果缺少末尾空行，请求会超时失败！\n" +
+                "【🚨 CRITICAL - HTTP 请求格式要求（必须严格遵守）】：\n" +
+                "**格式规则（按顺序检查）：**\n" +
+                "1. 请求行格式：`METHOD /path?query HTTP/1.1\\r\\n`（协议版本必须在URL之后，用空格分隔）\n" +
+                "2. 请求头格式：每个请求头一行，以 `\\r\\n` 结尾\n" +
+                "3. **空行要求（最重要）**：请求头块末尾**必须**有一个空行（`\\r\\n\\r\\n`）\n" +
+                "4. 请求体（如果有）：空行后直接跟请求体内容\n" +
+                "**完整示例（GET请求）：**\n" +
+                "```\n" +
+                "GET /app/weborders.do?param=test HTTP/1.1\\r\\n" +
+                "Host: 222.73.207.85:8080\\r\\n" +
+                "Cookie: JSESSIONID=xxx\\r\\n" +
+                "\\r\\n" +
+                "```\n" +
+                "**完整示例（POST请求）：**\n" +
+                "```\n" +
+                "POST /api/login HTTP/1.1\\r\\n" +
+                "Host: example.com\\r\\n" +
+                "Content-Type: application/json\\r\\n" +
+                "Content-Length: 25\\r\\n" +
+                "\\r\\n" +
+                "{\\\"username\\\":\\\"admin\\\"}\n" +
+                "```\n" +
+                "**常见错误（必须避免）：**\n" +
+                "- ❌ 请求头后没有空行 → 会导致 \"The HTTP header block doesn't have a blank line at the end\" 错误\n" +
+                "- ❌ 协议版本在查询参数中 → 会导致 505 错误\n" +
+                "- ❌ 使用单个 `\\n` 而不是 `\\r\\n` → 可能导致格式错误\n" +
+                "**检查清单（调用前必须验证）：**\n" +
+                "1. ✅ 请求行格式正确（METHOD /path HTTP/1.1）\n" +
+                "2. ✅ 所有请求头以 `\\r\\n` 结尾\n" +
+                "3. ✅ 最后一个请求头后有一个空行（`\\r\\n\\r\\n`）\n" +
+                "4. ✅ 如果有请求体，空行后直接跟内容\n" +
                 "注意：请求内容中的 \\n 会自动转换为 \\r\\n，但**必须确保头块末尾有空行**。");
 
         descriptionMappings.put("send_http2_request", "发送 HTTP/2 请求到指定目标并返回响应。支持 HTTP/2 协议特性（如伪头部字段）。\n" +

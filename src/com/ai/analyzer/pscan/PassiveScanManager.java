@@ -277,11 +277,7 @@ public class PassiveScanManager {
      * 消费者任务 - 从队列取请求进行扫描
      */
     private void consumerTask() {
-        String threadName = Thread.currentThread().getName();
-        logInfo("消费者线程启动: " + threadName);
-        
-        int processedCount = 0;
-        int errorCount = 0;
+        logInfo("消费者线程启动: " + Thread.currentThread().getName());
         
         while (isRunning.get() && !cancelFlag.get()) {
             try {
@@ -289,7 +285,7 @@ public class PassiveScanManager {
                 ScanResult result = scanQueue.poll(1, TimeUnit.SECONDS);
                 
                 if (result == null) {
-                    // 超时，继续等待（这是正常的，表示队列为空）
+                    // 超时，继续等待
                     continue;
                 }
                 
@@ -298,40 +294,23 @@ public class PassiveScanManager {
                 
                 // 检查是否已取消
                 if (cancelFlag.get()) {
-                    logInfo("消费者线程检测到取消标志，取消扫描: " + result.getShortUrl());
-                    result.markCancelled();
-                    notifyResultUpdated(result);
-                    continue;
-                }
-                
-                // 检查是否还在运行
-                if (!isRunning.get()) {
-                    logInfo("消费者线程检测到停止标志，取消扫描: " + result.getShortUrl());
                     result.markCancelled();
                     notifyResultUpdated(result);
                     continue;
                 }
                 
                 // 执行扫描
-                processedCount++;
-                logInfo("消费者线程处理第 " + processedCount + " 个请求: " + result.getShortUrl());
                 scanRequest(result);
                 
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                logInfo("消费者线程被中断: " + threadName);
                 break;
             } catch (Exception e) {
-                errorCount++;
-                logError("消费者任务异常 [" + errorCount + "]: " + e.getMessage());
-                e.printStackTrace(); // 打印完整堆栈，便于诊断
-                // 继续处理下一个请求，不退出循环
+                logError("消费者任务异常: " + e.getMessage());
             }
         }
         
-        logInfo("消费者线程退出: " + threadName + 
-                " (处理: " + processedCount + ", 错误: " + errorCount + ", isRunning: " + isRunning.get() + 
-                ", cancelFlag: " + cancelFlag.get() + ")");
+        logInfo("消费者线程退出: " + Thread.currentThread().getName());
     }
     
     /**
@@ -386,7 +365,6 @@ public class PassiveScanManager {
      * 执行单个请求的扫描
      */
     private void scanRequest(ScanResult result) {
-        long startTime = System.currentTimeMillis();
         try {
             // 标记为扫描中
             result.markScanning();
@@ -418,12 +396,9 @@ public class PassiveScanManager {
             
             // 检查是否已取消
             if (cancelFlag.get()) {
-                logInfo("扫描过程中检测到取消标志: " + result.getShortUrl());
                 result.markCancelled();
             } else {
                 // 标记完成（会自动解析风险等级）
-                long duration = System.currentTimeMillis() - startTime;
-                logInfo("扫描完成: " + result.getShortUrl() + " (耗时: " + duration + "ms)");
                 result.markCompleted(aiResponse);
             }
             
@@ -433,17 +408,11 @@ public class PassiveScanManager {
                 currentStreamingScanResult = null;
             }
             
-            long duration = System.currentTimeMillis() - startTime;
             if (cancelFlag.get()) {
-                logInfo("扫描已取消: " + result.getShortUrl() + " (耗时: " + duration + "ms)");
                 result.markCancelled();
             } else {
                 result.markError(e.getMessage());
-                logError("扫描请求失败: " + result.getShortUrl() + " (耗时: " + duration + "ms) - " + e.getMessage());
-                // 如果是超时异常，记录更详细的信息
-                if (e.getMessage() != null && e.getMessage().contains("超时")) {
-                    logError("  → 超时详情: 请求可能包含大量工具调用或响应较慢");
-                }
+                logError("扫描请求失败: " + result.getShortUrl() + " - " + e.getMessage());
             }
         }
         

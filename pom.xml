@@ -45,47 +45,46 @@
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j-core</artifactId>
-        <version>1.10.0</version>
+        <version>1.11.0</version>
     </dependency>
 
     <!-- LangChain4j 主要功能 -->
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j</artifactId>
-        <version>1.10.0</version>
+        <version>1.11.0</version>
     </dependency>
 
     <!-- OpenAI 实现 -->
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j-open-ai</artifactId>
-        <version>1.10.0</version>
+        <version>1.11.0</version>
     </dependency>
 
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j-http-client-jdk</artifactId>
-        <version>1.10.0</version>
+        <version>1.11.0</version>
     </dependency>
 
     <dependency>
         <groupId>com.alibaba</groupId>
         <artifactId>dashscope-sdk-java</artifactId>
-        <!-- 请将 'the-latest-version' 替换为最新版本号：https://mvnrepository.com/artifact/com.alibaba/dashscope-sdk-java -->
-        <version>2.22.6</version>
+        <version>2.22.9</version>
     </dependency>
 
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j-community-dashscope</artifactId>
-        <version>1.10.0-beta18</version>
+        <version>1.11.0-beta19</version>
     </dependency>
 
     <!-- MCP 模块 -->
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j-mcp</artifactId>
-        <version>1.10.0-beta18</version>
+        <version>1.11.0-beta19</version>
     </dependency>
 
 <!--    &lt;!&ndash; Easy RAG 模块 &ndash;&gt;-->
@@ -188,7 +187,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.11.0</version>
+                <version>3.15.0</version>
                 <configuration>
                     <source>21</source>
                     <target>21</target>
@@ -200,7 +199,7 @@
                         <path>
                             <groupId>org.projectlombok</groupId>
                             <artifactId>lombok</artifactId>
-                            <version>1.18.34</version>
+                            <version>1.18.42</version>
                         </path>
                     </annotationProcessorPaths>
                 </configuration>
@@ -208,7 +207,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-assembly-plugin</artifactId>
-                <version>3.6.0</version>
+                <version>3.7.1</version>
                 <configuration>
                     <descriptorRefs>
                         <descriptorRef>jar-with-dependencies</descriptorRef>

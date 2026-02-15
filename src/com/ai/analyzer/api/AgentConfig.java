@@ -23,7 +23,8 @@ public class AgentConfig {
     private String customParameters = "";
     
     // ========== MCP 配置 ==========
-    // Burp MCP 已移除（Burp 工具现在直接使用 Montoya API）
+    private boolean enableMcp = false;
+    private String burpMcpUrl = "http://127.0.0.1:9876";
     
     private boolean enableRagMcp = false;
     private String ragMcpUrl = "";
@@ -80,7 +81,8 @@ public class AgentConfig {
         this.enableThinking = other.enableThinking;
         this.enableSearch = other.enableSearch;
         this.customParameters = other.customParameters;
-        // Burp MCP 已移除
+        this.enableMcp = other.enableMcp;
+        this.burpMcpUrl = other.burpMcpUrl;
         this.enableRagMcp = other.enableRagMcp;
         this.ragMcpUrl = other.ragMcpUrl;
         this.ragMcpDocumentsPath = other.ragMcpDocumentsPath;
@@ -99,10 +101,18 @@ public class AgentConfig {
     
     /**
      * 检查是否启用了任何 MCP
-     * 注意：Burp MCP 已移除，只检查 RAG MCP 和 Chrome MCP
      */
     public boolean hasAnyMcpEnabled() {
-        return enableRagMcp || enableChromeMcp;
+        return enableMcp || enableRagMcp || enableChromeMcp;
+    }
+    
+    /**
+     * 获取有效的 Burp MCP URL
+     */
+    public String getEffectiveBurpMcpUrl() {
+        return (burpMcpUrl != null && !burpMcpUrl.trim().isEmpty()) 
+            ? burpMcpUrl.trim() 
+            : "http://127.0.0.1:9876/sse";
     }
     
     /**
@@ -126,6 +136,7 @@ public class AgentConfig {
                 ", model='" + model + '\'' +
                 ", enableThinking=" + enableThinking +
                 ", enableSearch=" + enableSearch +
+                ", enableMcp=" + enableMcp +
                 ", enableRagMcp=" + enableRagMcp +
                 ", enableChromeMcp=" + enableChromeMcp +
                 ", enableFileSystemAccess=" + enableFileSystemAccess +

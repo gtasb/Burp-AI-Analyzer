@@ -49,7 +49,8 @@ public class AIAnalyzerTab extends JPanel {
     private JTextField customParametersField; // 自定义参数输入框
     private JCheckBox enableThinkingCheckBox;
     private JCheckBox enableSearchCheckBox;
-    // Burp MCP 相关组件已移除（Burp 工具现在直接使用 Montoya API）
+    private JCheckBox enableMcpCheckBox;
+    private JTextField BurpMcpUrlField;
     private JCheckBox enableRagMcpCheckBox;
     // private JTextField ragMcpUrlField; // RAG MCP 地址暂时隐藏
     private JTextField ragMcpDocumentsPathField;
@@ -361,7 +362,10 @@ public class AIAnalyzerTab extends JPanel {
             psClient.setEnableThinking(apiClient.isEnableThinking());
             psClient.setEnableSearch(apiClient.isEnableSearch());
             
-            // MCP 配置（Burp MCP 已移除，只同步 RAG 和 Chrome MCP）
+            // MCP 配置（关键：这些配置决定了工具是否可用）
+            psClient.setEnableMcp(apiClient.isEnableMcp());
+            psClient.setBurpMcpUrl(apiClient.getBurpMcpUrl());
+            
             // RAG MCP 配置
             psClient.setEnableRagMcp(apiClient.isEnableRagMcp());
             psClient.setRagMcpUrl(apiClient.getRagMcpUrl());
@@ -382,7 +386,8 @@ public class AIAnalyzerTab extends JPanel {
             }
             
             api.logging().logToOutput("[AIAnalyzerTab] 已同步所有配置到被动扫描客户端");
-            api.logging().logToOutput("[AIAnalyzerTab] MCP配置 - EnableRagMcp: " + apiClient.isEnableRagMcp() + 
+            api.logging().logToOutput("[AIAnalyzerTab] MCP配置 - EnableMcp: " + apiClient.isEnableMcp() + 
+                                     ", EnableRagMcp: " + apiClient.isEnableRagMcp() + 
                                      ", EnableChromeMcp: " + apiClient.isEnableChromeMcp());
         }
     }
@@ -567,8 +572,64 @@ public class AIAnalyzerTab extends JPanel {
         JSeparator mcpSeparator = new JSeparator();
         apiConfigPanel.add(mcpSeparator, gbc);
         
-        // Burp MCP 相关 UI 已移除（Burp 工具现在直接使用 Montoya API，无需配置）
+        // Burp MCP 工具调用开关
+        gbc.gridx = 0;
+        gbc.gridy = 6;
+        gbc.gridwidth = 1;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        apiConfigPanel.add(new JLabel("启用 Burp MCP 工具:"), gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        enableMcpCheckBox = new JCheckBox("启用 Burp MCP 工具调用", false);
+        enableMcpCheckBox.addActionListener(e -> {
+            boolean enabled = enableMcpCheckBox.isSelected();
+            BurpMcpUrlField.setEnabled(enabled);
+            apiClient.setEnableMcp(enabled);
+            if (enabled && !BurpMcpUrlField.getText().trim().isEmpty()) {
+                apiClient.setBurpMcpUrl(BurpMcpUrlField.getText().trim());
+            }
+        });
+        apiConfigPanel.add(enableMcpCheckBox, gbc);
         
+        // Burp MCP 地址
+        gbc.gridx = 0;
+        gbc.gridy = 7;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        apiConfigPanel.add(new JLabel("Burp MCP 地址:"), gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        BurpMcpUrlField = new JTextField("http://127.0.0.1:9876/sse", 30);
+        BurpMcpUrlField.setEnabled(false); // 默认禁用，只有启用 MCP 时才可用
+        BurpMcpUrlField.addActionListener(e -> {
+            if (enableMcpCheckBox.isSelected()) {
+                apiClient.setBurpMcpUrl(BurpMcpUrlField.getText().trim());
+            }
+        });
+        BurpMcpUrlField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                updateBurpMcpUrl();
+            }
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                updateBurpMcpUrl();
+            }
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                updateBurpMcpUrl();
+            }
+            private void updateBurpMcpUrl() {
+                if (enableMcpCheckBox.isSelected() && !BurpMcpUrlField.getText().trim().isEmpty()) {
+                    apiClient.setBurpMcpUrl(BurpMcpUrlField.getText().trim());
+                }
+            }
+        });
+        apiConfigPanel.add(BurpMcpUrlField, gbc);
+
         // 知识库检索工具开关（两个选项放同一行）
         gbc.gridx = 0;
         gbc.gridy = 8;
@@ -1844,7 +1905,8 @@ public class AIAnalyzerTab extends JPanel {
                 userPromptArea.getText().trim(),
                 enableThinkingCheckBox.isSelected(),
                 enableSearchCheckBox.isSelected(),
-                // Burp MCP 参数已移除
+                enableMcpCheckBox.isSelected(),
+                BurpMcpUrlField.getText().trim(),
                 enableRagMcpCheckBox.isSelected(),
                 "", // ragMcpUrlField.getText().trim(), // RAG MCP 地址暂时隐藏
                 ragMcpDocumentsPathField.getText().trim(),
@@ -1944,7 +2006,10 @@ public class AIAnalyzerTab extends JPanel {
         enableThinkingCheckBox.setSelected(isDashScope && settings.isEnableThinking());
         enableSearchCheckBox.setSelected(isDashScope && settings.isEnableSearch());
         
-        // Burp MCP 配置已移除（Burp 工具现在直接使用 Montoya API）
+        // Burp MCP 配置
+        enableMcpCheckBox.setSelected(settings.isEnableMcp());
+        BurpMcpUrlField.setText(settings.getMcpUrl());
+        BurpMcpUrlField.setEnabled(settings.isEnableMcp());
         
         // RAG MCP 配置
         enableRagMcpCheckBox.setSelected(settings.isEnableRagMcp());
@@ -1976,7 +2041,8 @@ public class AIAnalyzerTab extends JPanel {
         apiClient.setCustomParameters(settings.getCustomParameters());
         apiClient.setEnableThinking(isDashScope && settings.isEnableThinking());
         apiClient.setEnableSearch(isDashScope && settings.isEnableSearch());
-        // Burp MCP 配置已移除（Burp 工具现在直接使用 Montoya API）
+        apiClient.setEnableMcp(settings.isEnableMcp());
+        apiClient.setBurpMcpUrl(settings.getMcpUrl());
         apiClient.setEnableRagMcp(settings.isEnableRagMcp());
         apiClient.setRagMcpUrl(settings.getRagMcpUrl());
         apiClient.setRagMcpDocumentsPath(settings.getRagMcpDocumentsPath());

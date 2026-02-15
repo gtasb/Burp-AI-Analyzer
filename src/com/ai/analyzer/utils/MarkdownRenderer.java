@@ -32,6 +32,12 @@ public class MarkdownRenderer {
      * 渲染Markdown到JTextPane的末尾（不清空现有内容）
      */
     public static void appendMarkdown(JTextPane textPane, String markdown) {
+        if (textPane == null) {
+            throw new IllegalArgumentException("textPane cannot be null");
+        }
+        if (markdown == null) {
+            markdown = "";
+        }
         StyledDocument doc = textPane.getStyledDocument();
 
         // 设置默认样式
@@ -126,16 +132,18 @@ public class MarkdownRenderer {
             
             if (nextStart < 0) {
                 // 没有更多工具块，渲染剩余的 Markdown
-                String remaining = markdown.substring(pos);
-                if (!remaining.isEmpty()) {
-                    Node document = parser.parse(remaining);
-                    renderNode(doc, document, regular, bold, italic, code, link, header1, header2, header3, list);
+                if (pos < markdown.length()) {
+                    String remaining = markdown.substring(pos);
+                    if (!remaining.isEmpty()) {
+                        Node document = parser.parse(remaining);
+                        renderNode(doc, document, regular, bold, italic, code, link, header1, header2, header3, list);
+                    }
                 }
                 break;
             }
             
             // 先渲染工具块之前的 Markdown 内容
-            if (nextStart > pos) {
+            if (nextStart > pos && nextStart <= markdown.length()) {
                 String beforeTool = markdown.substring(pos, nextStart);
                 if (!beforeTool.isEmpty()) {
                     Node document = parser.parse(beforeTool);
@@ -148,21 +156,37 @@ public class MarkdownRenderer {
                 int toolEnd = markdown.indexOf("[/TOOL_BLOCK]", nextStart);
                 if (toolEnd < 0) {
                     // 未闭合的标记，作为普通文本
-                    doc.insertString(doc.getLength(), markdown.substring(nextStart), regular);
+                    if (nextStart < markdown.length()) {
+                        doc.insertString(doc.getLength(), markdown.substring(nextStart), regular);
+                    }
                     break;
                 }
-                String toolContent = markdown.substring(nextStart + 12, toolEnd); // 12 = "[TOOL_BLOCK]".length()
-                renderToolBlock(doc, toolContent, regular);
-                pos = toolEnd + 13; // 13 = "[/TOOL_BLOCK]".length()
+                int contentStart = nextStart + 12; // 12 = "[TOOL_BLOCK]".length()
+                if (contentStart < toolEnd && toolEnd <= markdown.length()) {
+                    String toolContent = markdown.substring(contentStart, toolEnd);
+                    renderToolBlock(doc, toolContent, regular);
+                    pos = toolEnd + 13; // 13 = "[/TOOL_BLOCK]".length()
+                } else {
+                    // 无效的范围，跳过
+                    pos = nextStart + 12;
+                }
             } else {
                 int toolEnd = markdown.indexOf("[/TOOL]", nextStart);
                 if (toolEnd < 0) {
-                    doc.insertString(doc.getLength(), markdown.substring(nextStart), regular);
+                    if (nextStart < markdown.length()) {
+                        doc.insertString(doc.getLength(), markdown.substring(nextStart), regular);
+                    }
                     break;
                 }
-                String toolContent = markdown.substring(nextStart + 6, toolEnd); // 6 = "[TOOL]".length()
-                renderToolBlockSimple(doc, toolContent, regular);
-                pos = toolEnd + 7; // 7 = "[/TOOL]".length()
+                int contentStart = nextStart + 6; // 6 = "[TOOL]".length()
+                if (contentStart < toolEnd && toolEnd <= markdown.length()) {
+                    String toolContent = markdown.substring(contentStart, toolEnd);
+                    renderToolBlockSimple(doc, toolContent, regular);
+                    pos = toolEnd + 7; // 7 = "[/TOOL]".length()
+                } else {
+                    // 无效的范围，跳过
+                    pos = nextStart + 6;
+                }
             }
         }
     }
@@ -608,6 +632,15 @@ public class MarkdownRenderer {
      * 每次调用时重新解析并渲染整个缓冲区内容，替换从指定位置开始的内容
      */
     public static void appendMarkdownStreaming(JTextPane textPane, String markdown, int startPos) {
+        if (textPane == null) {
+            throw new IllegalArgumentException("textPane cannot be null");
+        }
+        if (markdown == null) {
+            markdown = "";
+        }
+        if (startPos < 0) {
+            startPos = 0;
+        }
         StyledDocument doc = textPane.getStyledDocument();
         
         try {
