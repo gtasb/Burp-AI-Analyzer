@@ -865,12 +865,19 @@ public class AgentApiClient {
         }
 
         if (httpContent != null && !httpContent.trim().isEmpty()) {
-            if (httpContent.contains("=== HTTP请求 ===") && httpContent.contains("=== HTTP响应 ===")) {
+            com.ai.analyzer.utils.HttpFormatter.CompressResult compressed = 
+                com.ai.analyzer.utils.HttpFormatter.compressIfTooLong(httpContent);
+            if (compressed.wasCompressed) {
+                logInfo("HTTP内容过长已自动压缩: " + compressed.originalLength + " → " + compressed.compressedLength + " 字符");
+            }
+            String finalHttp = compressed.content;
+            
+            if (finalHttp.contains("=== HTTP请求 ===") && finalHttp.contains("=== HTTP响应 ===")) {
                 content.append("以下是完整的HTTP请求和响应信息：\n\n");
             } else {
                 content.append("以下是HTTP请求内容：\n\n");
             }
-                content.append(httpContent);
+            content.append(finalHttp);
         }
 
         if (userPrompt != null && !userPrompt.trim().isEmpty()) {
