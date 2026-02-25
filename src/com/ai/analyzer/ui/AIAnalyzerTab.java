@@ -1497,7 +1497,12 @@ public class AIAnalyzerTab extends JPanel {
         JPanel panel = new JPanel(new BorderLayout());
         panel.setBorder(BorderFactory.createTitledBorder("AI分析结果"));
 
-        resultTextPane = new JTextPane();
+        resultTextPane = new JTextPane() {
+            @Override
+            public boolean getScrollableTracksViewportWidth() {
+                return true;
+            }
+        };
         resultTextPane.setEditable(false);
         resultTextPane.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
         resultTextPane.setContentType("text/plain");
@@ -1506,12 +1511,15 @@ public class AIAnalyzerTab extends JPanel {
         // 被动扫描与主动分析共用同一结果区域
         passiveScanResultPane = resultTextPane;
         JScrollPane resultScrollPane = new JScrollPane(resultTextPane);
+        resultScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         panel.add(resultScrollPane, BorderLayout.CENTER);
 
         // 用户提示词区域
         JPanel promptPanel = new JPanel(new BorderLayout());
         promptPanel.setBorder(BorderFactory.createTitledBorder("分析提示词"));
         userPromptArea = new JTextArea(3, 50);
+        userPromptArea.setLineWrap(true);
+        userPromptArea.setWrapStyleWord(true);
         userPromptArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
         userPromptArea.setBackground(Color.WHITE);
         userPromptArea.setForeground(Color.BLACK);
@@ -1684,11 +1692,32 @@ public class AIAnalyzerTab extends JPanel {
                         httpContent = finalRequestData.getFullRequestResponse();
                     }
                     
-                    // 在开始分析前清空结果面板
-                    SwingUtilities.invokeLater(() -> {
-                        resultTextPane.setText("");
+                    // 检查HTTP内容是否过长
+                    final boolean httpTooLong = !httpContent.isEmpty() 
+                        && httpContent.length() > com.ai.analyzer.utils.HttpFormatter.DEFAULT_MAX_LENGTH;
+                    final int httpOrigLen = httpContent.length();
+                    
+                    // 清空结果面板，如果内容过长则添加压缩提示
+                    try {
+                        SwingUtilities.invokeAndWait(() -> {
+                            resultTextPane.setText("");
+                            if (httpTooLong) {
+                                try {
+                                    StyledDocument doc = resultTextPane.getStyledDocument();
+                                    javax.swing.text.Style warnStyle = doc.addStyle("httpWarning", null);
+                                    javax.swing.text.StyleConstants.setForeground(warnStyle, new Color(255, 140, 0));
+                                    javax.swing.text.StyleConstants.setItalic(warnStyle, true);
+                                    javax.swing.text.StyleConstants.setFontFamily(warnStyle, "Microsoft YaHei");
+                                    javax.swing.text.StyleConstants.setFontSize(warnStyle, 12);
+                                    doc.insertString(doc.getLength(), 
+                                        "HTTP内容过长（" + httpOrigLen + " 字符），已自动压缩处理\n\n", warnStyle);
+                                } catch (Exception ignored) {}
+                            }
+                            aiMessageStartPos = resultTextPane.getStyledDocument().getLength();
+                        });
+                    } catch (Exception e) {
                         aiMessageStartPos = 0;
-                    });
+                    }
                     
                     apiClient.analyzeRequestStream(
                         httpContent,

@@ -202,11 +202,12 @@ public class PreScanFilter {
         }
         
         StringBuilder message = new StringBuilder();
-        message.append("前置扫描器匹配到 ").append(matches.size()).append(" 个疑似漏洞特征：\n");
+        message.append("前置扫描器匹配到 ").append(matches.size()).append(" 个疑似漏洞特征\n");
         
-        for (ScanMatch match : matches) {
+        // 暂时不输出UI消息
+/*         for (ScanMatch match : matches) {
             message.append("• ").append(match.toUiMessage()).append("\n");
-        }
+        } */
         
         return message.toString();
     }

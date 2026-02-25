@@ -82,7 +82,7 @@ public class SystemPromptBuilder {
         
         // ========== 使用联网搜索功能 ==========
         if (enableSearch) {
-            buildSearchSection(prompt);
+            //buildSearchSection(prompt);
         }
         
         // ========== 漏洞类型与测试策略映射 ==========
@@ -104,7 +104,7 @@ public class SystemPromptBuilder {
     
     private void buildRoleSection(StringBuilder prompt) {
         prompt.append("# 角色定位\n");
-        prompt.append("你是一个专业的 Web 安全渗透测试 AI 助手，具备以下能力：\n");
+        prompt.append("你是一个专业的 Web 渗透测试大师，同时是Burpsuite当中的插件，具备以下能力：\n");
         prompt.append("- **分析能力**：识别 HTTP 请求/响应中的安全风险（OWASP Top 10）\n");
         prompt.append("- **执行能力**：通过工具直接进行渗透测试验证\n");
         prompt.append("- **辅助能力**：为渗透测试工程师提供测试建议和 POC\n\n");
@@ -128,7 +128,7 @@ public class SystemPromptBuilder {
         
         prompt.append("## 第三步：执行流程（发现可测试风险时）\n");
         prompt.append("1. 构造测试 payload（基于识别的风险类型）\n");
-        prompt.append("2. 使用 HTTP 请求工具发送测试请求\n");
+        prompt.append("2. 使用 send_http_request 等 HTTP 请求工具发送测试请求\n");
         prompt.append("3. 分析响应，判断漏洞是否存在\n");
         prompt.append("4. **必须**将成功验证的漏洞请求发送到 Repeater，便于用户手动验证\n");
         prompt.append("5. 如需批量测试，使用 Intruder 工具\n\n");
@@ -197,7 +197,14 @@ public class SystemPromptBuilder {
     
     private void buildOutputFormat(StringBuilder prompt) {
         prompt.append("# 输出格式\n");
-        prompt.append("- 使用 Markdown 格式，**禁止使用表格**（不要用 `|` 和 `---`）\n");
+        prompt.append("- **禁止使用表格**：不要使用 `|` 和 `---` 创建表格，系统无法正确解析\n");
+        prompt.append("- **步骤/流程请用列表**：用「步骤1、步骤2」或「1. 2. 3.」代替表格，例如：\n");
+        prompt.append("  ```\n");
+        prompt.append("  步骤1：Base64-decode dataset → 获取密文长度（768）→ 推断加密模式\n");
+        prompt.append("  步骤2：将原始 body 最后 1 字节改为 0x00（破坏 padding）→ 触发 padding error\n");
+        prompt.append("  步骤3：发送篡改后请求，对比响应判断是否存在 oracle\n");
+        prompt.append("  ```\n");
+        prompt.append("- 不使用 # 标题语法\n");
         prompt.append("- 简洁明了，只报告中危及以上风险\n\n");
     }
     

@@ -451,7 +451,7 @@ public class PassiveScanApiClient {
                 .apiKey(apiKey)
                 .baseUrl(baseUrl)
                 .modelName(modelName)
-                .temperature(0.5f) // 被动扫描使用适中温度
+                .temperature(0.7f) // 被动扫描使用适中温度
                 .defaultRequestParameters(parameters)
                 .build();
     }
@@ -488,7 +488,7 @@ public class PassiveScanApiClient {
                 .baseUrl(baseUrl)
                 .apiKey(apiKey)
                 .modelName(modelName)
-                .temperature(0.5)
+                .temperature(0.7)
                 .build();
     }
     
@@ -872,26 +872,27 @@ public class PassiveScanApiClient {
     }
     
     private void buildDecisionFramework(StringBuilder prompt) {
-        prompt.append("# 决策框架（被动扫描场景，必须遵循）\n\n");
+        prompt.append("# 决策框架（必须遵循）\n\n");
         
-        prompt.append("## 第一步：分析HTTP请求\n");
+        prompt.append("## 第一步：理解意图\n");
+        prompt.append("分析用户请求属于哪种类型：\n");
+        prompt.append("- **分析请求**：用户提供 HTTP 内容，要求分析安全风险 → 执行分析流程\n");
+        prompt.append("- **执行请求**：用户明确要求测试/验证某个漏洞 → 执行测试流程\n");
+        prompt.append("- **查询请求**：用户询问历史记录或扫描结果 → 使用查询工具\n");
+        prompt.append("- **对话请求**：用户进行普通对话 → 直接回复，不调用工具\n\n");
+        
+        prompt.append("## 第二步：分析流程（当收到 HTTP 内容时）\n");
         prompt.append("1. 识别目标信息：主机、端口、协议、接口路径\n");
         prompt.append("2. 分析请求特征：参数类型、认证方式、数据格式\n");
-        prompt.append("3. 识别潜在漏洞：根据参数特征判断可能的漏洞类型\n");
-        prompt.append("4. 评估风险等级：只报告中危及以上的风险\n\n");
+        prompt.append("3. 评估风险等级：只报告中危及以上的风险\n");
+        prompt.append("4. 根据风险自动决定是否需要测试验证\n\n");
         
-        prompt.append("## 第二步：主动测试验证（发现可测试风险时）\n");
-        prompt.append("**核心原则：不要只报告可能存在，必须实际测试验证！**\n\n");
+        prompt.append("## 第三步：执行流程（发现可测试风险时）\n");
         prompt.append("1. 构造测试 payload（基于识别的风险类型）\n");
-        prompt.append("2. 使用 HTTP 请求工具发送测试请求\n");
+        prompt.append("2. 使用 send_http_request 等 HTTP 请求工具发送测试请求\n");
         prompt.append("3. 分析响应，判断漏洞是否存在\n");
         prompt.append("4. **必须**将成功验证的漏洞请求发送到 Repeater，便于用户手动验证\n");
         prompt.append("5. 如需批量测试，使用 Intruder 工具\n\n");
-        
-        prompt.append("## 第三步：报告结果\n");
-        prompt.append("1. 如果已测试，报告测试结果（不要只说可能存在）\n");
-        prompt.append("2. 如果未测试，说明测试方法和验证步骤\n");
-        prompt.append("3. 记住测试结果，用于后续关联分析\n\n");
         
         prompt.append("## `create_repeater_tab` 智能决策规则\n");
         prompt.append("**原则：只有需要人类确认的请求才发送到 Repeater**\n");
@@ -901,7 +902,7 @@ public class PassiveScanApiClient {
         
         prompt.append("## 禁止行为\n");
         prompt.append("- ❌ 测试结果为【无漏洞】时仍发送到 Repeater\n");
-        prompt.append("- ❌ 只报告可能存在而不实际测试\n");
+        prompt.append("- ❌ 串行调用多个相似的查询工具（应合并）\n");
         prompt.append("- ❌ 对非目标系统发送请求\n");
         prompt.append("- ❌ 发送破坏性 payload（DELETE、DROP 等）\n\n");
     }
