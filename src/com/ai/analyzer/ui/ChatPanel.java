@@ -20,7 +20,7 @@ public class ChatPanel extends JPanel {
     private final AgentApiClient apiClient;
     private AIAnalyzerTab analyzerTab; // 保存analyzerTab引用，用于获取API配置
     private JTextPane chatArea;
-    private JTextField inputField;
+    private JTextArea inputField;
     private JButton sendButton;
     private JButton clearContextButton;
     private JButton stopButton;
@@ -99,14 +99,20 @@ public class ChatPanel extends JPanel {
         JSplitPane mainSplitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
         mainSplitPane.setDividerLocation(400);
 
-        // 创建聊天区域
-        chatArea = new JTextPane();
+        // 创建聊天区域（强制文本换行，禁止水平滚动）
+        chatArea = new JTextPane() {
+            @Override
+            public boolean getScrollableTracksViewportWidth() {
+                return true;
+            }
+        };
         chatArea.setEditable(false);
         chatArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
         chatArea.setBackground(Color.WHITE);
         chatArea.setForeground(Color.BLACK);
         JScrollPane chatScrollPane = new JScrollPane(chatArea);
         chatScrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
+        chatScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         
         // 创建debug日志区域（初始隐藏）
         debugLogArea = new JTextArea();
@@ -183,17 +189,21 @@ public class ChatPanel extends JPanel {
         
         inputPanel.add(topContainer, BorderLayout.NORTH);
 
-        // 输入框
-        inputField = new JTextField();
+        // 输入框（多行自动换行，Enter发送，Shift+Enter换行）
+        inputField = new JTextArea(2, 0);
+        inputField.setLineWrap(true);
+        inputField.setWrapStyleWord(true);
         inputField.setBackground(Color.WHITE);
         inputField.setForeground(Color.BLACK);
+        inputField.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
         inputField.addKeyListener(new KeyListener() {
             @Override
             public void keyTyped(KeyEvent e) {}
 
             @Override
             public void keyPressed(KeyEvent e) {
-                if (e.getKeyCode() == KeyEvent.VK_ENTER) {
+                if (e.getKeyCode() == KeyEvent.VK_ENTER && !e.isShiftDown()) {
+                    e.consume();
                     sendMessage();
                 }
             }
@@ -202,7 +212,32 @@ public class ChatPanel extends JPanel {
             public void keyReleased(KeyEvent e) {}
         });
         
-        inputPanel.add(inputField, BorderLayout.CENTER);
+        JScrollPane inputScrollPane = new JScrollPane(inputField);
+        inputScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        inputScrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+        
+        final JScrollPane finalInputScrollPane = inputScrollPane;
+        final JPanel finalInputPanel = inputPanel;
+        inputField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            private void adjustHeight() {
+                SwingUtilities.invokeLater(() -> {
+                    int lineCount = inputField.getLineCount();
+                    int rows = Math.min(Math.max(lineCount, 2), 8);
+                    int lineHeight = inputField.getFontMetrics(inputField.getFont()).getHeight();
+                    int newHeight = rows * lineHeight + 8;
+                    finalInputScrollPane.setPreferredSize(new Dimension(0, newHeight));
+                    finalInputPanel.revalidate();
+                });
+            }
+            @Override
+            public void insertUpdate(javax.swing.event.DocumentEvent e) { adjustHeight(); }
+            @Override
+            public void removeUpdate(javax.swing.event.DocumentEvent e) { adjustHeight(); }
+            @Override
+            public void changedUpdate(javax.swing.event.DocumentEvent e) { adjustHeight(); }
+        });
+        
+        inputPanel.add(inputScrollPane, BorderLayout.CENTER);
 
         add(mainSplitPane, BorderLayout.CENTER);
         add(inputPanel, BorderLayout.SOUTH);
@@ -261,6 +296,20 @@ public class ChatPanel extends JPanel {
         isStreaming = true;
         sendButton.setEnabled(false);
         stopButton.setEnabled(true);
+        
+        // 检查HTTP内容是否过长，提前通知用户
+        if (currentRequest != null) {
+            int totalLength = 0;
+            if (currentRequest.request() != null) {
+                totalLength += currentRequest.request().toByteArray().getBytes().length;
+            }
+            if (currentRequest.response() != null) {
+                totalLength += currentRequest.response().toByteArray().getBytes().length;
+            }
+            if (totalLength > com.ai.analyzer.utils.HttpFormatter.DEFAULT_MAX_LENGTH) {
+                appendToChat("系统", "HTTP内容过长（" + totalLength + " 字符），已自动压缩后发送AI分析", false);
+            }
+        }
         
         currentWorker = new SwingWorker<Void, String>() {
             private StringBuilder fullResponse = new StringBuilder();
