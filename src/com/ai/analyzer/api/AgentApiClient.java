@@ -136,6 +136,7 @@ public class AgentApiClient {
     public String getChromeMcpUrl() { return config.getChromeMcpUrl(); }
     public boolean isEnableFileSystemAccess() { return config.isEnableFileSystemAccess(); }
     public boolean isEnableSkills() { return config.isEnableSkills(); }
+    public boolean isEnablePythonScript() { return config.isEnablePythonScript(); }
     public String getCustomParameters() { return config.getCustomParameters(); }
 
     public void setApiUrl(String apiUrl) {
@@ -281,6 +282,14 @@ public class AgentApiClient {
             config.setEnableSkills(enableSkills);
             assistant = null;
             logInfo("Skills 已" + (enableSkills ? "启用" : "禁用"));
+        }
+    }
+    
+    public void setEnablePythonScript(boolean enablePythonScript) {
+        if (config.isEnablePythonScript() != enablePythonScript) {
+            config.setEnablePythonScript(enablePythonScript);
+            assistant = null;
+            logInfo("Python 脚本执行已" + (enablePythonScript ? "启用" : "禁用"));
         }
     }
     
@@ -511,6 +520,13 @@ public class AgentApiClient {
                 logInfo("已添加 BurpExtTools");
             }
             
+            // PythonScriptTool
+            if (config.isEnablePythonScript()) {
+                com.ai.analyzer.Tools.PythonScriptTool pythonTool = new com.ai.analyzer.Tools.PythonScriptTool();
+                assistantBuilder.tools(pythonTool);
+                logInfo("已添加 PythonScriptTool");
+            }
+            
             // FileSystemAccessTools
             if (config.isEnableFileSystemAccess() && config.hasRagDocumentsPath()) {
                 com.ai.analyzer.Tools.FileSystemAccessTools fsaTools = new com.ai.analyzer.Tools.FileSystemAccessTools(api);
@@ -560,7 +576,17 @@ public class AgentApiClient {
                             "get_proxy_websocket_history", "get_proxy_websocket_history_regex", 
                             "get_scanner_issues", "set_task_execution_engine_state",
                             "get_active_editor_contents", "set_active_editor_contents",
-                            "create_repeater_tab"
+                            "create_repeater_tab","repeater_tab_with_payload",
+                            "params_extract","diff_params",
+                            "url_encode","url_decode",
+                            "base64_encode","base64_decode",
+                            "jwt_decode","decode_as",
+                            "generate_random_string",
+                            "request_parse","response_parse",
+                            "find_reflected","comparer_send",
+                            "proxy_history_annotate","response_body_search",
+                            "site_map","site_map_regex",
+                            "get_scanner_issues","scan_audit_start","scan_audit_start_mode","scan_audit_start_requests","scan_crawl_start","scan_task_status","scan_task_delete"
                         ));
                         logInfo("Burp MCP 客户端已添加，地址: " + tryUrl);
                         break;

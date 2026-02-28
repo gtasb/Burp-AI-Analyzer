@@ -123,6 +123,8 @@ public class PassiveScanApiClient {
     private String chromeMcpUrl = "";
     @Getter
     private boolean enableFileSystemAccess = false;
+    @Getter
+    private boolean enablePythonScript = false;
     
     // 标记是否需要重新初始化
     private boolean needsReinitialization = false;
@@ -358,6 +360,15 @@ public class PassiveScanApiClient {
         }
     }
     
+    public void setEnablePythonScript(boolean enablePythonScript) {
+        if (this.enablePythonScript != enablePythonScript) {
+            this.enablePythonScript = enablePythonScript;
+            synchronized (assistantLock) {
+                assistant = null;
+            }
+        }
+    }
+    
     /**
      * 设置前置扫描过滤器管理器
      */
@@ -536,6 +547,12 @@ public class PassiveScanApiClient {
                             assistantBuilder.tools(fsaTools);
                             logInfo("已添加 FileSystemAccessTools");
                         }
+                        
+                        if (enablePythonScript) {
+                            com.ai.analyzer.Tools.PythonScriptTool pythonTool = new com.ai.analyzer.Tools.PythonScriptTool();
+                            assistantBuilder.tools(pythonTool);
+                            logInfo("已添加 PythonScriptTool");
+                        }
                     }
                     
                     assistant = assistantBuilder.build();
@@ -584,13 +601,22 @@ public class PassiveScanApiClient {
                         allMcpClients.add(burpMcpClient);
                         
                         allFilterTools.addAll(List.of(
-                            // 注释掉 send_http1_request 和 send_http2_request（容易超时和报错，改用 curl 工具）
                             "send_http1_request", "send_http2_request", 
                             "get_proxy_http_history", "get_proxy_http_history_regex",
                             "get_proxy_websocket_history", "get_proxy_websocket_history_regex", 
                             "get_scanner_issues", "set_task_execution_engine_state",
                             "get_active_editor_contents", "set_active_editor_contents",
-                            "create_repeater_tab"
+                            "create_repeater_tab","repeater_tab_with_payload",
+                            "params_extract","diff_params",
+                            "url_encode","url_decode",
+                            "base64_encode","base64_decode",
+                            "jwt_decode","decode_as",
+                            "generate_random_string",
+                            "request_parse","response_parse",
+                            "find_reflected","comparer_send",
+                            "proxy_history_annotate","response_body_search",
+                            "site_map","site_map_regex",
+                            "get_scanner_issues","scan_audit_start","scan_audit_start_mode","scan_audit_start_requests","scan_crawl_start","scan_task_status","scan_task_delete"
                         ));
                         
                         // 注释掉工具规范映射（不再添加额外的描述映射）

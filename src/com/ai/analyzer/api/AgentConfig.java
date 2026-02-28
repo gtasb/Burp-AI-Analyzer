@@ -36,6 +36,7 @@ public class AgentConfig {
     // ========== 扩展功能配置 ==========
     private boolean enableFileSystemAccess = false;
     private boolean enableSkills = false;
+    private boolean enablePythonScript = false;
     
     /**
      * API 提供者类型枚举
@@ -90,6 +91,7 @@ public class AgentConfig {
         this.chromeMcpUrl = other.chromeMcpUrl;
         this.enableFileSystemAccess = other.enableFileSystemAccess;
         this.enableSkills = other.enableSkills;
+        this.enablePythonScript = other.enablePythonScript;
     }
     
     /**
@@ -141,6 +143,7 @@ public class AgentConfig {
                 ", enableChromeMcp=" + enableChromeMcp +
                 ", enableFileSystemAccess=" + enableFileSystemAccess +
                 ", enableSkills=" + enableSkills +
+                ", enablePythonScript=" + enablePythonScript +
                 '}';
     }
 }
