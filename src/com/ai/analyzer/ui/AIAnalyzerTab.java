@@ -70,6 +70,7 @@ public class AIAnalyzerTab extends JPanel {
     
     // 前置扫描器组件
     private JCheckBox enablePreScanCheckbox;
+    private JCheckBox enablePythonScriptCheckbox;
     private JButton browseSkillsDirButton;
     private JButton refreshSkillsButton;
     private JButton createExampleSkillButton;
@@ -377,6 +378,9 @@ public class AIAnalyzerTab extends JPanel {
             
             // 文件系统访问配置
             psClient.setEnableFileSystemAccess(apiClient.isEnableFileSystemAccess());
+            
+            // Python 脚本执行配置
+            psClient.setEnablePythonScript(apiClient.isEnablePythonScript());
             
             // ========== 同步前置扫描管理器 ==========
             if (preScanFilterManager != null) {
@@ -845,6 +849,25 @@ public class AIAnalyzerTab extends JPanel {
         });
         apiConfigPanel.add(enablePreScanCheckbox, gbc);
         
+        // ========== Python 脚本执行工具 ==========
+        gbc.gridx = 0;
+        gbc.gridy = 14;
+        gbc.gridwidth = 2;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        enablePythonScriptCheckbox = new JCheckBox("启用 Python 脚本执行", false);
+        enablePythonScriptCheckbox.setToolTipText("<html><b>Python 脚本执行工具</b>：让 AI 可以在本地执行 Python 代码<br/>" +
+            "• 适用于编码/解码、数据处理、payload 生成等场景<br/>" +
+            "• 执行超时 30 秒，输出上限 10000 字符<br/>" +
+            "• <b>注意</b>：需要本机安装 Python 并在 PATH 中可用<br/>" +
+            "• <b>安全提示</b>：AI 生成的代码将在本地执行，请注意安全风险</html>");
+        enablePythonScriptCheckbox.addActionListener(e -> {
+            boolean enabled = enablePythonScriptCheckbox.isSelected();
+            apiClient.setEnablePythonScript(enabled);
+            api.logging().logToOutput("[PythonScript] Python 脚本执行工具已" + (enabled ? "启用" : "禁用"));
+        });
+        apiConfigPanel.add(enablePythonScriptCheckbox, gbc);
+        
         // ========== 默认 RAG 功能暂时禁用，改用 RAG MCP ==========
         // // RAG 工具调用开关
         // gbc.gridx = 0;
@@ -898,7 +921,7 @@ public class AIAnalyzerTab extends JPanel {
         
         // 设置按钮
         gbc.gridx = 0;
-        gbc.gridy = 14;
+        gbc.gridy = 15;
         gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -1538,7 +1561,7 @@ public class AIAnalyzerTab extends JPanel {
         // 左侧：功能开关
         JPanel featurePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 5));
         featurePanel.setBorder(BorderFactory.createTitledBorder("功能开关"));
-        enableThinkingCheckBox = new JCheckBox("启用深度思考", true);
+        enableThinkingCheckBox = new JCheckBox("启用深度思考", false);
         enableSearchCheckBox = new JCheckBox("启用网络搜索", false);
         
         // 添加监听器，当复选框状态改变时更新API客户端配置
@@ -1954,6 +1977,9 @@ public class AIAnalyzerTab extends JPanel {
             // 设置前置扫描器选项
             settings.setEnablePreScanFilter(enablePreScanCheckbox != null && enablePreScanCheckbox.isSelected());
             
+            // 设置 Python 脚本执行选项
+            settings.setEnablePythonScript(enablePythonScriptCheckbox != null && enablePythonScriptCheckbox.isSelected());
+            
             // 设置 Skills 选项
             settings.setEnableSkills(enableSkillsCheckBox.isSelected());
             settings.setSkillsDirectoryPath(skillsDirectoryField.getText().trim());
@@ -2112,6 +2138,12 @@ public class AIAnalyzerTab extends JPanel {
                     preScanFilterManager.disable();
                 }
             }
+        }
+        
+        // Python 脚本执行配置
+        if (enablePythonScriptCheckbox != null) {
+            enablePythonScriptCheckbox.setSelected(settings.isEnablePythonScript());
+            apiClient.setEnablePythonScript(settings.isEnablePythonScript());
         }
     }
     
