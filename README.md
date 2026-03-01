@@ -2,6 +2,8 @@
 
 > 🚀 让AI成为你的安全测试助手！基于 LangChain4j + 通义千问 + MCP 协议的智能渗透测试工具
 
+![图片描述](img\2.png "图片title")
+
 ## ✨ 功能特性
 
 ### 🤖 AI 智能分析
@@ -9,6 +11,9 @@
 - **深度思考模式** - 启用后 AI 会更深入地分析安全问题
 - **联网搜索** - 可选启用网络搜索获取最新漏洞信息
 - **上下文记忆** - 支持多轮对话，AI 记住之前的分析内容
+
+### 🔧 Python 执行工具
+- **脚本执行** 允许大模型执行自定义python脚本
 
 ### 🔧 MCP 工具调用
 - **Burp MCP** - 直接操控 Burp Suite，自动发送请求、创建 Repeater 标签页
@@ -46,7 +51,7 @@
 mvn clean package
 ```
 
-编译完成后，在 `target` 目录下生成 `ai-analyzer-1.0.0-jar-with-dependencies.jar`
+编译完成后，在 `target` 目录下生成 `ai-analyzer-{latest-version}-jar-with-dependencies.jar`
 
 ### 2. 加载到 Burp Suite
 
@@ -60,16 +65,54 @@ mvn clean package
 
 1. 在 Burp 中找到 `AI分析` 标签页
 2. 填写配置：
-   - **API Key**: 你的通义千问 API Key
-   - **模型**: 默认 `qwen-max`（推荐）
+   - **API Key**: 你的百炼 API Key
+   - **模型**: 默认 `qwen-max`
+   - **支持自定义 API**: 你也可以使用 openai 兼容格式接口，以支持更多模型
 
-### 4. 开始使用
+### 4. 使用教程
 
-1. 在 Proxy/Repeater/Target 中右键请求
-2. 选择 `发送到AI分析`
-3. 输入分析提示词，点击 `开始分析`
+![图片描述](img\3.png "图片title")
 
-## RAG MCP
+#### 方式一：主动分析（请求分析标签页）
+
+1. 在 **Proxy / Repeater / Target** 等任意 HTTP 请求处右键
+2. 选择 **「发送到AI分析」**，请求会出现在左侧请求列表
+3. 在右侧选中该请求，可查看 HTTP 请求/响应
+4. 在底部「分析提示词」输入框填写或修改提示（默认：请分析这个请求中可能存在的安全漏洞）
+5. 点击 **「开始分析」**，AI 将流式输出分析结果
+6. 可勾选 **「启用深度思考」**、**「启用网络搜索」** 以提升分析质量
+
+#### 方式二：AI 侧栏实时对话（推荐）
+
+1. 在 **Proxy** 或 **Repeater** 中打开任意请求
+2. 在请求/响应编辑器下方找到 **「AI助手」** 标签页（侧栏），在响应的编辑器中打开侧栏（如果在请求的编辑器中打开，大模型只会看到请求的内容）
+3. 侧栏会自动加载当前请求的上下文
+4. 在输入框直接提问，例如：
+   - 「分析这个请求的安全风险」
+   - 「是否存在 SQL 注入可能？」
+   - 「帮我构造一个 XSS payload 测试」
+5. 支持多轮对话，AI 会记住上下文
+（目前存在一个小 bug ，启动 BP 后第一次运行插件时，会出现侧栏被重置的情况）
+
+#### 方式三：被动扫描（批量分析）
+
+1. 在 **AI分析** 标签页 → **请求分析** 子标签
+2. 勾选 **「启用被动扫描」**，设置线程数（默认 3）
+3. 点击 **「开始扫描」**
+4. 插件会从 **HTTP History** 自动获取流量并交给 AI 分析
+5. 扫描结果按风险等级（严重/高/中/低/信息）展示在表格中
+6. 点击某行可查看该请求的详细分析与 HTTP 内容
+
+#### 其他功能入口
+
+| 功能 | 入口 |
+|------|------|
+| API / MCP / 知识库配置 | **配置** 标签页 |
+| 自定义 Skills（指令 + 工具） | **Skills** 标签页 |
+| Python 脚本执行 | 配置 → 启用 Python 脚本执行 |
+| Burp MCP 工具调用 | 配置 → 启用 Burp MCP 工具 |
+
+## RAG MCP （目前更建议使用直接查找或skills）
 
 RAG MCP 是一个本地知识库，用于存储和检索安全文档。
 
@@ -121,136 +164,6 @@ skills/
     └── SKILL.md
 ```
 
-#### 基础格式（仅指令）
-
-```yaml
----
-name: sql-injection-tester
-description: SQL注入测试专家技能
----
-
-# SQL注入测试专家
-
-当用户提供 HTTP 请求时，按以下流程进行 SQL 注入测试：
-
-## 测试流程
-1. 识别所有可能的注入点（GET/POST 参数、Cookie、Header）
-2. 按危害程度排序测试
-3. 构造测试 payload 并验证
-
-## 常用 Payload
-- 单引号测试: `'`
-- 布尔盲注: `' AND '1'='1`
-- 时间盲注: `' AND SLEEP(5)--`
-...
-```
-
-#### 高级格式（包含可执行工具）
-
-```yaml
----
-name: network-scanner
-description: 网络扫描技能，包含 nmap 等工具
-tools:
-  - name: nmap_scan
-    description: 使用 nmap 进行端口扫描
-    command: "C:/Tools/nmap/nmap.exe"
-    args: "-sV -p {ports} {target}"
-    working_dir: "C:/Tools/nmap"
-    timeout: 300
-    parameters:
-      - name: target
-        description: 目标 IP 或域名
-        required: true
-      - name: ports
-        description: 端口范围
-        default: "1-1000"
-  
-  - name: nuclei_scan
-    description: 使用 nuclei 进行漏洞扫描
-    command: "/usr/local/bin/nuclei"
-    args: "-u {url} -t {templates}"
-    timeout: 600
-    parameters:
-      - name: url
-        description: 目标 URL
-        required: true
-      - name: templates
-        description: 模板路径
-        default: "cves/"
----
-
-# Network Scanner
-
-当需要进行网络扫描时，使用以下工具：
-
-## 可用工具
-
-### nmap_scan
-用于端口扫描和服务识别。
-
-使用场景：
-- 发现开放端口
-- 识别服务版本
-- 初步侦察
-
-### nuclei_scan
-用于自动化漏洞扫描。
-
-使用场景：
-- CVE 漏洞检测
-- 配置错误检测
-- 批量漏洞扫描
-```
-
-### 工具定义参数说明
-
-| 参数 | 必需 | 说明 |
-|------|------|------|
-| `name` | ✓ | 工具名称，AI 调用时使用 |
-| `description` | ✓ | 工具描述，告诉 AI 这个工具做什么 |
-| `command` | ✓ | 可执行文件路径（支持相对路径，相对于 SKILL.md 所在目录） |
-| `args` | | 参数模板，使用 `{param_name}` 作为占位符 |
-| `working_dir` | | 工作目录 |
-| `timeout` | | 执行超时（秒），默认 120 |
-| `parameters` | | 参数定义列表 |
-
-### 参数定义
-
-| 字段 | 说明 |
-|------|------|
-| `name` | 参数名（对应 args 中的占位符） |
-| `description` | 参数描述 |
-| `type` | 类型：string/number/boolean |
-| `required` | 是否必需 |
-| `default` | 默认值 |
-
-### AI 调用流程
-
-当 AI 需要使用 Skill 工具时：
-
-1. AI 调用 `list_skill_tools` 查看可用工具列表
-2. AI 调用 `execute_skill_tool(toolName, parameters)` 执行工具
-3. 工具执行完成后，AI 接收输出并分析结果
-
-```
-用户: 扫描一下 192.168.1.1 的常用端口
-
-AI: 我来使用 nmap 进行端口扫描。
-
-▶ execute_skill_tool
-   toolName=skill_network_nmap_scan
-   parameters={"target": "192.168.1.1", "ports": "21,22,80,443,3306,8080"}
-
-[执行 nmap -sV -p 21,22,80,443,3306,8080 192.168.1.1]
-
-扫描结果分析：
-- 22/tcp open - SSH (OpenSSH 8.2)
-- 80/tcp open - HTTP (nginx 1.18)
-- 443/tcp open - HTTPS
-...
-```
-
 ### 安全注意事项
 
 - ⚠️ 工具执行有超时限制（默认 120 秒）
@@ -266,10 +179,6 @@ AI: 我来使用 nmap 进行端口扫描。
 4. 创建 API Key 并复制
 
 ## 🌟 使用示例
-
-
-
-
 
 ### MCP 自动化测试
 ```
@@ -289,7 +198,7 @@ AI 执行：
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
 | 启用 Burp MCP | 允许 AI 操控 Burp Suite | 关闭 |
-| Burp MCP 地址 | MCP 服务器地址 | `http://127.0.0.1:9876/sse` |
+| Burp MCP 地址 | MCP 服务器地址 | `http://127.0.0.1:9876/` |
 | 启用 RAG MCP | 接入本地知识库 | 关闭 |
 | RAG 文档路径 | 知识库文档目录 | - |
 
@@ -310,7 +219,7 @@ AI 执行：
 ## 📋 环境要求
 
 - Java 21 或更高版本
-- Burp Suite Professional / Community Edition
+- Burp Suite Professional Edition
 - 通义千问 API Key
 
 ## 🔨 开发构建
@@ -319,13 +228,16 @@ AI 执行：
 # Maven 构建
 mvn clean package
 
-# Gradle 构建（可选）
-gradle clean jar
-```
 
 详细说明请查看 [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) 和 [QUICKSTART.md](QUICKSTART.md)
 
 ## 📝 更新日志
+
+### v1.2.0
+- ✅ 允许 Agent 运行 python 代码
+- ✅ 完善了被动扫描功能
+- ✅ 参考 HaE、z0scan 等优秀开源工具，增加了前置扫描器
+- ✅ 优化某些逻辑
 
 ### v1.1.0
 - ✅ Skills 自定义技能系统
