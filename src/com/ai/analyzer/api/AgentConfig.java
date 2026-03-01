@@ -24,7 +24,7 @@ public class AgentConfig {
     
     // ========== MCP 配置 ==========
     private boolean enableMcp = false;
-    private String burpMcpUrl = "http://127.0.0.1:9876";
+    private String burpMcpUrl = "http://127.0.0.1:9876/";
     
     private boolean enableRagMcp = false;
     private String ragMcpUrl = "";
@@ -114,7 +114,7 @@ public class AgentConfig {
     public String getEffectiveBurpMcpUrl() {
         return (burpMcpUrl != null && !burpMcpUrl.trim().isEmpty()) 
             ? burpMcpUrl.trim() 
-            : "http://127.0.0.1:9876/sse";
+            : "http://127.0.0.1:9876/";
     }
     
     /**

@@ -119,19 +119,94 @@ public class HttpFormatter {
         StringBuilder sb = new StringBuilder();
         sb.append("=== HTTP请求 ===\n");
         
-        // 使用 UTF-8 编码正确解析中文字符
         byte[] requestBytes = requestResponse.request().toByteArray().getBytes();
         String requestStr = new String(requestBytes, StandardCharsets.UTF_8);
-        sb.append(requestStr);
+        sb.append(sanitizeForApi(requestStr));
         
         if (requestResponse.response() != null) {
             sb.append("\n\n=== HTTP响应 ===\n");
             byte[] responseBytes = requestResponse.response().toByteArray().getBytes();
             String responseStr = new String(responseBytes, StandardCharsets.UTF_8);
-            sb.append(responseStr);
+            
+            if (isBinaryContent(responseStr)) {
+                int headerEnd = findHeaderBodySeparator(responseStr);
+                if (headerEnd > 0) {
+                    sb.append(sanitizeForApi(responseStr.substring(0, headerEnd)));
+                    sb.append("[二进制响应体已省略]");
+                } else {
+                    sb.append("[二进制响应，已省略]");
+                }
+            } else {
+                sb.append(sanitizeForApi(responseStr));
+            }
         }
         
         return sb.toString();
+    }
+    
+    /**
+     * 清洗内容，使其可安全传递给 LLM API。
+     * - 移除 NULL 字节和大部分控制字符（保留 \t \n \r）
+     * - 将 JS 风格的 \xNN 转义（会破坏 Jackson JSON 解析）替换为 [hex:NN]
+     * - 替换其他不可打印的 Unicode 字符
+     */
+    public static String sanitizeForApi(String content) {
+        if (content == null || content.isEmpty()) return content;
+        
+        StringBuilder sb = new StringBuilder(content.length());
+        for (int i = 0; i < content.length(); i++) {
+            char c = content.charAt(i);
+            
+            if (c == '\0') continue;
+            
+            // 保留常见空白符
+            if (c == '\t' || c == '\n' || c == '\r') {
+                sb.append(c);
+                continue;
+            }
+            
+            // 移除其他控制字符 (0x01-0x08, 0x0B, 0x0C, 0x0E-0x1F)
+            if (c < 0x20) continue;
+            
+            // 移除 Unicode replacement char 和特殊不可见字符
+            if (c == '\uFFFD' || c == '\uFFFE' || c == '\uFFFF') continue;
+            
+            sb.append(c);
+        }
+        
+        String cleaned = sb.toString();
+        // 将 JS hex escapes \xNN 替换为安全文本，避免 Jackson "Unrecognized character escape 'x'"
+        cleaned = cleaned.replaceAll("\\\\x([0-9a-fA-F]{2})", "[hex:$1]");
+        
+        return cleaned;
+    }
+    
+    /**
+     * 检测内容是否为二进制数据（不适合发送给 LLM）
+     * 当不可打印字符比例超过 15% 时判定为二进制
+     */
+    public static boolean isBinaryContent(String content) {
+        if (content == null || content.isEmpty()) return false;
+        
+        int sampleLen = Math.min(content.length(), 2000);
+        int headerEnd = findHeaderBodySeparator(content);
+        int checkStart = headerEnd > 0 ? headerEnd : 0;
+        if (checkStart >= sampleLen) return false;
+        
+        int nonPrintable = 0;
+        int checked = 0;
+        for (int i = checkStart; i < sampleLen; i++) {
+            char c = content.charAt(i);
+            checked++;
+            if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') {
+                nonPrintable++;
+            } else if (c == '\uFFFD') {
+                nonPrintable++;
+            }
+        }
+        
+        if (checked == 0) return false;
+        return (double) nonPrintable / checked > 0.15;
     }
     
     /**

@@ -121,8 +121,40 @@ public class PassiveScanTask implements Callable<ScanResult> {
         
         String lowerUrl = url.toLowerCase();
         
-        // 仅跳过静态资源
-        return isStaticResourceStatic(lowerUrl);
+        if (isStaticResourceStatic(lowerUrl)) {
+            return true;
+        }
+        
+        // 仅对 GET 请求跳过二进制响应（POST/PUT 等可能涉及文件上传漏洞，必须保留）
+        String method = requestResponse.request().method().toUpperCase();
+        if ("GET".equals(method) && requestResponse.response() != null) {
+            try {
+                String respStr = requestResponse.response().toString();
+                if (respStr != null) {
+                    String headerPart = respStr;
+                    int sep = respStr.indexOf("\r\n\r\n");
+                    if (sep < 0) sep = respStr.indexOf("\n\n");
+                    if (sep > 0) headerPart = respStr.substring(0, sep);
+                    String lowerHeaders = headerPart.toLowerCase();
+                    
+                    if (lowerHeaders.contains("content-type:")) {
+                        if (lowerHeaders.contains("image/") ||
+                            lowerHeaders.contains("font/") ||
+                            lowerHeaders.contains("audio/") ||
+                            lowerHeaders.contains("video/") ||
+                            lowerHeaders.contains("application/octet-stream") ||
+                            lowerHeaders.contains("application/zip") ||
+                            lowerHeaders.contains("application/gzip") ||
+                            lowerHeaders.contains("application/pdf") ||
+                            lowerHeaders.contains("application/wasm")) {
+                            return true;
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+        
+        return false;
     }
     
     /**
@@ -130,17 +162,24 @@ public class PassiveScanTask implements Callable<ScanResult> {
      */
     private static boolean isStaticResourceStatic(String url) {
         String[] staticExtensions = {
-            ".css", ".png", ".jpg", ".jpeg", ".gif", ".ico", 
+            ".js", ".css", ".map",
+            ".png", ".jpg", ".jpeg", ".gif", ".ico", ".bmp", ".webp",
             ".svg", ".woff", ".woff2", ".ttf", ".eot", ".otf",
-            ".mp3", ".mp4", ".webm", ".wav", ".avi",
-            ".pdf", ".doc", ".docx", ".xls", ".xlsx",
-            ".zip", ".rar", ".7z", ".tar", ".gz"
+            ".mp3", ".mp4", ".webm", ".wav", ".avi", ".flv",
+            ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+            ".zip", ".rar", ".7z", ".tar", ".gz",
+            ".xml", ".rss", ".atom", ".sitemap"
         };
         
         String path = url;
         int queryIndex = url.indexOf('?');
         if (queryIndex > 0) {
             path = url.substring(0, queryIndex);
+        }
+        // 去掉 fragment
+        int fragmentIndex = path.indexOf('#');
+        if (fragmentIndex > 0) {
+            path = path.substring(0, fragmentIndex);
         }
         
         for (String ext : staticExtensions) {
@@ -149,7 +188,7 @@ public class PassiveScanTask implements Callable<ScanResult> {
             }
         }
         
-        String[] staticPaths = { "/images/", "/img/", "/css/" };
+        String[] staticPaths = { "/images/", "/img/", "/css/", "/js/", "/fonts/", "/static/", "/assets/" };
         for (String staticPath : staticPaths) {
             if (url.contains(staticPath)) {
                 return true;

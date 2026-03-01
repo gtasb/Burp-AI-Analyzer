@@ -208,7 +208,7 @@ public class AgentApiClient {
     
     public void setBurpMcpUrl(String mcpUrl) {
         if (mcpUrl == null || mcpUrl.trim().isEmpty()) {
-            mcpUrl = "http://127.0.0.1:9876/sse";
+            mcpUrl = "http://127.0.0.1:9876/";
         }
         if (!config.getBurpMcpUrl().equals(mcpUrl.trim())) {
             config.setBurpMcpUrl(mcpUrl.trim());
@@ -353,7 +353,7 @@ public class AgentApiClient {
             }
 
             QwenChatRequestParameters.SearchOptions searchOptions = QwenChatRequestParameters.SearchOptions.builder()
-                    .searchStrategy("max")
+                    .searchStrategy("proactive")
                     .build();
 
             QwenChatRequestParameters parameters = QwenChatRequestParameters.builder()
@@ -488,11 +488,13 @@ public class AgentApiClient {
         initializeMcpToolProvider();
         
         // 创建 ChatMemory
+        // maxMessages 需足够大以容纳多轮工具调用（每轮占 2 条消息），
+        // 过小会淘汰原始 UserMessage，导致 DashScope InputRequiredException
         if (chatMemory == null) {
             chatMemory = MessageWindowChatMemory.builder()
-                    .maxMessages(20)
+                    .maxMessages(100)
                     .build();
-            logInfo("ChatMemory 已创建（最大20条消息）");
+            logInfo("ChatMemory 已创建（最大100条消息）");
         }
         
         // 创建 Assistant
@@ -561,7 +563,7 @@ public class AgentApiClient {
                     List<String> allFilterTools = new ArrayList<>();
                     McpToolMappingConfig mappingConfig = null;
                     
-            // Burp MCP（带 URL fallback：Burp 的 /sse 路径取决于扩展配置）
+            // Burp MCP（带 URL fallback：主/备地址均使用根路径）
             if (config.isEnableMcp()) {
                 String burpUrl = config.getEffectiveBurpMcpUrl();
                 String altUrl = AllMcpToolProvider.getAlternateBurpMcpUrl(burpUrl);

@@ -94,7 +94,8 @@ public class PassiveScanApiClient {
     private final Object assistantLock = new Object();
     
     // MCP 工具提供者
-    private McpToolProvider mcpToolProvider;
+    private volatile McpToolProvider mcpToolProvider;
+    private final Object mcpInitLock = new Object();
     
     // Burp API引用
     private MontoyaApi api;
@@ -110,7 +111,7 @@ public class PassiveScanApiClient {
     @Getter
     private boolean enableMcp = false;
     @Getter
-    private String BurpMcpUrl = "http://127.0.0.1:9876/sse";
+    private String BurpMcpUrl = "http://127.0.0.1:9876/";
     @Getter
     private boolean enableRagMcp = false;
     @Getter
@@ -284,7 +285,7 @@ public class PassiveScanApiClient {
     
     public void setBurpMcpUrl(String mcpUrl) {
         if (mcpUrl == null || mcpUrl.trim().isEmpty()) {
-            mcpUrl = "http://127.0.0.1:9876/sse";
+            mcpUrl = "http://127.0.0.1:9876/";
         }
         if (!this.BurpMcpUrl.equals(mcpUrl.trim())) {
             this.BurpMcpUrl = mcpUrl.trim();
@@ -595,7 +596,7 @@ public class PassiveScanApiClient {
                     try {
                         String burpMcpUrlValue = (this.BurpMcpUrl != null && !this.BurpMcpUrl.trim().isEmpty()) 
                             ? this.BurpMcpUrl.trim() 
-                            : "http://127.0.0.1:9876/sse";
+                            : "http://127.0.0.1:9876/";
                         McpTransport burpTransport = mcpProviderHelper.createHttpTransport(burpMcpUrlValue);
                         McpClient burpMcpClient = mcpProviderHelper.createMcpClient(burpTransport, "BurpMCPClient");
                         allMcpClients.add(burpMcpClient);
@@ -695,36 +696,46 @@ public class PassiveScanApiClient {
      * @throws Exception 分析过程中的异常
      */
     public String analyzeRequest(HttpRequestResponse requestResponse, AtomicBoolean cancelFlag, Consumer<String> onChunk) throws Exception {
-        // 确保ChatModel和Assistant已初始化
+        String url = "(unknown)";
+        try {
+            url = requestResponse.request().url();
+            if (url != null && url.length() > 80) url = url.substring(0, 80) + "...";
+        } catch (Exception ignored) {}
+        
+        logDebug("开始分析: " + url);
+        
         ensureChatModelInitialized();
-        if (chatModel == null) {
+        // 捕获 chatModel 的本地引用，防止后续被其他线程 reinitialize 为 null
+        final StreamingChatModel localChatModel = this.chatModel;
+        if (localChatModel == null) {
             throw new Exception("ChatModel未初始化，请检查API配置");
         }
-        ensureAssistantInitialized();
+        // 确保 MCP 工具提供者已初始化（缓存复用，线程安全）
+        synchronized (mcpInitLock) {
+            initializeMcpToolProvider();
+        }
         
-        // 格式化HTTP内容
+        // 格式化 + 清洗 HTTP 内容
         String httpContent = HttpFormatter.formatHttpRequestResponse(requestResponse);
         
-        // 检查内容是否为空或无效
         if (httpContent == null || httpContent.trim().isEmpty()) {
-            logInfo("HTTP内容为空，跳过分析");
+            logDebug("HTTP内容为空，跳过: " + url);
             return "## 风险等级: 无\n请求内容为空，无法分析。";
         }
         
-        // 估算系统提示词长度（大约2000字符）
-        final int ESTIMATED_SYSTEM_PROMPT_LENGTH = 2000;
-        final int API_MAX_LENGTH = 30720;
-        final int MAX_USER_CONTENT_LENGTH = API_MAX_LENGTH - ESTIMATED_SYSTEM_PROMPT_LENGTH - 500; // 留500字符余量
-        
-        // 如果内容太长，截断并添加提示
-        if (httpContent.length() > MAX_USER_CONTENT_LENGTH) {
-            int originalLength = httpContent.length();
-            httpContent = httpContent.substring(0, MAX_USER_CONTENT_LENGTH) + 
-                "\n\n[内容已截断，原始长度: " + originalLength + " 字符，已截断至 " + MAX_USER_CONTENT_LENGTH + " 字符]";
-            logInfo("HTTP内容过长，已截断: " + originalLength + " -> " + MAX_USER_CONTENT_LENGTH + " 字符");
+        // 压缩过长内容（保留请求头，截断请求/响应体）
+        HttpFormatter.CompressResult compressed = HttpFormatter.compressIfTooLong(httpContent);
+        if (compressed.wasCompressed) {
+            httpContent = compressed.content;
+            logDebug("内容已压缩: " + compressed.originalLength + " → " + compressed.compressedLength + " 字符");
         }
         
-        // 构建用户消息
+        final int API_MAX_LENGTH = 28000; // 留充足余量给系统提示词和工具定义
+        if (httpContent.length() > API_MAX_LENGTH) {
+            httpContent = httpContent.substring(0, API_MAX_LENGTH) + 
+                "\n\n[内容已截断至 " + API_MAX_LENGTH + " 字符]";
+        }
+        
         String userContent = buildScanPrompt(httpContent);
         
         // ========== 前置扫描器集成 ==========
@@ -732,119 +743,208 @@ public class PassiveScanApiClient {
             try {
                 PreScanFilter filter = preScanFilterManager.getFilter();
                 if (filter != null) {
-                    // 执行前置扫描（500ms超时）
                     List<ScanMatch> matches = filter.scan(requestResponse, 
                         preScanFilterManager.getDefaultScanTimeout());
-                    
                     if (!matches.isEmpty()) {
-                        // 生成提示文本追加到扫描提示词
                         String promptHint = PreScanFilter.buildPromptHint(matches);
                         userContent += promptHint;
-                        
-                        logInfo("[PassiveScan-PreScan] 检测到 " + matches.size() + " 个疑似漏洞特征");
+                        logDebug("[PreScan] 检测到 " + matches.size() + " 个疑似漏洞特征");
                     }
                 }
             } catch (Exception e) {
-                logError("[PassiveScan-PreScan] 扫描失败: " + e.getMessage());
+                logError("[PreScan] 扫描失败: " + e.getMessage());
             }
         }
         
-        // 最终检查：确保用户消息不为空
         if (userContent == null || userContent.trim().isEmpty()) {
-            logInfo("用户消息为空，跳过分析");
             return "## 风险等级: 无\n无法构建有效的分析请求。";
         }
         
         UserMessage userMessage = new UserMessage(userContent);
-        
-        // 执行分析（使用共享的Assistant和ChatMemory）
         List<ChatMessage> messages = List.of(userMessage);
-        TokenStream tokenStream = null;
         
-        // 第一次尝试，如果遇到空 content 错误则清空 ChatMemory 并重试
-        int retryCount = 0;
-        while (tokenStream == null && retryCount < 2) {
+        logDebug("消息长度: " + userContent.length() + " 字符, 工具: MCP=" + (mcpToolProvider != null) + 
+                ", CurlTools=" + (api != null) + ", BurpExt=" + enableMcp + ", Python=" + enablePythonScript);
+        
+        // 重试逻辑覆盖整个 TokenStream 生命周期
+        final int MAX_RETRIES = 3;
+        Exception lastException = null;
+        
+        for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
             try {
-                synchronized (assistantLock) {
-                    tokenStream = assistant.chat(messages);
-                }
-            } catch (Exception e) {
-                String errMsg = e.getMessage();
-                // 如果是空 content 错误且未重试过，清空 ChatMemory 后重试
-                if (retryCount == 0 && errMsg != null && 
-                    (errMsg.contains("content field is") || 
-                     (errMsg.contains("content") && errMsg.contains("required")))) {
-                    logInfo("检测到空 content 错误，清空 ChatMemory 后重试...");
-                    clearContext();
-                    ensureAssistantInitialized(); // 重新初始化
-                    retryCount++;
-                } else {
-                    // 其他错误或已重试过，直接抛出
-                    throw e;
-                }
-            }
-        }
-        
-        if (tokenStream == null) {
-            throw new Exception("无法创建 TokenStream");
-        }
-        
-        // 收集结果
-        StringBuilder resultBuilder = new StringBuilder();
-        CompletableFuture<ChatResponse> futureResponse = new CompletableFuture<>();
-        
-        tokenStream
-            .onPartialResponse(text -> {
-                // 检查取消标志
-                if (cancelFlag != null && cancelFlag.get()) {
-                    return;
-                }
-                // text 已经是 String 类型
-                if (text != null && !text.isEmpty()) {
-                    resultBuilder.append(text);
-                    if (onChunk != null) {
-                        onChunk.accept(text);
+                Assistant requestAssistant = createPerRequestAssistant(localChatModel);
+                TokenStream tokenStream = requestAssistant.chat(messages);
+                
+                StringBuilder resultBuilder = new StringBuilder();
+                CompletableFuture<ChatResponse> futureResponse = new CompletableFuture<>();
+                
+                tokenStream
+                    .onPartialResponse(text -> {
+                        if (cancelFlag != null && cancelFlag.get()) return;
+                        if (text != null && !text.isEmpty()) {
+                            resultBuilder.append(text);
+                            if (onChunk != null) {
+                                onChunk.accept(text);
+                            }
+                        }
+                    })
+                    .onCompleteResponse(futureResponse::complete)
+                    .onError(error -> {
+                        Throwable ex = error != null ? error : new Exception("TokenStream未知错误");
+                        if (!futureResponse.isDone()) {
+                            logError("TokenStream错误: " + ex.getMessage());
+                            futureResponse.completeExceptionally(ex);
+                        }
+                    })
+                    .start();
+                
+                try {
+                    futureResponse.get(10, TimeUnit.MINUTES);
+                } catch (Exception e) {
+                    if (cancelFlag != null && cancelFlag.get()) {
+                        throw new Exception("扫描已取消");
                     }
+                    Throwable cause = e.getCause() != null ? e.getCause() : e;
+                    throw cause instanceof Exception ? (Exception) cause : new Exception(cause);
                 }
-            })
-            .onCompleteResponse(response -> {
-                futureResponse.complete(response);
-            })
-            .onError(error -> {
-                String errorMsg = error != null ? error.getMessage() : "未知错误";
-                logError("TokenStream错误: " + errorMsg);
-                // 如果是输入长度错误，提供更友好的错误信息
-                if (errorMsg != null && errorMsg.contains("Range of input length")) {
-                    futureResponse.completeExceptionally(new Exception("API输入长度超出限制（1-30720字符），请检查请求内容大小"));
-                } else {
-                    futureResponse.completeExceptionally(error);
+                
+                String result = resultBuilder.toString();
+                if (result == null || result.trim().isEmpty()) {
+                    return "## 风险等级: 无\n未收到AI分析结果。";
                 }
-            })
-            .start();
-        
-        // 等待完成（最多10分钟，因为可能有工具调用）
-        try {
-            futureResponse.get(10, TimeUnit.MINUTES);
-        } catch (Exception e) {
-            if (cancelFlag != null && cancelFlag.get()) {
-                throw new Exception("扫描已取消");
+                logDebug("分析完成: " + url + ", 结果长度: " + result.length());
+                return result;
+                
+            } catch (Exception e) {
+                lastException = e;
+                String errMsg = extractErrorMessage(e);
+                
+                // 非致命错误：直接返回结果，不再重试
+                if (isNonFatalApiError(errMsg)) {
+                    logInfo("非致命API错误（跳过）: " + url + " → " + categorizeError(errMsg));
+                    return "## 风险等级: 无\n" + categorizeError(errMsg);
+                }
+                
+                // 可重试的瞬时错误
+                if (attempt < MAX_RETRIES - 1 && isRetryableError(errMsg)) {
+                    logInfo("可重试错误（第 " + (attempt + 1) + "/" + MAX_RETRIES + "），将重试: " + url);
+                    try { Thread.sleep(1000L * (attempt + 1)); } catch (InterruptedException ignored) {}
+                    continue;
+                }
+                
+                // 所有重试耗尽 → 返回错误结果（不抛异常，避免刷屏）
+                logError("分析失败（重试耗尽）: " + url + " → " + errMsg);
+                return "## 风险等级: 无\n分析失败: " + (errMsg != null && errMsg.length() > 120 ? errMsg.substring(0, 120) + "..." : errMsg);
             }
-            // 提供更详细的错误信息
-            String errorMsg = e.getMessage();
-            if (errorMsg != null && errorMsg.contains("Range of input length")) {
-                throw new Exception("API输入长度超出限制（1-30720字符）。原始HTTP内容长度: " + 
-                    (httpContent != null ? httpContent.length() : 0) + " 字符", e);
-            }
-            throw e;
         }
         
-        String result = resultBuilder.toString();
-        // 如果结果为空，返回默认消息
-        if (result == null || result.trim().isEmpty()) {
-            return "## 风险等级: 无\n未收到AI分析结果。";
+        String errMsg = lastException != null ? extractErrorMessage(lastException) : "未知错误";
+        return "## 风险等级: 无\n分析失败: " + errMsg;
+    }
+    
+    /**
+     * 判断是否为非致命的 API 错误（不需要重试，直接跳过该请求）
+     * 仅限确定无法通过重试解决的错误（如内容审核）
+     */
+    private boolean isNonFatalApiError(String errMsg) {
+        if (errMsg == null) return false;
+        return errMsg.contains("DataInspectionFailed") ||           // 内容审核
+               errMsg.contains("inappropriate content") ||          // 内容审核
+               errMsg.contains("Range of input length");            // 输入太长
+    }
+    
+    /**
+     * 判断是否为可重试的瞬时错误
+     */
+    private boolean isRetryableError(String errMsg) {
+        if (errMsg == null) return false;
+        return errMsg.contains("content field is") ||
+               errMsg.contains("InputRequiredException") ||
+               errMsg.contains("must not all null") ||
+               errMsg.contains("InvalidParameter") ||
+               errMsg.contains("JsonParseException") ||             // SSE 流解析瞬时错误
+               errMsg.contains("JsonEOFException") ||               // SSE 流解析瞬时错误
+               errMsg.contains("MismatchedInputException") ||       // SSE 流返回格式异常（如数组代替对象）
+               errMsg.contains("JsonMappingException") ||           // Jackson 映射异常
+               errMsg.contains("Cannot deserialize") ||             // 通用 Jackson 反序列化失败
+               errMsg.contains("response cannot be null");          // SDK 二次回调
+    }
+    
+    /**
+     * 将 API 错误分类为用户友好的描述
+     */
+    private String categorizeError(String errMsg) {
+        if (errMsg == null) return "未知错误，已跳过。";
+        if (errMsg.contains("DataInspectionFailed") || errMsg.contains("inappropriate content"))
+            return "请求内容触发了云端内容审核，已跳过。";
+        if (errMsg.contains("Range of input length"))
+            return "请求内容超出 API 输入长度限制，已跳过。";
+        return "API 调用异常，已跳过。";
+    }
+    
+    /**
+     * 为单次请求创建独立的 Assistant 实例。
+     * 每个请求拥有独立的 ChatMemory，确保：
+     * 1. 工具调用产生的中间消息不会污染其他请求
+     * 2. 多线程并发请求互不干扰
+     * 3. DashScope API 不会因历史消息中的空 content 字段报错
+     *
+     * maxMessages 设为 100：每轮工具调用占 2 条消息（assistant+tool_call, tool_result），
+     * 20 条上限仅够 ~9 轮工具调用就会淘汰原始 UserMessage，
+     * 导致 DashScope 抛出 InputRequiredException。
+     *
+     * @param localChatModel 调用方捕获的 chatModel 本地引用，避免字段竞态
+     */
+    private Assistant createPerRequestAssistant(StreamingChatModel localChatModel) {
+        if (localChatModel == null) {
+            throw new IllegalStateException("ChatModel 未初始化，无法创建 Assistant");
         }
         
-        return result;
+        MessageWindowChatMemory requestMemory = MessageWindowChatMemory.builder()
+                .maxMessages(100)
+                .build();
+        
+        var builder = AiServices.builder(Assistant.class)
+                .streamingChatModel(localChatModel)
+                .chatMemory(requestMemory)
+                .systemMessageProvider(memoryId -> buildSystemPrompt());
+        
+        if (mcpToolProvider != null) {
+            builder.toolProvider(mcpToolProvider);
+        }
+        
+        if (api != null) {
+            com.ai.analyzer.Tools.CurlTools curlTools = new com.ai.analyzer.Tools.CurlTools(api);
+            builder.tools(curlTools);
+            
+            if (enableMcp) {
+                com.ai.analyzer.Tools.BurpExtTools burpExtTools = new com.ai.analyzer.Tools.BurpExtTools(api);
+                builder.tools(burpExtTools);
+            }
+            
+            if (enableFileSystemAccess && ragMcpDocumentsPath != null && !ragMcpDocumentsPath.isEmpty()) {
+                com.ai.analyzer.Tools.FileSystemAccessTools fsaTools = new com.ai.analyzer.Tools.FileSystemAccessTools(api);
+                fsaTools.setAllowedRootPath(ragMcpDocumentsPath);
+                builder.tools(fsaTools);
+            }
+            
+            if (enablePythonScript) {
+                com.ai.analyzer.Tools.PythonScriptTool pythonTool = new com.ai.analyzer.Tools.PythonScriptTool();
+                builder.tools(pythonTool);
+            }
+        }
+        
+        return builder.build();
+    }
+    
+    /**
+     * 从异常链中提取错误消息（递归检查 cause）
+     */
+    private String extractErrorMessage(Throwable e) {
+        if (e == null) return null;
+        String msg = e.getMessage();
+        if (msg != null && !msg.isEmpty()) return msg;
+        return extractErrorMessage(e.getCause());
     }
     
     /**
@@ -1019,15 +1119,16 @@ public class PassiveScanApiClient {
     }
     
     /**
-     * 转义 HTTP 内容中的模板分隔符，避免被解析为占位符。
-     * 页面中常见的 {{variable}}、${variable} 等会被转义为字面量。
+     * 转义 HTTP 内容中的模板分隔符，防止 LangChain4j Mustache 引擎将其解析为变量。
+     * 处理：{{var}}、${var}、{{{var}}} 等所有模板语法
      */
     private String escapeTemplateDelimiters(String content) {
         if (content == null || content.isEmpty()) return content;
+        // 将所有 { 替换为 ZWSP+{，彻底阻断 Mustache 的 {{ 模式匹配
+        // 性能可接受：被动扫描内容已经过截断，不会太长
         return content
-            .replace("{{", "\u200B{\u200B{")  // {{ -> ZWSP{ZWSP{
-            .replace("}}", "}\u200B}\u200B")  // }} -> }ZWSP}ZWSP
-            .replace("${", "$\u200B{");       // ${ -> $ZWSP{
+            .replace("{", "\u200B{")   // { -> ZWSP{  (阻断 {{ 和 {{{)
+            .replace("${", "$\u200B{"); // 冗余但保留语义清晰
     }
     
     // ========== 日志方法 ==========
@@ -1041,6 +1142,15 @@ public class PassiveScanApiClient {
     private void logError(String message) {
         if (api != null) {
             api.logging().logToError("[PassiveScanApiClient] " + message);
+        }
+    }
+    
+    /**
+     * 调试级别日志 - 仅输出到 Output（非 Error），便于追踪请求生命周期
+     */
+    private void logDebug(String message) {
+        if (api != null) {
+            api.logging().logToOutput("[PassiveScan-DEBUG] " + message);
         }
     }
 }

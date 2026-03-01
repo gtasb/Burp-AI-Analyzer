@@ -606,7 +606,7 @@ public class AIAnalyzerTab extends JPanel {
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
-        BurpMcpUrlField = new JTextField("http://127.0.0.1:9876/sse", 30);
+        BurpMcpUrlField = new JTextField("http://127.0.0.1:9876/", 30);
         BurpMcpUrlField.setEnabled(false); // 默认禁用，只有启用 MCP 时才可用
         BurpMcpUrlField.addActionListener(e -> {
             if (enableMcpCheckBox.isSelected()) {
@@ -949,7 +949,7 @@ public class AIAnalyzerTab extends JPanel {
                         "• API Key: 从阿里云 DashScope 获取的 API 密钥\n" +
                         "• Model: 使用的模型名称（如 qwen-max, qwen-plus 等）\n" +
                         "• 启用 MCP 工具: 启用后 AI 可以调用 Burp Suite 的 MCP 工具\n" +
-                        "• Burp MCP 地址: Burp MCP Server 的 SSE 端点地址（默认: http://127.0.0.1:9876/sse）\n" +
+                        "• Burp MCP 地址: Burp MCP Server 地址（默认: http://127.0.0.1:9876/）\n" +
                         "• 启用 RAG: 启用检索增强生成，AI 可以从指定文档目录中检索相关信息\n" +
                         "• RAG 文档路径: 包含文档的目录路径（支持 PDF、Word、HTML 等格式，会递归加载子目录）\n" +
                         "\n提示：配置修改后会自动应用到 API 客户端，无需重启插件。\n" +

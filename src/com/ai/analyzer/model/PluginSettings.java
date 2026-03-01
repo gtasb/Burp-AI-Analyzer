@@ -17,13 +17,13 @@ public class PluginSettings implements Serializable {
     private boolean enableThinking = true; // 默认启用思考过程
     private boolean enableSearch = true; // 默认启用搜索
     private boolean enableMcp = false; // 默认禁用 Burp MCP 工具调用
-    private String BurpMcpUrl = "http://127.0.0.1:9876/sse"; // Burp MCP 服务器地址
+    private String BurpMcpUrl = "http://127.0.0.1:9876/"; // Burp MCP 服务器地址
     private boolean enableRagMcp = false; // 默认禁用 RAG MCP 工具调用
-    private String ragMcpUrl = " "; // RAG MCP 服务器地址
+    private String ragMcpUrl = ""; // RAG MCP 服务器地址
     private String ragMcpDocumentsPath = ""; // RAG MCP 知识库文档路径
     private boolean enableFileSystemAccess = false; // 默认禁用直接查找知识库
     private boolean enableChromeMcp = false; // 默认禁用 Chrome MCP 工具调用
-    private String chromeMcpUrl = " "; // Chrome MCP 服务器地址
+    private String chromeMcpUrl = ""; // Chrome MCP 服务器地址
     private boolean enableRag = false; // 默认禁用 RAG
     private String ragDocumentsPath = ""; // RAG 文档路径
     
@@ -47,12 +47,12 @@ public class PluginSettings implements Serializable {
         this.enableThinking = true;
         this.enableSearch = true;
         this.enableMcp = false;
-        this.BurpMcpUrl = "http://127.0.0.1:9876/sse";
+        this.BurpMcpUrl = "http://127.0.0.1:9876/";
         this.enableRagMcp = false;
-        this.ragMcpUrl = " ";
+        this.ragMcpUrl = "";
         this.ragMcpDocumentsPath = "";
         this.enableChromeMcp = false;
-        this.chromeMcpUrl = " ";
+        this.chromeMcpUrl = "";
         this.enableRag = false;
         this.ragDocumentsPath = "";
     }
@@ -72,7 +72,7 @@ public class PluginSettings implements Serializable {
         this.enableThinking = enableThinking;
         this.enableSearch = enableSearch;
         this.enableMcp = false;
-        this.BurpMcpUrl = "http://127.0.0.1:9876/sse";
+        this.BurpMcpUrl = "http://127.0.0.1:9876/";
         this.enableRag = false;
         this.ragDocumentsPath = "";
     }
@@ -100,9 +100,9 @@ public class PluginSettings implements Serializable {
         this.enableMcp = enableMcp;
         this.BurpMcpUrl = mcpUrl;
         this.enableRagMcp = false;
-        this.ragMcpUrl = " ";
+        this.ragMcpUrl = "";
         this.enableChromeMcp = false;
-        this.chromeMcpUrl = " ";
+        this.chromeMcpUrl = "";
         this.enableRag = enableRag;
         this.ragDocumentsPath = ragDocumentsPath;
     }

@@ -1,8 +1,11 @@
 package com.ai.analyzer.pscan;
 
 import burp.api.montoya.MontoyaApi;
+import burp.api.montoya.core.ToolType;
 import burp.api.montoya.http.handler.*;
 import burp.api.montoya.http.message.HttpRequestResponse;
+
+import burp.api.montoya.core.Registration;
 
 import java.util.*;
 import java.util.concurrent.*;
@@ -45,6 +48,7 @@ public class PassiveScanManager {
     
     // HTTP 处理器注册（用于注销）
     private HttpHandler httpHandler;
+    private Registration httpHandlerRegistration;
     
     // ========== 状态管理 ==========
     private final AtomicBoolean isRunning = new AtomicBoolean(false);
@@ -64,7 +68,7 @@ public class PassiveScanManager {
     private Consumer<Integer> onProgressChanged;
     private Consumer<ScanResult> onNewRequestQueued; // 新请求入队回调
     private Consumer<String> onStreamingChunk; // 流式输出回调（新增）
-    private ScanResult currentStreamingScanResult; // 当前正在流式输出的扫描结果
+    private volatile ScanResult currentStreamingScanResult; // 当前正在流式输出的扫描结果
     
     /**
      * 构造函数
@@ -203,9 +207,15 @@ public class PassiveScanManager {
             
             @Override
             public ResponseReceivedAction handleHttpResponseReceived(HttpResponseReceived responseReceived) {
-                // 响应接收后，将请求-响应对放入队列
                 if (isRunning.get() && !cancelFlag.get()) {
                     try {
+                        // 只扫描来自 Proxy 的流量（用户浏览器），
+                        // 跳过 Extensions/Scanner/Intruder/Repeater 产生的请求，防止插件工具触发死循环
+                        ToolType source = responseReceived.toolSource().toolType();
+                        if (source != ToolType.PROXY) {
+                            return ResponseReceivedAction.continueWith(responseReceived);
+                        }
+                        
                         HttpRequestResponse requestResponse = HttpRequestResponse.httpRequestResponse(
                             responseReceived.initiatingRequest(),
                             responseReceived
@@ -219,8 +229,8 @@ public class PassiveScanManager {
             }
         };
         
-        // 注册 HTTP 处理器
-        api.http().registerHttpHandler(httpHandler);
+        // 注册 HTTP 处理器，保存 Registration 以便后续注销
+        httpHandlerRegistration = api.http().registerHttpHandler(httpHandler);
         logInfo("生产者已启动 - HTTP 监听器已注册");
     }
     
@@ -228,12 +238,16 @@ public class PassiveScanManager {
      * 停止生产者 - 注销 HTTP 处理器
      */
     private void stopProducer() {
-        if (httpHandler != null) {
-            // 注意：Montoya API 可能不支持直接注销 handler
-            // 依靠 isRunning 标志来停止处理
-            httpHandler = null;
-            logInfo("生产者已停止");
+        if (httpHandlerRegistration != null) {
+            try {
+                httpHandlerRegistration.deregister();
+            } catch (Exception e) {
+                logError("注销 HTTP 处理器失败: " + e.getMessage());
+            }
+            httpHandlerRegistration = null;
         }
+        httpHandler = null;
+        logInfo("生产者已停止");
     }
     
     /**
@@ -317,22 +331,19 @@ public class PassiveScanManager {
      * 将请求放入扫描队列（生产者调用）
      */
     private void enqueueRequest(HttpRequestResponse requestResponse) {
-        // 创建 ScanResult
-        ScanResult result = new ScanResult(nextId.getAndIncrement(), requestResponse);
-        
-        // 去重检查
-        String dedupeKey = result.getDeduplicationKey();
-        if (scannedKeys.contains(dedupeKey)) {
-            return; // 已扫描过，跳过
-        }
-        
-        // 过滤静态资源
+        // 过滤静态资源（无需持锁，纯读操作）
         if (PassiveScanTask.shouldSkipRequest(requestResponse)) {
             return;
         }
-        
-        // 添加到去重集合
-        scannedKeys.add(dedupeKey);
+
+        // 创建 ScanResult
+        ScanResult result = new ScanResult(nextId.getAndIncrement(), requestResponse);
+
+        // 原子去重：add() 返回 false 表示已存在
+        String dedupeKey = result.getDeduplicationKey();
+        if (!scannedKeys.add(dedupeKey)) {
+            return;
+        }
         
         // 添加到结果列表
         scanResults.add(result);

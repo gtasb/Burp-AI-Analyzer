@@ -11,6 +11,7 @@ import javax.swing.text.*;
 import java.awt.*;
 import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener;
+import java.io.*;
 import java.util.ArrayList;
 import java.util.List;
 import burp.api.montoya.http.message.HttpRequestResponse;
@@ -56,6 +57,9 @@ public class ChatPanel extends JPanel {
         */
         
         initializeUI();
+        
+        // 从磁盘恢复上次聊天历史（插件重载后不丢失）
+        loadChatHistory();
     }
     
     /**
@@ -288,6 +292,7 @@ public class ChatPanel extends JPanel {
         if (!message.isEmpty()) {
             appendToChat("你", message, true);
             chatHistory.add(new ChatMessage("user", message));
+            saveChatHistory();
         }
         
         inputField.setText("");
@@ -507,6 +512,9 @@ public class ChatPanel extends JPanel {
                     // 添加到历史记录
                     chatHistory.add(new ChatMessage("assistant", fullResponse.toString()));
                     
+                    // 持久化到磁盘（插件重载后可恢复）
+                    saveChatHistory();
+                    
                     // 流式输出已完成，在done()中已经完成了完整渲染，这里不需要再渲染
                 } catch (Exception e) {
                     SwingUtilities.invokeLater(() -> {
@@ -579,6 +587,8 @@ public class ChatPanel extends JPanel {
         
         chatHistory.clear();
         chatArea.setText("");
+        // 清空磁盘上的聊天历史文件
+        deleteChatHistoryFile();
         // 清空 Assistant 的聊天记忆（共享实例）
         // 注意：apiClient.clearContext() 内部已经会先调用 cancelStreaming()
         apiClient.clearContext();
@@ -681,8 +691,9 @@ public class ChatPanel extends JPanel {
     */
  
 
-    // 内部聊天消息类
-    public static class ChatMessage {
+    // 内部聊天消息类（Serializable 以支持跨插件重载持久化）
+    public static class ChatMessage implements Serializable {
+        private static final long serialVersionUID = 1L;
         private String role;
         private String content;
 
@@ -697,6 +708,71 @@ public class ChatPanel extends JPanel {
 
         public String getContent() {
             return content;
+        }
+    }
+    
+    // ========== 聊天历史持久化 ==========
+    
+    private static final String CHAT_HISTORY_FILENAME = ".burp_ai_chat_history.dat";
+    private static final int MAX_PERSISTED_MESSAGES = 50;
+    
+    private File getChatHistoryFile() {
+        return new File(System.getProperty("user.home"), CHAT_HISTORY_FILENAME);
+    }
+    
+    /**
+     * 保存聊天历史到磁盘。
+     * 仅保留最近 MAX_PERSISTED_MESSAGES 条消息，避免文件过大。
+     */
+    private void saveChatHistory() {
+        try {
+            List<ChatMessage> toSave = chatHistory;
+            if (toSave.size() > MAX_PERSISTED_MESSAGES) {
+                toSave = new ArrayList<>(toSave.subList(
+                    toSave.size() - MAX_PERSISTED_MESSAGES, toSave.size()));
+            }
+            try (ObjectOutputStream oos = new ObjectOutputStream(
+                    new FileOutputStream(getChatHistoryFile()))) {
+                oos.writeObject(new ArrayList<>(toSave));
+            }
+        } catch (Exception e) {
+            api.logging().logToError("[ChatPanel] 保存聊天历史失败: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * 从磁盘加载聊天历史，并还原到聊天区域。
+     */
+    @SuppressWarnings("unchecked")
+    private void loadChatHistory() {
+        File historyFile = getChatHistoryFile();
+        if (!historyFile.exists()) return;
+        
+        try (ObjectInputStream ois = new ObjectInputStream(
+                new FileInputStream(historyFile))) {
+            List<ChatMessage> loaded = (List<ChatMessage>) ois.readObject();
+            if (loaded != null && !loaded.isEmpty()) {
+                chatHistory.addAll(loaded);
+                for (ChatMessage msg : loaded) {
+                    boolean isUser = "user".equals(msg.getRole());
+                    String sender = isUser ? "你" : msg.getRole();
+                    appendToChat(sender, msg.getContent(), isUser);
+                }
+                api.logging().logToOutput("[ChatPanel] 已恢复 " + loaded.size() + " 条聊天历史");
+            }
+        } catch (Exception e) {
+            api.logging().logToError("[ChatPanel] 加载聊天历史失败（可能格式变更），已忽略: " + e.getMessage());
+            historyFile.delete();
+        }
+    }
+    
+    /**
+     * 删除磁盘上的聊天历史文件。
+     */
+    private void deleteChatHistoryFile() {
+        File historyFile = getChatHistoryFile();
+        if (historyFile.exists()) {
+            historyFile.delete();
         }
     }
 }

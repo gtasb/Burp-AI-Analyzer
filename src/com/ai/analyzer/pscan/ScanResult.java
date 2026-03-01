@@ -241,67 +241,139 @@ public class ScanResult {
     /**
      * 从AI响应中解析风险等级
      * 优先级：严重 > 高 > 中 > 低 > 信息 > 无
+     *
+     * 解析策略：
+     * 1. 先检查否定语句（"未发现"/"没有"/"不存在"等 + "漏洞"/"问题"/"风险"）
+     * 2. 再检查"严重程度: X"格式的明确等级标注（优先于关键词匹配）
+     * 3. 最后按优先级匹配风险关键词
      */
     private RiskLevel parseRiskLevelFromResult(String result) {
         if (result == null || result.isEmpty()) {
             return RiskLevel.NONE;
         }
-        
+
         String lower = result.toLowerCase();
-        
-        // 检查是否明确表示没有发现漏洞
-        if (lower.contains("未发现") || lower.contains("没有发现") || 
-            lower.contains("no vulnerabilit") || lower.contains("无安全问题") ||
-            lower.contains("安全") && lower.contains("良好")) {
+
+        // 第一步：检查否定语句——AI 明确表示没有发现漏洞/问题/风险
+        if (isNegativeAssessment(lower)) {
             return RiskLevel.NONE;
         }
-        
-        // 按优先级检查风险等级关键词
-        // 检查严重级别
-        if (lower.contains("严重") || lower.contains("critical") || 
-            lower.contains("紧急") || lower.contains("rce") || 
-            lower.contains("远程代码执行")) {
+
+        // 第二步：检查"严重程度: X" / "severity: X"格式的明确等级标注
+        RiskLevel explicitLevel = parseExplicitSeverityLabel(lower);
+        if (explicitLevel != null) {
+            return explicitLevel;
+        }
+
+        // 第三步：按优先级检查风险关键词（排除已被"严重程度:"模式覆盖的误匹配）
+        if (lower.contains("critical") ||
+            lower.contains("紧急") || lower.contains("rce") ||
+            lower.contains("远程代码执行") ||
+            containsStandalone(lower, "严重")) {
             return RiskLevel.CRITICAL;
         }
-        
-        // 检查高级别
-        if (lower.contains("高危") || lower.contains("高风险") || 
-            lower.contains("严重程度: 高") || lower.contains("severity: high") ||
+
+        if (lower.contains("高危") || lower.contains("高风险") ||
+            lower.contains("severity: high") ||
             lower.contains("sql注入") || lower.contains("sql injection") ||
             lower.contains("命令注入") || lower.contains("command injection") ||
             lower.contains("xxe") || lower.contains("ssrf")) {
             return RiskLevel.HIGH;
         }
-        
-        // 检查中级别
-        if (lower.contains("中危") || lower.contains("中风险") || 
-            lower.contains("严重程度: 中") || lower.contains("severity: medium") ||
+
+        if (lower.contains("中危") || lower.contains("中风险") ||
+            lower.contains("severity: medium") ||
             lower.contains("xss") || lower.contains("跨站脚本") ||
             lower.contains("csrf") || lower.contains("越权") ||
             lower.contains("信息泄露")) {
             return RiskLevel.MEDIUM;
         }
-        
-        // 检查低级别
-        if (lower.contains("低危") || lower.contains("低风险") || 
-            lower.contains("严重程度: 低") || lower.contains("severity: low")) {
+
+        if (lower.contains("低危") || lower.contains("低风险") ||
+            lower.contains("severity: low")) {
             return RiskLevel.LOW;
         }
-        
-        // 检查信息级别
-        if (lower.contains("信息") || lower.contains("info") || 
-            lower.contains("建议") || lower.contains("注意")) {
+
+        if (lower.contains("建议") || lower.contains("注意")) {
             return RiskLevel.INFO;
         }
-        
-        // 如果包含漏洞/风险相关词汇但没有明确等级，默认为中
-        if (lower.contains("漏洞") || lower.contains("风险") || 
-            lower.contains("vulnerability") || lower.contains("risk") ||
-            lower.contains("问题") || lower.contains("issue")) {
+
+        if (lower.contains("漏洞") || lower.contains("vulnerability") ||
+            lower.contains("risk")) {
             return RiskLevel.MEDIUM;
         }
-        
+
         return RiskLevel.NONE;
+    }
+
+    /**
+     * 判断 AI 响应是否为否定性安全评估（即"安全/无风险"的结论）
+     */
+    private boolean isNegativeAssessment(String lower) {
+        String[] negativeIndicators = {
+            "未发现", "没有发现", "不存在", "没有明显",
+            "无安全问题", "no vulnerabilit", "no security issue",
+            "no significant", "未检测到"
+        };
+        String[] negativeTargets = {
+            "漏洞", "问题", "风险", "威胁",
+            "vulnerability", "issue", "risk", "threat"
+        };
+
+        for (String indicator : negativeIndicators) {
+            if (lower.contains(indicator)) {
+                for (String target : negativeTargets) {
+                    if (lower.contains(target)) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        if (lower.contains("安全") && lower.contains("良好")) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * 解析"严重程度: X"或"severity: X"格式的明确等级标注
+     * 返回 null 表示未找到明确标注
+     */
+    private RiskLevel parseExplicitSeverityLabel(String lower) {
+        String[] severityPrefixes = {"严重程度:", "严重程度：", "风险等级:", "风险等级：", "severity:"};
+        for (String prefix : severityPrefixes) {
+            int idx = lower.indexOf(prefix);
+            if (idx >= 0) {
+                String afterPrefix = lower.substring(idx + prefix.length()).trim();
+                String segment = afterPrefix.length() > 20 ? afterPrefix.substring(0, 20) : afterPrefix;
+                if (segment.startsWith("严重") || segment.startsWith("critical")) return RiskLevel.CRITICAL;
+                if (segment.startsWith("高") || segment.startsWith("high")) return RiskLevel.HIGH;
+                if (segment.startsWith("中") || segment.startsWith("medium")) return RiskLevel.MEDIUM;
+                if (segment.startsWith("低") || segment.startsWith("low")) return RiskLevel.LOW;
+                if (segment.startsWith("信息") || segment.startsWith("info")) return RiskLevel.INFO;
+                if (segment.startsWith("无") || segment.startsWith("none")) return RiskLevel.NONE;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 检查关键词是否独立出现（不是"严重程度"等复合词的一部分）
+     */
+    private boolean containsStandalone(String text, String keyword) {
+        int idx = text.indexOf(keyword);
+        while (idx >= 0) {
+            boolean isPartOfSeverityLabel =
+                (idx + keyword.length() < text.length()) &&
+                text.substring(idx).startsWith("严重程度");
+            if (!isPartOfSeverityLabel) {
+                return true;
+            }
+            idx = text.indexOf(keyword, idx + keyword.length());
+        }
+        return false;
     }
     
     /**

@@ -257,7 +257,7 @@ public class BurpMcpMappingExample {
         System.out.println("========================================\n");
         
         // 注意：运行示例前请确保 Burp MCP Server 正在运行
-        // 默认地址: http://127.0.0.1:9876/sse
+        // 默认地址: http://127.0.0.1:9876/
         
         // 运行示例（注释掉不需要的示例）
         // example1_FullMapping();
@@ -267,7 +267,7 @@ public class BurpMcpMappingExample {
         // example5_UseWithAIService();
         
         System.out.println("\n提示：取消注释上面的示例方法来运行它们");
-        System.out.println("确保 Burp MCP Server 正在运行（http://127.0.0.1:9876/sse）");
+        System.out.println("确保 Burp MCP Server 正在运行（http://127.0.0.1:9876/）");
     }
 }
 
