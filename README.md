@@ -2,7 +2,7 @@
 
 > 🚀 让AI成为你的安全测试助手！基于 LangChain4j + 通义千问 + MCP 协议的智能渗透测试工具
 
-![图片描述](img\2.png "图片title")
+![图片描述](img/2.png "图片title")
 
 ## ✨ 功能特性
 
@@ -71,7 +71,7 @@ mvn clean package
 
 ### 4. 使用教程
 
-![图片描述](img\3.png "图片title")
+![图片描述](img/3.png "图片title")
 
 #### 方式一：主动分析（请求分析标签页）
 
