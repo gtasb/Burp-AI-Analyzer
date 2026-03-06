@@ -43,7 +43,8 @@ public class AgentConfig {
      */
     public enum ApiProvider {
         DASHSCOPE("DashScope"),
-        OPENAI_COMPATIBLE("OpenAI兼容");
+        OPENAI_COMPATIBLE("OpenAI兼容"),
+        ANTHROPIC("Anthropic兼容");
         
         private final String displayName;
         

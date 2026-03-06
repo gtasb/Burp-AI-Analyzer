@@ -86,7 +86,7 @@ public class BurpMcpMappingExample {
             mappingConfig.addToolNameMapping("url_encode", "URL编码工具");
             
             // 使用自定义映射创建 Tool Provider
-            dev.langchain4j.mcp.McpToolProvider toolProvider = mcpProvider.createToolProviderWithMapping(mcpClient, mappingConfig);
+            McpToolProvider toolProvider = mcpProvider.createToolProviderWithMapping(mcpClient, mappingConfig);
             
             System.out.println("已映射的工具:");
             System.out.println("  - send_http1_request -> 发送HTTP请求");
@@ -129,7 +129,7 @@ public class BurpMcpMappingExample {
             };
             
             // 使用映射配置和工具过滤创建 Tool Provider
-            dev.langchain4j.mcp.McpToolProvider toolProvider = mcpProvider.createToolProviderWithMapping(
+            McpToolProvider toolProvider = mcpProvider.createToolProviderWithMapping(
                 mcpClient, 
                 mappingConfig, 
                 safeTools
@@ -189,7 +189,7 @@ public class BurpMcpMappingExample {
                 return toolSpec; // 返回原始规范（实际应该返回修改后的规范）
             });
             
-            dev.langchain4j.mcp.McpToolProvider toolProvider = mcpProvider.createToolProviderWithMapping(mcpClient, mappingConfig);
+            McpToolProvider toolProvider = mcpProvider.createToolProviderWithMapping(mcpClient, mappingConfig);
             
             System.out.println("已为工具添加详细的中文描述");
             
@@ -218,7 +218,7 @@ public class BurpMcpMappingExample {
             McpToolMappingConfig mappingConfig = McpToolMappingConfig.createBurpMapping();
             
             // 创建 Tool Provider（带映射）
-            dev.langchain4j.mcp.McpToolProvider toolProvider = mcpProvider.createToolProviderWithMapping(mcpClient, mappingConfig);
+            McpToolProvider toolProvider = mcpProvider.createToolProviderWithMapping(mcpClient, mappingConfig);
             
             // 在 AI Service 中使用（示例代码，需要实际的 ChatModel）
             /*

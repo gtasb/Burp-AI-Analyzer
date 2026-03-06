@@ -23,12 +23,12 @@ import java.util.List;
 import java.util.Map;
 
 import com.ai.analyzer.model.PluginSettings;
+import com.ai.analyzer.multiModels.ChatModelFactory;
 import com.ai.analyzer.api.AgentConfig.ApiProvider;
 import burp.api.montoya.MontoyaApi;
 import dev.langchain4j.model.chat.response.PartialResponse;
 import dev.langchain4j.model.chat.response.StreamingHandle;
 import dev.langchain4j.model.chat.response.PartialResponseContext;
-import dev.langchain4j.community.model.dashscope.QwenChatRequestParameters;
 import dev.langchain4j.mcp.client.McpClient;
 import dev.langchain4j.mcp.McpToolProvider;
 import dev.langchain4j.mcp.client.transport.McpTransport;
@@ -41,9 +41,11 @@ import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.tool.BeforeToolExecution;
 import dev.langchain4j.service.tool.ToolExecution;
-import dev.langchain4j.community.model.dashscope.QwenStreamingChatModel;
-import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
+import dev.langchain4j.service.tool.ToolProvider;
+import com.ai.analyzer.Tools.BurpExtTools;
+import com.ai.analyzer.Tools.PythonScriptTool;
+import com.ai.analyzer.Tools.FileSystemAccessTools;
 import lombok.Getter;
 
 /**
@@ -72,6 +74,10 @@ public class AgentApiClient {
     private volatile TokenStream currentTokenStream;
     private volatile StreamingHandle streamingHandle;
     private volatile boolean isStreamingCancelled = false;
+
+    // ========== 系统提示词缓存 ==========
+    private volatile String cachedSystemPrompt;
+    private volatile int cachedPromptConfigHash;
 
     // ========== 构造函数 ==========
 
@@ -326,133 +332,33 @@ public class AgentApiClient {
     // ========== ChatModel 初始化 ==========
     
     private void initializeChatModel() {
-        if (config.getApiProvider() == ApiProvider.OPENAI_COMPATIBLE) {
-            initializeOpenAIChatModel();
-                } else {
-            initializeQwenChatModel();
-        }
-    }
-
-    private void initializeQwenChatModel() {
         if (!config.isValid()) {
             logInfo("警告: API Key为空，无法初始化ChatModel");
             return;
         }
         
         try {
-            String baseUrl = normalizeQwenBaseUrl(config.getApiUrl());
-            String modelName = config.getModel() != null && !config.getModel().trim().isEmpty() 
-                ? config.getModel() : "qwen-max";
-            
             if (isFirstInitialization) {
-                logInfo("初始化LangChain4j ChatModel");
-                logInfo("原始API URL: " + config.getApiUrl());
-                logInfo("Model: " + modelName);
-                logInfo("EnableThinking: " + config.isEnableThinking());
-                logInfo("EnableSearch: " + config.isEnableSearch());
+                logInfo("初始化 ChatModel: " + ChatModelFactory.describeConfig(
+                        config.getApiProvider(), config.getApiUrl(), config.getModel(),
+                        config.isEnableSearch(), config.isEnableThinking()));
             }
-
-            QwenChatRequestParameters.SearchOptions searchOptions = QwenChatRequestParameters.SearchOptions.builder()
-                    .searchStrategy("proactive")
-                    .build();
-
-            QwenChatRequestParameters parameters = QwenChatRequestParameters.builder()
-                    .enableSearch(config.isEnableSearch())
-                    .searchOptions(searchOptions)
-                    .enableThinking(config.isEnableThinking())
-                    .build();
             
-            this.chatModel = QwenStreamingChatModel.builder()
-                    .apiKey(config.getApiKey())
-                    .baseUrl(baseUrl)
-                    .modelName(modelName)
-                    .temperature(0.7f)
-                    .defaultRequestParameters(parameters)
-                    .build();
-                    
+            this.chatModel = ChatModelFactory.create(
+                    config.getApiProvider(),
+                    config.getApiKey(),
+                    config.getApiUrl(),
+                    config.getModel(),
+                    config.isEnableSearch(),
+                    config.isEnableThinking(),
+                    config.getCustomParameters());
+            
             if (isFirstInitialization) {
-                logInfo("LangChain4j ChatModel初始化成功");
+                logInfo("ChatModel 初始化成功");
                 isFirstInitialization = false;
             }
         } catch (Exception e) {
             logError("初始化ChatModel失败: " + e.getMessage());
-        }
-    }
-    
-    private String normalizeQwenBaseUrl(String apiUrl) {
-        String baseUrl = apiUrl;
-        if (baseUrl != null && !baseUrl.trim().isEmpty()) {
-            baseUrl = baseUrl.trim();
-            if (baseUrl.endsWith("/")) {
-                baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
-            }
-            if (baseUrl.contains("/chat/completions")) {
-                baseUrl = baseUrl.substring(0, baseUrl.indexOf("/chat/completions"));
-            }
-            if (!baseUrl.endsWith("/v1")) {
-                if (baseUrl.endsWith("/compatible-mode")) {
-                    baseUrl = baseUrl + "/v1";
-                } else if (baseUrl.contains("dashscope") && !baseUrl.contains("/v1")) {
-                    baseUrl = baseUrl + "/api/v1";
-                }
-            }
-        }
-        return (baseUrl == null || baseUrl.trim().isEmpty()) 
-            ? "https://dashscope.aliyuncs.com/api/v1" : baseUrl;
-    }
-
-    private void initializeOpenAIChatModel() {
-        if (!config.isValid()) {
-            logInfo("警告: API Key为空，无法初始化 OpenAI 兼容 ChatModel");
-            return;
-        }
-        
-        try {
-            String baseUrl = config.getApiUrl();
-            String modelName = config.getModel();
-            
-            if (baseUrl == null || baseUrl.trim().isEmpty()) {
-                baseUrl = "https://api.openai.com/v1";
-            }
-            if (!baseUrl.endsWith("/v1") && !baseUrl.endsWith("/v1/")) {
-                baseUrl = baseUrl.endsWith("/") ? baseUrl + "v1" : baseUrl + "/v1";
-            }
-            if (modelName == null || modelName.trim().isEmpty()) {
-                modelName = "gpt-3.5-turbo";
-            }
-            
-            var builder = OpenAiStreamingChatModel.builder()
-                    .baseUrl(baseUrl)
-                    .apiKey(config.getApiKey())
-                    .modelName(modelName)
-                    .temperature(0.7);
-            
-            // 应用自定义参数
-            if (config.getCustomParameters() != null && !config.getCustomParameters().trim().isEmpty()) {
-                try {
-                    Map<String, Object> customParamsMap = JsonParser.parseJsonToMap(config.getCustomParameters());
-                    if (!customParamsMap.isEmpty()) {
-                        dev.langchain4j.model.openai.OpenAiChatRequestParameters requestParams = 
-                            dev.langchain4j.model.openai.OpenAiChatRequestParameters.builder()
-                                .customParameters(customParamsMap)
-                                .build();
-                        builder.defaultRequestParameters(requestParams);
-                        logInfo("已设置自定义参数: " + customParamsMap.keySet());
-                    }
-                } catch (Exception e) {
-                    logError("解析自定义参数失败: " + e.getMessage());
-                }
-            }
-            
-            this.chatModel = builder.build();
-            
-            if (isFirstInitialization) {
-                logInfo("OpenAI 兼容 ChatModel 初始化成功");
-                logInfo("Base URL: " + baseUrl + ", Model: " + modelName);
-                isFirstInitialization = false;
-            }
-        } catch (Exception e) {
-            logError("初始化 OpenAI 兼容 ChatModel 失败: " + e.getMessage());
         }
     }
     
@@ -503,47 +409,55 @@ public class AgentApiClient {
                 .chatMemory(chatMemory)
                 .systemMessageProvider(memoryId -> buildSystemPrompt());
         
-        // 添加 MCP 工具支持
-        if (mcpToolProvider != null) {
-            assistantBuilder.toolProvider(mcpToolProvider);
-            logInfo("已启用 MCP 工具支持");
+        // ToolProviders: 组合 MCP + 官方 Skills (activate_skill / read_skill_resource)
+        {
+            List<ToolProvider> providers = new ArrayList<>();
+            if (mcpToolProvider != null) {
+                providers.add(mcpToolProvider);
+                logInfo("已启用 MCP 工具支持");
+            }
+            if (config.isEnableSkills() && skillManager != null && skillManager.hasEnabledSkills()) {
+                ToolProvider skillsTP = skillManager.getSkillsToolProvider();
+                if (skillsTP != null) {
+                    providers.add(skillsTP);
+                    logInfo("已启用官方 Skills ToolProvider (activate_skill + read_skill_resource)");
+                }
+            }
+            if (!providers.isEmpty()) {
+                for (ToolProvider tp : providers) {
+                    assistantBuilder.toolProvider(tp);
+                }
+            }
         }
         
-        // 添加扩展工具
+        // @Tool 注解工具
         if (api != null) {
-/*             com.ai.analyzer.Tools.CurlTools curlTools = new com.ai.analyzer.Tools.CurlTools(api);
-            assistantBuilder.tools(curlTools);
-            logInfo("已添加 CurlTools（替代 send_http1_request/send_http2_request）"); */
-            
-            // BurpExtTools
             if (config.isEnableMcp()) {
-                com.ai.analyzer.Tools.BurpExtTools burpExtTools = new com.ai.analyzer.Tools.BurpExtTools(api);
+                BurpExtTools burpExtTools = new BurpExtTools(api);
                 assistantBuilder.tools(burpExtTools);
                 logInfo("已添加 BurpExtTools");
             }
             
-            // PythonScriptTool
             if (config.isEnablePythonScript()) {
-                com.ai.analyzer.Tools.PythonScriptTool pythonTool = new com.ai.analyzer.Tools.PythonScriptTool();
+                PythonScriptTool pythonTool = new PythonScriptTool();
                 assistantBuilder.tools(pythonTool);
                 logInfo("已添加 PythonScriptTool");
             }
             
-            // FileSystemAccessTools
             if (config.isEnableFileSystemAccess() && config.hasRagDocumentsPath()) {
-                com.ai.analyzer.Tools.FileSystemAccessTools fsaTools = new com.ai.analyzer.Tools.FileSystemAccessTools(api);
+                FileSystemAccessTools fsaTools = new FileSystemAccessTools(api);
                 fsaTools.setAllowedRootPath(config.getRagMcpDocumentsPath());
                 assistantBuilder.tools(fsaTools);
                 logInfo("已添加 FileSystemAccessTools (知识库: " + config.getRagMcpDocumentsPath() + ")");
             }
             
-            // SkillToolsProvider
+            // SkillToolsProvider: execute_skill_tool + list_skill_tools（二进制执行）
             if (config.isEnableSkills() && skillManager != null && skillManager.hasEnabledTools()) {
                 if (skillToolsProvider == null) {
                     skillToolsProvider = new SkillToolsProvider(skillManager, api);
                 }
                 assistantBuilder.tools(skillToolsProvider);
-                logInfo("已添加 SkillToolsProvider (工具数: " + skillManager.getEnabledToolCount() + ")");
+                logInfo("已添加 SkillToolsProvider (二进制工具数: " + skillManager.getEnabledToolCount() + ")");
             }
         }
         
@@ -920,7 +834,16 @@ public class AgentApiClient {
     }
 
     private String buildSystemPrompt() {
-        return new SystemPromptBuilder()
+        int hash = java.util.Objects.hash(
+                config.isEnableSearch(), config.isEnableMcp(),
+                config.isEnableRagMcp(), config.isEnableChromeMcp(),
+                config.isEnableFileSystemAccess(), config.isEnableSkills(),
+                config.getRagMcpDocumentsPath(),
+                skillManager != null ? skillManager.getEnabledSkillCount() : 0);
+        String cached = cachedSystemPrompt;
+        if (cached != null && hash == cachedPromptConfigHash) return cached;
+
+        cached = new SystemPromptBuilder()
                 .enableSearch(config.isEnableSearch())
                 .enableMcp(config.isEnableMcp())
                 .enableRagMcp(config.isEnableRagMcp())
@@ -930,6 +853,9 @@ public class AgentApiClient {
                 .ragMcpDocumentsPath(config.getRagMcpDocumentsPath())
                 .skillManager(skillManager)
                 .build();
+        cachedSystemPrompt = cached;
+        cachedPromptConfigHash = hash;
+        return cached;
     }
 
     // ========== 日志方法 ==========

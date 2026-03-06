@@ -5,6 +5,7 @@ import burp.api.montoya.http.message.HttpRequestResponse;
 import com.ai.analyzer.api.AgentApiClient;
 import com.ai.analyzer.model.PluginSettings;
 import com.ai.analyzer.model.RequestData;
+import com.ai.analyzer.pscan.PassiveScanApiClient;
 import com.ai.analyzer.pscan.PassiveScanManager;
 import com.ai.analyzer.pscan.ScanResult;
 import com.ai.analyzer.skills.Skill;
@@ -353,7 +354,7 @@ public class AIAnalyzerTab extends JPanel {
      */
     private void syncApiConfigToPassiveScan() {
         if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
-            com.ai.analyzer.pscan.PassiveScanApiClient psClient = passiveScanManager.getApiClient();
+            PassiveScanApiClient psClient = passiveScanManager.getApiClient();
             
             // 基础 API 配置
             psClient.setApiUrl(apiClient.getApiUrl());
@@ -484,29 +485,37 @@ public class AIAnalyzerTab extends JPanel {
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
-        String[] providers = {"DashScope", "OpenAI兼容"};
+        String[] providers = {"DashScope", "OpenAI兼容", "Anthropic兼容"};
         apiProviderComboBox = new JComboBox<>(providers);
         apiProviderComboBox.setSelectedIndex(0); // 默认 DashScope
         apiProviderComboBox.addActionListener(e -> {
             String selectedProvider = (String) apiProviderComboBox.getSelectedItem();
             apiClient.setApiProvider(selectedProvider);
-            // 根据选择更新默认 URL
+            // 根据选择更新默认 URL 和功能开关
             if ("DashScope".equals(selectedProvider)) {
-                if (apiUrlField.getText().contains("openai.com") || apiUrlField.getText().isEmpty()) {
+                if (apiUrlField.getText().contains("openai.com") || apiUrlField.getText().contains("anthropic.com") || apiUrlField.getText().isEmpty()) {
                     apiUrlField.setText("https://dashscope.aliyuncs.com/api/v1");
                 }
-                // DashScope 支持深度思考和搜索
                 enableThinkingCheckBox.setEnabled(true);
                 enableSearchCheckBox.setEnabled(true);
+            } else if ("Anthropic兼容".equals(selectedProvider)) {
+                if (apiUrlField.getText().contains("dashscope") || apiUrlField.getText().contains("openai.com") || apiUrlField.getText().isEmpty()) {
+                    apiUrlField.setText("https://api.anthropic.com");
+                }
+                enableThinkingCheckBox.setEnabled(true);  // Anthropic 支持 Extended Thinking
+                enableSearchCheckBox.setEnabled(false);
+                enableSearchCheckBox.setSelected(false);
             } else {
-                // OpenAI 兼容模式不支持 DashScope 特有的深度思考和搜索功能
+                if (apiUrlField.getText().contains("dashscope") || apiUrlField.getText().contains("anthropic.com") || apiUrlField.getText().isEmpty()) {
+                    apiUrlField.setText("https://api.openai.com/v1");
+                }
                 enableThinkingCheckBox.setEnabled(false);
                 enableThinkingCheckBox.setSelected(false);
                 enableSearchCheckBox.setEnabled(false);
                 enableSearchCheckBox.setSelected(false);
             }
         });
-        apiProviderComboBox.setToolTipText("选择 API 提供者：DashScope（通义千问）或 OpenAI 兼容格式（支持 OpenAI、Ollama、LM Studio 等）");
+        apiProviderComboBox.setToolTipText("选择 API 提供者：DashScope（通义千问）、OpenAI 兼容格式（OpenAI、Ollama、LM Studio 等）或 Anthropic 兼容（Claude）");
         apiConfigPanel.add(apiProviderComboBox, gbc);
         
         // API URL
@@ -2050,7 +2059,8 @@ public class AIAnalyzerTab extends JPanel {
         apiProviderComboBox.setSelectedItem(provider);
         // 根据提供者设置功能开关的启用状态
         boolean isDashScope = "DashScope".equals(provider);
-        enableThinkingCheckBox.setEnabled(isDashScope);
+        boolean isAnthropic = "Anthropic兼容".equals(provider);
+        enableThinkingCheckBox.setEnabled(isDashScope || isAnthropic);
         enableSearchCheckBox.setEnabled(isDashScope);
         
         apiUrlField.setText(settings.getApiUrl());
@@ -2058,7 +2068,7 @@ public class AIAnalyzerTab extends JPanel {
         modelField.setText(settings.getModel());
         customParametersField.setText(settings.getCustomParameters());
         userPromptArea.setText(settings.getUserPrompt());
-        enableThinkingCheckBox.setSelected(isDashScope && settings.isEnableThinking());
+        enableThinkingCheckBox.setSelected((isDashScope || isAnthropic) && settings.isEnableThinking());
         enableSearchCheckBox.setSelected(isDashScope && settings.isEnableSearch());
         
         // Burp MCP 配置
@@ -2094,7 +2104,7 @@ public class AIAnalyzerTab extends JPanel {
         apiClient.setApiKey(settings.getApiKey());
         apiClient.setModel(settings.getModel());
         apiClient.setCustomParameters(settings.getCustomParameters());
-        apiClient.setEnableThinking(isDashScope && settings.isEnableThinking());
+        apiClient.setEnableThinking((isDashScope || isAnthropic) && settings.isEnableThinking());
         apiClient.setEnableSearch(isDashScope && settings.isEnableSearch());
         apiClient.setEnableMcp(settings.isEnableMcp());
         apiClient.setBurpMcpUrl(settings.getMcpUrl());

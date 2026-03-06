@@ -45,46 +45,59 @@
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j-core</artifactId>
-        <version>1.11.0</version>
+        <version>1.12.1</version>
     </dependency>
 
     <!-- LangChain4j 主要功能 -->
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j</artifactId>
-        <version>1.11.0</version>
+        <version>1.12.1</version>
     </dependency>
 
     <!-- OpenAI 实现 -->
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j-open-ai</artifactId>
-        <version>1.11.0</version>
+        <version>1.12.1</version>
     </dependency>
 
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j-http-client-jdk</artifactId>
-        <version>1.11.0</version>
+        <version>1.12.1</version>
     </dependency>
 
     <dependency>
         <groupId>com.alibaba</groupId>
         <artifactId>dashscope-sdk-java</artifactId>
-        <version>2.22.9</version>
+        <version>2.22.10</version>
     </dependency>
 
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j-community-dashscope</artifactId>
-        <version>1.11.0-beta19</version>
+        <version>1.12.1-beta21</version>
+    </dependency>
+
+    <dependency>
+        <groupId>dev.langchain4j</groupId>
+        <artifactId>langchain4j-anthropic</artifactId>
+        <version>1.12.1</version>
     </dependency>
 
     <!-- MCP 模块 -->
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j-mcp</artifactId>
-        <version>1.11.0-beta19</version>
+        <version>1.12.1-beta21</version>
+    </dependency>
+
+    <!-- Skills 模块 -->
+    <dependency>
+        <groupId>dev.langchain4j</groupId>
+        <artifactId>langchain4j-skills</artifactId>
+        <version>1.12.1-beta21</version>
     </dependency>
 
 <!--    &lt;!&ndash; Easy RAG 模块 &ndash;&gt;-->
@@ -105,7 +118,7 @@
     <dependency>
         <groupId>com.fasterxml.jackson.core</groupId>
         <artifactId>jackson-databind</artifactId>
-        <version>2.20.1</version>
+        <version>2.21.1</version>
     </dependency>
 
     <!-- Lombok 用于自动生成 getter/setter (兼容 Java 21) -->
@@ -120,25 +133,25 @@
     <dependency>
         <groupId>org.junit.jupiter</groupId>
         <artifactId>junit-jupiter</artifactId>
-        <version>5.11.4</version>
+        <version>6.1.0-M1</version>
         <scope>test</scope>
     </dependency>
     <dependency>
         <groupId>org.assertj</groupId>
         <artifactId>assertj-core</artifactId>
-        <version>3.27.3</version>
+        <version>4.0.0-M1</version>
         <scope>test</scope>
     </dependency>
     <dependency>
         <groupId>org.mockito</groupId>
         <artifactId>mockito-core</artifactId>
-        <version>5.15.2</version>
+        <version>5.22.0</version>
         <scope>test</scope>
     </dependency>
     <dependency>
         <groupId>org.mockito</groupId>
         <artifactId>mockito-junit-jupiter</artifactId>
-        <version>5.15.2</version>
+        <version>5.22.0</version>
         <scope>test</scope>
     </dependency>
 

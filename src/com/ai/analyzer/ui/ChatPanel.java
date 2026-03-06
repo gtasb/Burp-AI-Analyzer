@@ -379,73 +379,42 @@ public class ChatPanel extends JPanel {
                         }
                     });
                     
-                    // 调用API：传递 HttpRequestResponse 对象以检测请求来源
+                    // 流式渲染节流：最多每 RENDER_INTERVAL_MS 做一次全量 Markdown 渲染，
+                    // 用 invokeLater（非阻塞）取代 invokeAndWait，避免阻塞流读取线程。
+                    final long[] lastRenderTime = {0L};
+                    final long RENDER_INTERVAL_MS = 200;
+
                     api.logging().logToOutput("[ChatPanel] 开始调用analyzeRequestStream");
                     apiClient.analyzeRequestStream(
                         currentRequest,
                         finalMessage,
                         chunk -> {
-                            // 检查是否已取消（检查 SwingWorker 和 isStreaming 状态）
-                            if (currentWorker.isCancelled() || !isStreaming) {
-                                return; // 立即返回，不再处理后续的 chunk
-                            }
-                            
-                            //api.logging().logToOutput("[ChatPanel] 收到内容chunk: " + (chunk.length() > 100 ? chunk.substring(0, 100) + "..." : chunk));
-                            // 将chunk添加到缓冲区
+                            if (currentWorker.isCancelled() || !isStreaming) return;
+
                             fullResponse.append(chunk);
-                            
-                            // 流式输出时，实时进行Markdown解析和渲染
-                            // 使用invokeAndWait确保最后一个chunk的渲染完成
-                            try {
-                                SwingUtilities.invokeAndWait(() -> {
-                                    // 再次检查取消状态（双重检查）
-                                    if (currentWorker.isCancelled() || !isStreaming) {
-                                        return;
+
+                            long now = System.currentTimeMillis();
+                            if (now - lastRenderTime[0] < RENDER_INTERVAL_MS) return;
+                            lastRenderTime[0] = now;
+
+                            String snapshot = fullResponse.toString();
+                            SwingUtilities.invokeLater(() -> {
+                                if (currentWorker.isCancelled() || !isStreaming) return;
+                                try {
+                                    if (aiMessageStartPos >= 0) {
+                                        MarkdownRenderer.appendMarkdownStreaming(chatArea, snapshot, aiMessageStartPos);
+                                        chatArea.setCaretPosition(chatArea.getStyledDocument().getLength());
+                                    } else {
+                                        StyledDocument doc = chatArea.getStyledDocument();
+                                        Style messageStyle = doc.addStyle("message", null);
+                                        StyleConstants.setForeground(messageStyle, Color.BLACK);
+                                        doc.insertString(doc.getLength(), chunk, messageStyle);
+                                        chatArea.setCaretPosition(doc.getLength());
                                     }
-                                    try {
-                                        // 使用流式Markdown渲染，从AI消息开始位置重新渲染整个缓冲区
-                                        if (aiMessageStartPos >= 0) {
-                                            MarkdownRenderer.appendMarkdownStreaming(chatArea, fullResponse.toString(), aiMessageStartPos);
-                                            chatArea.setCaretPosition(chatArea.getStyledDocument().getLength());
-                                        } else {
-                                            // 如果还没有记录位置，先追加纯文本
-                                            StyledDocument doc = chatArea.getStyledDocument();
-                                            Style messageStyle = doc.addStyle("message", null);
-                                            StyleConstants.setForeground(messageStyle, Color.BLACK);
-                                            doc.insertString(doc.getLength(), chunk, messageStyle);
-                                            chatArea.setCaretPosition(doc.getLength());
-                                        }
-                                    } catch (Exception e) {
-                                        api.logging().logToOutput("[ChatPanel] 流式Markdown渲染失败: " + e.getMessage());
-                                        api.logging().logToError("流式Markdown渲染失败: " + e.getMessage());
-                                        for (StackTraceElement ste : e.getStackTrace()) {
-                                            api.logging().logToError("  at " + ste.toString());
-                                        }
-                                    }
-                                });
-                            } catch (Exception e) {
-                                // 如果invokeAndWait失败，回退到invokeLater
-                                SwingUtilities.invokeLater(() -> {
-                                    // 再次检查取消状态
-                                    if (currentWorker.isCancelled() || !isStreaming) {
-                                        return;
-                                    }
-                                    try {
-                                        if (aiMessageStartPos >= 0) {
-                                            MarkdownRenderer.appendMarkdownStreaming(chatArea, fullResponse.toString(), aiMessageStartPos);
-                                            chatArea.setCaretPosition(chatArea.getStyledDocument().getLength());
-                                        } else {
-                                            StyledDocument doc = chatArea.getStyledDocument();
-                                            Style messageStyle = doc.addStyle("message", null);
-                                            StyleConstants.setForeground(messageStyle, Color.BLACK);
-                                            doc.insertString(doc.getLength(), chunk, messageStyle);
-                                            chatArea.setCaretPosition(doc.getLength());
-                                        }
-                                    } catch (Exception ex) {
-                                        api.logging().logToError("流式Markdown渲染失败: " + ex.getMessage());
-                                    }
-                                });
-                            }
+                                } catch (Exception e) {
+                                    api.logging().logToError("流式Markdown渲染失败: " + e.getMessage());
+                                }
+                            });
                         }
                     );
                     
@@ -755,14 +724,38 @@ public class ChatPanel extends JPanel {
                 chatHistory.addAll(loaded);
                 for (ChatMessage msg : loaded) {
                     boolean isUser = "user".equals(msg.getRole());
-                    String sender = isUser ? "你" : msg.getRole();
-                    appendToChat(sender, msg.getContent(), isUser);
+                    if (isUser) {
+                        appendToChat("你", msg.getContent(), true);
+                    } else {
+                        appendMarkdownToChat("AI助手", msg.getContent());
+                    }
                 }
                 api.logging().logToOutput("[ChatPanel] 已恢复 " + loaded.size() + " 条聊天历史");
             }
         } catch (Exception e) {
             api.logging().logToError("[ChatPanel] 加载聊天历史失败（可能格式变更），已忽略: " + e.getMessage());
             historyFile.delete();
+        }
+    }
+
+    /**
+     * 将 AI 回复以 Markdown 渲染追加到聊天区域（用于历史恢复和完整回复）。
+     */
+    private void appendMarkdownToChat(String sender, String markdownContent) {
+        try {
+            StyledDocument doc = chatArea.getStyledDocument();
+            Style senderStyle = doc.addStyle("sender", null);
+            StyleConstants.setBold(senderStyle, true);
+            StyleConstants.setForeground(senderStyle, Color.GREEN);
+            doc.insertString(doc.getLength(), sender + ": \n", senderStyle);
+
+            MarkdownRenderer.appendMarkdown(chatArea, markdownContent);
+
+            Style spacing = doc.addStyle("spacing", null);
+            doc.insertString(doc.getLength(), "\n", spacing);
+            chatArea.setCaretPosition(doc.getLength());
+        } catch (Exception e) {
+            appendToChat(sender, markdownContent, false);
         }
     }
     

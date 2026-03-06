@@ -189,7 +189,7 @@ jar -tf build\libs\ai-analyzer.jar
 # 应该包含：
 # - AIExtension.class
 # - AIAnalyzerTab.class
-# - QianwenApiClient.class
+# - AgentApiClient.class
 # - AIContextMenuProvider.class
 # - com/google/gson/... (Gson库)
 ```

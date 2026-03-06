@@ -355,22 +355,62 @@ public final class HardcodedRules {
         String type = "ssti";
         String name = "模板注入";
         String severity = "high";
+
+        // 策略：只匹配 payload 本身或引擎特有的错误/配置泄露信息，
+        //       不再匹配纯数字计算结果（如 "49"）以避免误报
+
+        // Jinja2 (Python): payload 或配置对象泄露
         addRule(rules, type, name + "-jinja2", severity, "jinja2", new String[] {
-            "\\Q{{7*7}}\\E", "\\Q{{config}}\\E", "49", "dict_items"
+            "\\Q{{7*7}}\\E", "\\Q{{7*'7'}}\\E",
+            "\\Q{{config.items()}}\\E", "\\Q{{self.__init__.__globals__}}\\E",
+            "\\Q{{request.application.__self__}}\\E"
         });
-        // Mako: 去掉 "ab" 过于宽泛的规则，只保留 payload 和计算结果
-        addRule(rules, type, name + "-mako", severity, "mako", new String[] { "\\Q${7*7}\\E" });
-        addRule(rules, type, name + "-tornado", severity, "tornado", new String[] { "\\Q{{7*7}}\\E", "\\Q{{handler.settings}}\\E", "49" });
-        addRule(rules, type, name + "-twig", severity, "twig", new String[] { "\\Q{{7*7}}\\E", "\\Q{{_self}}\\E", "\\Q{{dump(app)}}\\E", "49" });
-        addRule(rules, type, name + "-freemarker", severity, "freemarker", new String[] { "\\Q${7*7}\\E", "49", "7777777" });
-        addRule(rules, type, name + "-velocity", severity, "velocity", new String[] { "\\Q#set($x=7*7)$x\\E", "49" });
-        addRule(rules, type, name + "-erb", severity, "erb", new String[] { "\\Q<%= 7*7 %>\\E", "49" });
-        addRule(rules, type, name + "-slim", severity, "slim", new String[] { "= 7*7", "49" });
-        addRule(rules, type, name + "-pug", severity, "pug", new String[] { "\\Q#{7*7}\\E", "49" });
-        addRule(rules, type, name + "-nunjucks", severity, "nunjucks", new String[] { "\\Q{{7*7}}\\E", "49" });
-        addRule(rules, type, name + "-ejs", severity, "ejs", new String[] { "\\Q<%=7*7%>\\E", "49" });
-        addRule(rules, type, name + "-smarty", severity, "smarty", new String[] { "\\Q{7*7}\\E", "\\Q{$smarty.version}\\E", "49" });
-        addRule(rules, type, name + "-angularjs", severity, "angularjs", new String[] { "ng-app", "angular\\.js", "X-Powered-By: AngularJS" });
+        // Mako (Python)
+        addRule(rules, type, name + "-mako", severity, "mako", new String[] {
+            "\\Q${7*7}\\E", "\\Q<%import os%>\\E"
+        });
+        // Tornado (Python)
+        addRule(rules, type, name + "-tornado", severity, "tornado", new String[] {
+            "\\Q{{handler.settings}}\\E", "\\Q{{handler.application}}\\E"
+        });
+        // Twig (PHP)
+        addRule(rules, type, name + "-twig", severity, "twig", new String[] {
+            "\\Q{{7*7}}\\E", "\\Q{{_self.env}}\\E", "\\Q{{dump(app)}}\\E"
+        });
+        // FreeMarker (Java): payload 或 assign 语法
+        addRule(rules, type, name + "-freemarker", severity, "freemarker", new String[] {
+            "\\Q${7*7}\\E", "\\Q<#assign\\E", "freemarker\\.template\\.TemplateException"
+        });
+        // Velocity (Java)
+        addRule(rules, type, name + "-velocity", severity, "velocity", new String[] {
+            "\\Q#set($x=7*7)\\E", "org\\.apache\\.velocity\\.exception"
+        });
+        // ERB (Ruby)
+        addRule(rules, type, name + "-erb", severity, "erb", new String[] {
+            "\\Q<%= 7*7 %>\\E", "\\Q<%=7*7%>\\E"
+        });
+        // Pug/Jade (Node.js)
+        addRule(rules, type, name + "-pug", severity, "pug", new String[] {
+            "\\Q#{7*7}\\E", "\\Q#{root.process.mainModule}\\E"
+        });
+        // Nunjucks (Node.js)
+        addRule(rules, type, name + "-nunjucks", severity, "nunjucks", new String[] {
+            "\\Q{{7*7}}\\E", "\\Q{{range.constructor(\\E"
+        });
+        // EJS (Node.js)
+        addRule(rules, type, name + "-ejs", severity, "ejs", new String[] {
+            "\\Q<%=7*7%>\\E", "\\Q<%= 7*7 %>\\E"
+        });
+        // Smarty (PHP): 需要完整的 Smarty 语法标识
+        addRule(rules, type, name + "-smarty", severity, "smarty", new String[] {
+            "\\Q{$smarty.version}\\E", "\\Q{$smarty.template}\\E",
+            "\\QSmarty Compiler\\E", "\\QSmarty_Internal_\\E"
+        });
+        // Thymeleaf (Java): Spring 生态常见
+        addRule(rules, type, name + "-thymeleaf", severity, "thymeleaf", new String[] {
+            "\\Q__${T(java.lang.Runtime)}__\\E",
+            "org\\.thymeleaf\\.exceptions\\.TemplateProcessingException"
+        });
     }
 
     private static void addFastjsonPhpErrorRules(List<VulnerabilityRule> rules) {
