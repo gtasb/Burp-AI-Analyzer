@@ -228,9 +228,6 @@ AI 执行：
 # Maven 构建
 mvn clean package
 
-
-详细说明请查看 [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) 和 [QUICKSTART.md](QUICKSTART.md)
-
 ## 📝 更新日志
 
 ### v1.2.1
