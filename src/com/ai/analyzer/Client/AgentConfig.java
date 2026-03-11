@@ -1,5 +1,6 @@
-package com.ai.analyzer.api;
+package com.ai.analyzer.Client;
 
+import java.io.File;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -37,6 +38,8 @@ public class AgentConfig {
     private boolean enableFileSystemAccess = false;
     private boolean enableSkills = false;
     private boolean enablePythonScript = false;
+    private boolean enableNotebook = false;
+    private String workplaceDirectoryPath = "";
     
     /**
      * API 提供者类型枚举
@@ -93,6 +96,8 @@ public class AgentConfig {
         this.enableFileSystemAccess = other.enableFileSystemAccess;
         this.enableSkills = other.enableSkills;
         this.enablePythonScript = other.enablePythonScript;
+        this.enableNotebook = other.enableNotebook;
+        this.workplaceDirectoryPath = other.workplaceDirectoryPath;
     }
     
     /**
@@ -122,7 +127,22 @@ public class AgentConfig {
      * 检查 RAG 文档路径是否配置
      */
     public boolean hasRagDocumentsPath() {
-        return ragMcpDocumentsPath != null && !ragMcpDocumentsPath.trim().isEmpty();
+        String path = getEffectiveRagDocumentsPath();
+        return path != null && !path.trim().isEmpty();
+    }
+
+    public String getEffectiveRagDocumentsPath() {
+        if (workplaceDirectoryPath != null && !workplaceDirectoryPath.trim().isEmpty()) {
+            return new File(workplaceDirectoryPath.trim(), "rag").getAbsolutePath();
+        }
+        return ragMcpDocumentsPath != null ? ragMcpDocumentsPath.trim() : "";
+    }
+
+    public String getEffectivePythonWorkingDirectoryPath() {
+        if (workplaceDirectoryPath != null && !workplaceDirectoryPath.trim().isEmpty()) {
+            return new File(workplaceDirectoryPath.trim(), "python-workdir").getAbsolutePath();
+        }
+        return "";
     }
     
     /**
@@ -145,6 +165,7 @@ public class AgentConfig {
                 ", enableFileSystemAccess=" + enableFileSystemAccess +
                 ", enableSkills=" + enableSkills +
                 ", enablePythonScript=" + enablePythonScript +
+                ", enableNotebook=" + enableNotebook +
                 '}';
     }
 }

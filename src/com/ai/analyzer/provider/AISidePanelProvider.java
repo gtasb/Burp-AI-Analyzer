@@ -1,11 +1,12 @@
 package com.ai.analyzer.provider;
 
 import burp.api.montoya.MontoyaApi;
-import com.ai.analyzer.api.AgentApiClient;
+
 import com.ai.analyzer.ui.ChatPanel;
 import com.ai.analyzer.ui.AISidePanelRequestEditor;
 import com.ai.analyzer.ui.AISidePanelResponseEditor;
 import com.ai.analyzer.ui.AIAnalyzerTab;
+import com.ai.analyzer.Client.AgentApiClient;
 import com.ai.analyzer.model.PluginSettings;
 
 import burp.api.montoya.ui.editor.extension.ExtensionProvidedHttpRequestEditor;

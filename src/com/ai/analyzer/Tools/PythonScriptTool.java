@@ -4,50 +4,36 @@ import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.regex.Pattern;
 
 /**
- * Python 脚本执行工具 - 让 AI 可以在本地安全环境中执行 Python 代码
- *
- * 适用场景：
- * - 编码/解码操作（如自定义加密算法还原）
- * - 数据处理和分析（如解析复杂响应体）
- * - 生成测试 payload
- * - 执行数学计算或逻辑推理
+ * Python 执行工具。
+ * 脚本保存在工作目录，不会执行后自动删除，便于持续迭代与复用。
  */
 public class PythonScriptTool {
 
     private static final int DEFAULT_TIMEOUT_SECONDS = 30;
     private static final int MAX_TIMEOUT_SECONDS = 120;
-    private static final int MAX_OUTPUT_LENGTH = 10000;
+    private static final int MAX_OUTPUT_LENGTH = 20000;
     private static final DateTimeFormatter TIMESTAMP_FMT = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss_SSS");
-
-    private static final Pattern[] BLOCKED_PATTERNS = {
-        Pattern.compile("os\\s*\\.\\s*remove"),
-        Pattern.compile("os\\s*\\.\\s*unlink"),
-        Pattern.compile("os\\s*\\.\\s*rmdir"),
-        Pattern.compile("os\\s*\\.\\s*removedirs"),
-        Pattern.compile("shutil\\s*\\.\\s*rmtree"),
-        Pattern.compile("os\\s*\\.\\s*system\\s*\\("),
-        Pattern.compile("subprocess\\s*\\."),
-        Pattern.compile("os\\s*\\.\\s*popen\\s*\\("),
-        Pattern.compile("os\\s*\\.\\s*chdir\\s*\\("),
-        Pattern.compile("__import__\\s*\\("),
-        Pattern.compile("\\.\\./"),
-        Pattern.compile("\\.\\.\\\\"),
-    };
 
     private String pythonCommand;
     private String pythonVersion;
+    private String workingDirectory;
 
     public PythonScriptTool() {
         this.pythonCommand = detectPythonCommand();
+        this.workingDirectory = "";
     }
 
     public void setPythonCommand(String pythonCommand) {
@@ -57,34 +43,23 @@ public class PythonScriptTool {
         }
     }
 
+    public void setWorkingDirectory(String workingDirectory) {
+        if (workingDirectory == null) {
+            this.workingDirectory = "";
+            return;
+        }
+        this.workingDirectory = workingDirectory.trim();
+    }
+
     @Tool(name = "execute_python", value = {
-        "在本地执行 Python 代码并返回 print() 的输出结果。",
-        "",
-        "【何时使用】：",
-        "- 编码/解码：Base64、URL编码、Hex、自定义加密算法逆向",
-        "- 数据处理：解析 JSON/XML 响应体、提取特定字段、正则匹配",
-        "- Payload 生成：构造 fuzzing 字典、序列化 payload、生成 hash",
-        "- 数学计算：密码学运算、偏移计算、长度推算",
-        "",
-        "【代码要求】：",
-        "- 必须用 print() 输出结果，否则看不到任何返回值",
-        "- 代码是完整的 Python 脚本，直接写顶层代码即可，不需要 if __name__",
-        "- 可使用标准库：base64, hashlib, json, re, urllib.parse, struct, binascii, hmac, zlib 等",
-        "- 可使用 requests（如已安装）发送 HTTP 请求",
-        "",
-        "【代码示例】：",
-        "```",
-        "import base64",
-        "encoded = 'SGVsbG8gV29ybGQ='",
-        "print(base64.b64decode(encoded).decode('utf-8'))",
-        "```",
-        "",
-        "【禁止操作】：文件删除、subprocess、os.system、eval/exec、__import__、跨目录访问(../)",
-        "【限制】：超时 30 秒（可通过 timeoutSeconds 调整，最大 120 秒），输出上限 10000 字符"
+        "在 Workplace/python-workdir 中执行 Python 脚本，支持持续增删改查本地文件。",
+        "脚本文件会保留，方便后续复用和迭代调试。",
+        "建议始终用 print() 输出关键结果。"
     })
     public String executePython(
-            @P("完整的 Python 代码。必须用 print() 输出结果。支持多行，直接写顶层代码。") String code,
-            @P("可选：执行超时秒数，默认 30，最大 120。长时间运算可设大一些。") Integer timeoutSeconds) {
+            @P("完整 Python 代码。支持多行。") String code,
+            @P("可选：脚本文件名（如 poc_ssrf.py）。不填则自动生成。") String scriptName,
+            @P("可选：超时秒数，默认 30，最大 120。") Integer timeoutSeconds) {
 
         if (pythonCommand == null) {
             return "错误：未检测到 Python 环境。请确保系统已安装 Python 3 且在 PATH 中可用（python3 或 python）。";
@@ -94,63 +69,51 @@ public class PythonScriptTool {
             return "错误：代码不能为空。请提供完整的 Python 代码，用 print() 输出结果。";
         }
 
-        String blocked = checkBlocked(code);
-        if (blocked != null) {
-            return "安全拦截: " + blocked + "。请移除该操作后重试。";
-        }
-
         int timeout = DEFAULT_TIMEOUT_SECONDS;
         if (timeoutSeconds != null && timeoutSeconds > 0) {
             timeout = Math.min(timeoutSeconds, MAX_TIMEOUT_SECONDS);
         }
 
-        Path tempFile = null;
         try {
-            String timestamp = LocalDateTime.now().format(TIMESTAMP_FMT);
-            tempFile = Files.createTempFile("agent_script_" + timestamp + "_", ".py");
-            Files.writeString(tempFile, code);
+            Path baseDir = resolveWorkingDirectory();
+            Files.createDirectories(baseDir);
+            Path scriptsDir = baseDir.resolve("scripts");
+            Files.createDirectories(scriptsDir);
 
-            ProcessBuilder pb = new ProcessBuilder(pythonCommand, tempFile.toString());
+            Path scriptFile = resolveScriptPath(scriptsDir, scriptName);
+            Files.writeString(scriptFile, code, StandardCharsets.UTF_8);
+
+            ProcessBuilder pb = new ProcessBuilder(pythonCommand, "-u", scriptFile.toString());
             pb.redirectErrorStream(true);
             pb.environment().put("PYTHONIOENCODING", "utf-8");
-            pb.directory(tempFile.getParent().toFile());
+            pb.directory(baseDir.toFile());
             Process process = pb.start();
 
-            StringBuilder output = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), "UTF-8"))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    if (output.length() > MAX_OUTPUT_LENGTH) {
-                        output.append("\n...[输出已截断，超过 ").append(MAX_OUTPUT_LENGTH).append(" 字符]");
-                        break;
-                    }
-                    if (output.length() > 0) output.append("\n");
-                    output.append(line);
-                }
-            }
+            ExecutorService executor = Executors.newSingleThreadExecutor();
+            Future<String> outputFuture = executor.submit(() -> readProcessOutput(process));
 
             boolean finished = process.waitFor(timeout, TimeUnit.SECONDS);
             if (!finished) {
                 process.destroyForcibly();
-                return "执行超时（超过 " + timeout + " 秒），进程已终止。\n" +
-                       "建议：增大 timeoutSeconds 参数，或优化代码减少耗时。\n" +
-                       "已捕获的部分输出:\n" + output;
+                String partial = safeGetOutput(outputFuture);
+                executor.shutdownNow();
+                return "执行超时（超过 " + timeout + " 秒），进程已终止。\n脚本文件: " + scriptFile + "\n已捕获输出:\n" + partial;
             }
 
+            String result = safeGetOutput(outputFuture);
+            executor.shutdownNow();
             int exitCode = process.exitValue();
-            String result = output.toString();
 
             if (exitCode != 0) {
                 return "Python 执行出错（退出码 " + exitCode + "）:\n" + result +
-                       "\n\n请检查代码语法和逻辑后重试。";
+                       "\n\n脚本文件: " + scriptFile;
             }
 
             if (result.isEmpty()) {
-                return "执行成功但无输出。提示：请确保用 print() 输出结果。";
+                return "执行成功但无输出。\n脚本文件: " + scriptFile + "\n提示：请用 print() 输出关键结果。";
             }
 
-            return result;
+            return "脚本文件: " + scriptFile + "\n\n" + result;
 
         } catch (Exception e) {
             String msg = e.getMessage();
@@ -158,10 +121,6 @@ public class PythonScriptTool {
                 return "错误：无法启动 Python（命令: " + pythonCommand + "）。系统可能未安装 Python 或不在 PATH 中。";
             }
             return "执行失败: " + msg;
-        } finally {
-            if (tempFile != null) {
-                try { Files.deleteIfExists(tempFile); } catch (Exception ignored) {}
-            }
         }
     }
 
@@ -211,16 +170,53 @@ public class PythonScriptTool {
         return pythonVersion;
     }
 
-    private static String checkBlocked(String code) {
-        for (Pattern p : BLOCKED_PATTERNS) {
-            if (p.matcher(code).find()) {
-                String desc = p.pattern()
-                    .replace("\\s*\\.\\s*", ".")
-                    .replace("\\s*\\(", "(")
-                    .replaceAll("\\\\[()./]", "");
-                return "禁止使用 " + desc;
+    private Path resolveWorkingDirectory() {
+        if (workingDirectory == null || workingDirectory.isEmpty()) {
+            return new File(System.getProperty("user.home"), "ai-analyzer-python-workdir").toPath();
+        }
+        return new File(workingDirectory).toPath();
+    }
+
+    private Path resolveScriptPath(Path scriptsDir, String scriptName) {
+        if (scriptName == null || scriptName.trim().isEmpty()) {
+            String timestamp = LocalDateTime.now().format(TIMESTAMP_FMT);
+            return scriptsDir.resolve("agent_script_" + timestamp + ".py");
+        }
+        String normalized = scriptName.trim().replace("\\", "/");
+        String fileName = new File(normalized).getName();
+        fileName = fileName.replaceAll("[^a-zA-Z0-9._-]", "_");
+        if (!fileName.endsWith(".py")) {
+            fileName = fileName + ".py";
+        }
+        return scriptsDir.resolve(fileName);
+    }
+
+    private String readProcessOutput(Process process) {
+        StringBuilder output = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (output.length() >= MAX_OUTPUT_LENGTH) {
+                    output.append("\n...[输出已截断，超过 ").append(MAX_OUTPUT_LENGTH).append(" 字符]");
+                    break;
+                }
+                if (output.length() > 0) output.append("\n");
+                output.append(line);
+            }
+        } catch (Exception e) {
+            if (output.length() == 0) {
+                output.append("读取输出失败: ").append(e.getMessage());
             }
         }
-        return null;
+        return output.toString();
+    }
+
+    private String safeGetOutput(Future<String> outputFuture) {
+        try {
+            String output = outputFuture.get(2, TimeUnit.SECONDS);
+            return output == null ? "" : output;
+        } catch (Exception ignored) {
+            return "";
+        }
     }
 }

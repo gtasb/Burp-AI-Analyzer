@@ -40,6 +40,11 @@
         <artifactId>commonmark</artifactId>
         <version>0.27.1</version>
     </dependency>
+    <dependency>
+        <groupId>org.commonmark</groupId>
+        <artifactId>commonmark-ext-gfm-tables</artifactId>
+        <version>0.27.1</version>
+    </dependency>
 
     <!-- LangChain4j 核心依赖 -->
     <dependency>

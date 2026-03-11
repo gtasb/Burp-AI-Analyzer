@@ -1,4 +1,4 @@
-package com.ai.analyzer.api;
+package com.ai.analyzer.Client;
 
 import com.ai.analyzer.skills.SkillManager;
 
@@ -86,7 +86,7 @@ public class SystemPromptBuilder {
         }
         
         // ========== 漏洞类型与测试策略映射 ==========
-        buildVulnerabilityStrategies(prompt);
+        //buildVulnerabilityStrategies(prompt);
         
         // ========== 输出格式 ==========
         buildOutputFormat(prompt);
@@ -145,7 +145,6 @@ public class SystemPromptBuilder {
         prompt.append("- ❌ 对非目标系统发送请求\n");
         prompt.append("- ❌ 发送破坏性 payload（DELETE、DROP 等）\n\n");
         prompt.append("- ❌ 检测CORS配置错误漏洞\n");
-        prompt.append("- ❌ 使用表格语法（`|` 和 `---`）\n");
     }
     
     private void buildSearchSection(StringBuilder prompt) {
@@ -199,13 +198,7 @@ public class SystemPromptBuilder {
     
     private void buildOutputFormat(StringBuilder prompt) {
         prompt.append("# 输出格式\n");
-        prompt.append("- **禁止使用表格**：不要使用 `|` 和 `---` 创建表格，系统无法正确解析\n");
-        prompt.append("- **步骤/流程请用列表**：用「步骤1、步骤2」或「1. 2. 3.」代替表格，例如：\n");
-        prompt.append("  ```\n");
-        prompt.append("  步骤1：Base64-decode dataset → 获取密文长度（768）→ 推断加密模式\n");
-        prompt.append("  步骤2：将原始 body 最后 1 字节改为 0x00（破坏 padding）→ 触发 padding error\n");
-        prompt.append("  步骤3：发送篡改后请求，对比响应判断是否存在 oracle\n");
-        prompt.append("  ```\n");
+        prompt.append("- 使用 Markdown 格式，禁止使用表格格式\n");
         prompt.append("- 不使用 # 标题语法\n");
         prompt.append("- 简洁明了，只报告中危及以上风险\n\n");
     }
@@ -219,9 +212,6 @@ public class SystemPromptBuilder {
     }
     
     private void buildSkillsSection(StringBuilder prompt) {
-        // LangChain4j Skills Tool Mode：
-        // 系统提示词只包含技能目录（名称+描述），由官方 Skills.formatAvailableSkills() 生成。
-        // LLM 通过官方 activate_skill 按需加载完整指令，保持初始上下文简洁。
         prompt.append("# 用户自定义技能 (Skills)\n\n");
         prompt.append("你可以使用以下技能。当用户请求涉及某个技能时，");
         prompt.append("先用 `activate_skill` 工具加载其完整指令，再按指令执行。\n\n");

@@ -2,7 +2,8 @@ package com.ai.analyzer.ui;
 
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.http.message.HttpRequestResponse;
-import com.ai.analyzer.api.AgentApiClient;
+
+import com.ai.analyzer.Client.AgentApiClient;
 import com.ai.analyzer.model.PluginSettings;
 import com.ai.analyzer.model.RequestData;
 import com.ai.analyzer.pscan.PassiveScanApiClient;
@@ -24,6 +25,7 @@ import javax.swing.table.DefaultTableModel;
 import javax.swing.table.TableCellRenderer;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.StyledDocument;
+import javax.swing.text.JTextComponent;
 import java.awt.*;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -55,6 +57,7 @@ public class AIAnalyzerTab extends JPanel {
     private JCheckBox enableRagMcpCheckBox;
     // private JTextField ragMcpUrlField; // RAG MCP 地址暂时隐藏
     private JTextField ragMcpDocumentsPathField;
+    private JTextField workplaceDirectoryField;
     private JCheckBox enableFileSystemAccessCheckBox; // 启用直接查找知识库
     private JCheckBox enableChromeMcpCheckBox;
     private JTextField chromeMcpUrlField;
@@ -72,7 +75,8 @@ public class AIAnalyzerTab extends JPanel {
     // 前置扫描器组件
     private JCheckBox enablePreScanCheckbox;
     private JCheckBox enablePythonScriptCheckbox;
-    private JButton browseSkillsDirButton;
+    private JCheckBox enableNotebookCheckbox;
+    private JButton browseWorkplaceDirButton;
     private JButton refreshSkillsButton;
     private JButton createExampleSkillButton;
     
@@ -90,6 +94,15 @@ public class AIAnalyzerTab extends JPanel {
     private JButton saveSettingsButton;
     private JButton loadSettingsButton;
     private JButton stopButton;
+    private JComboBox<String> analysisModeComboBox;
+    private CardLayout centerModeCardLayout;
+    private JPanel centerModeCardPanel;
+    private JPanel passiveControlDetailsPanel;
+    private JTextPane activeModeResultTextPane;
+    private JTextArea activeModePromptArea;
+    private JTextPane passiveModeResultTextPane;
+    private JTextArea passiveModePromptArea;
+    private boolean activeModeSelected = false;
     
     // 数据
     private List<RequestData> requestList;
@@ -111,6 +124,10 @@ public class AIAnalyzerTab extends JPanel {
     private JTextPane passiveScanResultPane;
     private final StringBuilder passiveScanStreamBuffer = new StringBuilder(); // 累积流式输出的buffer
     private Integer currentStreamingId = null; // 当前流式输出的请求ID
+    private static final String MODE_PASSIVE = "被动模式";
+    private static final String MODE_ACTIVE = "主动模式";
+    private static final String CARD_PASSIVE = "passive";
+    private static final String CARD_ACTIVE = "active";
 
     public AIAnalyzerTab(MontoyaApi api, PreScanFilterManager preScanFilterManager) {
         this.api = api;
@@ -175,29 +192,30 @@ public class AIAnalyzerTab extends JPanel {
         // 顶部：被动扫描控制面板
         JPanel passiveScanControlPanel = createPassiveScanControlPanel();
         mainPanel.add(passiveScanControlPanel, BorderLayout.NORTH);
-        
-        // 创建主分割面板
-        JSplitPane mainSplitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
-        mainSplitPane.setDividerLocation(450);
 
-        // 左侧面板：请求列表（包含风险等级列）
+        // 被动模式内容：请求列表 + HTTP包 + 结果
+        JSplitPane passiveMainSplitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
+        passiveMainSplitPane.setDividerLocation(450);
         JPanel requestListPanel = createRequestListPanel();
-        mainSplitPane.setLeftComponent(requestListPanel);
-        
-        // 右侧面板
+        passiveMainSplitPane.setLeftComponent(requestListPanel);
+
         JSplitPane rightSplitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
         rightSplitPane.setDividerLocation(300);
-
-        // 请求面板
         JPanel requestPanel = createRequestPanel();
         rightSplitPane.setTopComponent(requestPanel);
+        JPanel passiveResultPanel = createResultPanel(true);
+        rightSplitPane.setBottomComponent(passiveResultPanel);
+        passiveMainSplitPane.setRightComponent(rightSplitPane);
 
-        // 结果面板
-        JPanel resultPanel = createResultPanel();
-        rightSplitPane.setBottomComponent(resultPanel);
+        // 主动模式内容：独立的聊天面板
+        JPanel activeModePanel = createActiveModePanel();
 
-        mainSplitPane.setRightComponent(rightSplitPane);
-        mainPanel.add(mainSplitPane, BorderLayout.CENTER);
+        centerModeCardLayout = new CardLayout();
+        centerModeCardPanel = new JPanel(centerModeCardLayout);
+        centerModeCardPanel.add(passiveMainSplitPane, CARD_PASSIVE);
+        centerModeCardPanel.add(activeModePanel, CARD_ACTIVE);
+        centerModeCardLayout.show(centerModeCardPanel, CARD_PASSIVE);
+        mainPanel.add(centerModeCardPanel, BorderLayout.CENTER);
 
         // 按钮面板
         JPanel buttonPanel = createButtonPanel();
@@ -214,9 +232,17 @@ public class AIAnalyzerTab extends JPanel {
      */
     private JPanel createPassiveScanControlPanel() {
         JPanel panel = new JPanel(new BorderLayout(5, 5));
-        panel.setBorder(BorderFactory.createTitledBorder("被动扫描"));
-        
-        // 左侧：控制选项
+        panel.setBorder(BorderFactory.createTitledBorder("设置"));
+
+        JPanel topModePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 4));
+        topModePanel.add(new JLabel("模式:"));
+        analysisModeComboBox = new JComboBox<>(new String[]{MODE_PASSIVE, MODE_ACTIVE});
+        analysisModeComboBox.setSelectedItem(MODE_PASSIVE);
+        analysisModeComboBox.addActionListener(e -> switchAnalysisMode((String) analysisModeComboBox.getSelectedItem()));
+        topModePanel.add(analysisModeComboBox);
+        panel.add(topModePanel, BorderLayout.NORTH);
+
+        // 左侧：控制选项（仅被动模式显示）
         JPanel controlPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
         
         enablePassiveScanCheckBox = new JCheckBox("启用被动扫描", false);
@@ -230,7 +256,7 @@ public class AIAnalyzerTab extends JPanel {
         controlPanel.add(enablePassiveScanCheckBox);
         
         controlPanel.add(new JLabel("线程数:"));
-        SpinnerModel spinnerModel = new SpinnerNumberModel(3, 1, 10, 1);
+        SpinnerModel spinnerModel = new SpinnerNumberModel(10, 1, 50, 1);
         threadCountSpinner = new JSpinner(spinnerModel);
         threadCountSpinner.setEnabled(false);
         threadCountSpinner.setPreferredSize(new Dimension(60, 25));
@@ -254,22 +280,28 @@ public class AIAnalyzerTab extends JPanel {
         JButton clearPassiveScanButton = new JButton("清空结果");
         clearPassiveScanButton.addActionListener(e -> clearPassiveScanResults());
         controlPanel.add(clearPassiveScanButton);
-        
-        panel.add(controlPanel, BorderLayout.WEST);
-        
-        // 右侧：状态和进度
+
         JPanel statusPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 5));
-        
         passiveScanStatusLabel = new JLabel("就绪");
         passiveScanStatusLabel.setPreferredSize(new Dimension(200, 20));
         statusPanel.add(passiveScanStatusLabel);
-        
         passiveScanProgressBar = new JProgressBar(0, 100);
         passiveScanProgressBar.setPreferredSize(new Dimension(150, 20));
         passiveScanProgressBar.setStringPainted(true);
         statusPanel.add(passiveScanProgressBar);
-        
-        panel.add(statusPanel, BorderLayout.EAST);
+
+        JPanel passiveModeControlLine = new JPanel(new BorderLayout());
+        passiveModeControlLine.add(controlPanel, BorderLayout.WEST);
+        passiveModeControlLine.add(statusPanel, BorderLayout.EAST);
+
+        CardLayout controlDetailCard = new CardLayout();
+        passiveControlDetailsPanel = new JPanel(controlDetailCard);
+        passiveControlDetailsPanel.add(passiveModeControlLine, CARD_PASSIVE);
+        JPanel activeHintPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
+        //activeHintPanel.add(new JLabel("主动模式：仅保留功能开关、AI分析结果、用户提示词。"));
+        passiveControlDetailsPanel.add(activeHintPanel, CARD_ACTIVE);
+        controlDetailCard.show(passiveControlDetailsPanel, CARD_PASSIVE);
+        panel.add(passiveControlDetailsPanel, BorderLayout.CENTER);
         
         return panel;
     }
@@ -382,6 +414,9 @@ public class AIAnalyzerTab extends JPanel {
             
             // Python 脚本执行配置
             psClient.setEnablePythonScript(apiClient.isEnablePythonScript());
+            psClient.setEnableNotebook(apiClient.isEnableNotebook());
+            psClient.setWorkplaceDirectoryPath(workplaceDirectoryField != null ? workplaceDirectoryField.getText().trim() : "");
+            psClient.setEnableSkills(enableSkillsCheckBox != null && enableSkillsCheckBox.isSelected());
             
             // ========== 同步前置扫描管理器 ==========
             if (preScanFilterManager != null) {
@@ -576,9 +611,48 @@ public class AIAnalyzerTab extends JPanel {
             "{\"format\": \"json\", \"keep_alive\": \"30m\", \"options\": {\"num_ctx\": 8192}}</html>");
         apiConfigPanel.add(customParametersField, gbc);
         
-        // MCP 配置分隔线
+        // Workplace 根目录（统一管理 skills/rag/python/notebooks 目录）
         gbc.gridx = 0;
         gbc.gridy = 5;
+        gbc.gridwidth = 1;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        apiConfigPanel.add(new JLabel("Workplace 目录:"), gbc);
+
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        workplaceDirectoryField = new JTextField("", 30);
+        workplaceDirectoryField.setToolTipText("统一工作目录。自动派生：skills / rag / python-workdir / notebooks");
+        workplaceDirectoryField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override public void insertUpdate(DocumentEvent e) { applyWorkplaceToDerivedPaths(true, false); }
+            @Override public void removeUpdate(DocumentEvent e) { applyWorkplaceToDerivedPaths(true, false); }
+            @Override public void changedUpdate(DocumentEvent e) { applyWorkplaceToDerivedPaths(true, false); }
+        });
+        apiConfigPanel.add(workplaceDirectoryField, gbc);
+
+        gbc.gridx = 2;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        browseWorkplaceDirButton = new JButton("浏览...");
+        browseWorkplaceDirButton.addActionListener(e -> browseWorkplaceDirectory());
+        apiConfigPanel.add(browseWorkplaceDirButton, gbc);
+
+        // Workplace 快捷打开按钮
+        gbc.gridx = 1;
+        gbc.gridy = 6;
+        gbc.gridwidth = 2;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        JPanel workplaceActionsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        JButton openWorkplaceRootButton = new JButton("打开 Workplace 目录");
+        openWorkplaceRootButton.addActionListener(e -> openWorkplaceRootDirectory());
+        workplaceActionsPanel.add(openWorkplaceRootButton);
+        apiConfigPanel.add(workplaceActionsPanel, gbc);
+
+        // MCP 配置分隔线
+        gbc.gridx = 0;
+        gbc.gridy = 7;
         gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -587,7 +661,7 @@ public class AIAnalyzerTab extends JPanel {
         
         // Burp MCP 工具调用开关
         gbc.gridx = 0;
-        gbc.gridy = 6;
+        gbc.gridy = 8;
         gbc.gridwidth = 1;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
@@ -608,7 +682,7 @@ public class AIAnalyzerTab extends JPanel {
         
         // Burp MCP 地址
         gbc.gridx = 0;
-        gbc.gridy = 7;
+        gbc.gridy = 9;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
         apiConfigPanel.add(new JLabel("Burp MCP 地址:"), gbc);
@@ -645,7 +719,7 @@ public class AIAnalyzerTab extends JPanel {
 
         // 知识库检索工具开关（两个选项放同一行）
         gbc.gridx = 0;
-        gbc.gridy = 8;
+        gbc.gridy = 10;
         gbc.gridwidth = 1;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
@@ -723,47 +797,14 @@ public class AIAnalyzerTab extends JPanel {
         // });
         // apiConfigPanel.add(ragMcpUrlField, gbc);
 
-        // RAG MCP 文档路径
-        gbc.gridx = 0;
-        gbc.gridy = 9;
-        gbc.fill = GridBagConstraints.NONE;
-        gbc.weightx = 0;
-        apiConfigPanel.add(new JLabel("知识库 文档路径:"), gbc);
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
+        // 知识库路径由 Workplace 自动派生，不提供手动路径输入 UI
         ragMcpDocumentsPathField = new JTextField("", 30);
-        ragMcpDocumentsPathField.setEnabled(true); // 默认启用
-        ragMcpDocumentsPathField.setToolTipText("指定 知识库文档目录路径");
-        ragMcpDocumentsPathField.addActionListener(e -> {
-            if (enableRagMcpCheckBox.isSelected()) {
-                apiClient.setRagMcpDocumentsPath(ragMcpDocumentsPathField.getText().trim());
-            }
-        });
-        ragMcpDocumentsPathField.getDocument().addDocumentListener(new DocumentListener() {
-            @Override
-            public void insertUpdate(DocumentEvent e) {
-                updateRagMcpDocumentsPath();
-            }
-            @Override
-            public void removeUpdate(DocumentEvent e) {
-                updateRagMcpDocumentsPath();
-            }
-            @Override
-            public void changedUpdate(DocumentEvent e) {
-                updateRagMcpDocumentsPath();
-            }
-            private void updateRagMcpDocumentsPath() {
-                if (enableRagMcpCheckBox.isSelected() && !ragMcpDocumentsPathField.getText().trim().isEmpty()) {
-                    apiClient.setRagMcpDocumentsPath(ragMcpDocumentsPathField.getText().trim());
-                }
-            }
-        });
-        apiConfigPanel.add(ragMcpDocumentsPathField, gbc);
+        ragMcpDocumentsPathField.setEnabled(true);
+        ragMcpDocumentsPathField.setEditable(false);
 
         // Chrome MCP 工具调用开关
         gbc.gridx = 0;
-        gbc.gridy = 10;
+        gbc.gridy = 12;
         gbc.gridwidth = 1;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
@@ -784,7 +825,7 @@ public class AIAnalyzerTab extends JPanel {
 
         // Chrome MCP 地址
         gbc.gridx = 0;
-        gbc.gridy = 11;
+        gbc.gridy = 13;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
         apiConfigPanel.add(new JLabel("Chrome MCP 地址:"), gbc);
@@ -821,7 +862,7 @@ public class AIAnalyzerTab extends JPanel {
 
         // RAG 配置分隔线
         gbc.gridx = 0;
-        gbc.gridy = 12;
+        gbc.gridy = 14;
         gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -831,7 +872,7 @@ public class AIAnalyzerTab extends JPanel {
         // ========== 前置扫描器配置 ==========
         // 前置扫描器开关
         gbc.gridx = 0;
-        gbc.gridy = 13;
+        gbc.gridy = 15;
         gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -860,7 +901,7 @@ public class AIAnalyzerTab extends JPanel {
         
         // ========== Python 脚本执行工具 ==========
         gbc.gridx = 0;
-        gbc.gridy = 14;
+        gbc.gridy = 16;
         gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -928,9 +969,26 @@ public class AIAnalyzerTab extends JPanel {
         // apiConfigPanel.add(ragDocumentsPathField, gbc);
         // ========== 默认 RAG 功能暂时禁用结束 ==========
         
+        // Notebook 工具开关
+        gbc.gridx = 0;
+        gbc.gridy = 17;
+        gbc.gridwidth = 2;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        enableNotebookCheckbox = new JCheckBox("启用 Notebook 工具（共享渗透记录）", false);
+        enableNotebookCheckbox.setToolTipText("<html><b>Notebook 工具</b>：主动扫描 Agent、被动扫描 Agent、人工工程师共享同一工作笔记<br/>" +
+            "• 文件位于 Workplace/notebooks，按项目自动拆分文件名<br/>" +
+            "• 支持增删改查，便于持续积累上下文与协作信息</html>");
+        enableNotebookCheckbox.addActionListener(e -> {
+            boolean enabled = enableNotebookCheckbox.isSelected();
+            apiClient.setEnableNotebook(enabled);
+            api.logging().logToOutput("[Notebook] Notebook 工具已" + (enabled ? "启用" : "禁用"));
+        });
+        apiConfigPanel.add(enableNotebookCheckbox, gbc);
+
         // 设置按钮
         gbc.gridx = 0;
-        gbc.gridy = 15;
+        gbc.gridy = 18;
         gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -957,13 +1015,14 @@ public class AIAnalyzerTab extends JPanel {
                         "• API URL: 通义千问 API 的端点地址\n" +
                         "• API Key: 从阿里云 DashScope 获取的 API 密钥\n" +
                         "• Model: 使用的模型名称（如 qwen-max, qwen-plus 等）\n" +
+                        "• Workplace 目录: 统一根目录，自动派生 skills/rag/python-workdir/notebooks 子目录\n" +
                         "• 启用 MCP 工具: 启用后 AI 可以调用 Burp Suite 的 MCP 工具\n" +
                         "• Burp MCP 地址: Burp MCP Server 地址（默认: http://127.0.0.1:9876/）\n" +
-                        "• 启用 RAG: 启用检索增强生成，AI 可以从指定文档目录中检索相关信息\n" +
-                        "• RAG 文档路径: 包含文档的目录路径（支持 PDF、Word、HTML 等格式，会递归加载子目录）\n" +
+                        "• 知识库路径: 固定使用 Workplace/rag，不再手动配置\n" +
+                        "• Skills 路径: 固定使用 Workplace/skills，不再手动配置\n" +
                         "\n提示：配置修改后会自动应用到 API 客户端，无需重启插件。\n" +
                         "功能开关（深度思考、网络搜索）位于\"请求分析\"标签页中。\n" +
-                        "注意：启用 RAG 后，每次加载插件时会自动加载文档到内存中（向量化过程）。");
+                        "注意：Notebook 工具用于人机共享渗透记录，文件位于 Workplace/notebooks。");
         infoArea.setLineWrap(true);
         infoArea.setWrapStyleWord(true);
         JScrollPane infoScrollPane = new JScrollPane(infoArea);
@@ -981,60 +1040,39 @@ public class AIAnalyzerTab extends JPanel {
         JPanel skillsPanel = new JPanel(new BorderLayout(10, 10));
         skillsPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
         
-        // 顶部配置面板
-        JPanel topPanel = new JPanel(new GridBagLayout());
+        // 顶部配置面板（统一左对齐）
+        JPanel topPanel = new JPanel();
+        topPanel.setLayout(new BoxLayout(topPanel, BoxLayout.Y_AXIS));
         topPanel.setBorder(BorderFactory.createTitledBorder("Skills 配置"));
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(5, 5, 5, 5);
-        gbc.anchor = GridBagConstraints.WEST;
         
         // 启用 Skills 复选框
-        gbc.gridx = 0;
-        gbc.gridy = 0;
-        gbc.gridwidth = 3;
         enableSkillsCheckBox = new JCheckBox("启用 Skills（自定义技能指令）", false);
         enableSkillsCheckBox.setToolTipText("启用后，AI 将加载并应用选中的技能指令");
         enableSkillsCheckBox.addActionListener(e -> {
             boolean enabled = enableSkillsCheckBox.isSelected();
-            skillsDirectoryField.setEnabled(enabled);
-            browseSkillsDirButton.setEnabled(enabled);
+            // Skills 目录由 Workplace 自动派生，避免手动配置不一致
+            skillsDirectoryField.setEnabled(false);
             refreshSkillsButton.setEnabled(enabled);
             createExampleSkillButton.setEnabled(enabled);
             skillsTable.setEnabled(enabled);
             apiClient.setEnableSkills(enabled);
+            if (enabled) {
+                applyWorkplaceToDerivedPaths(true, true);
+            }
         });
-        topPanel.add(enableSkillsCheckBox, gbc);
-        
-        // Skills 目录路径
-        gbc.gridx = 0;
-        gbc.gridy = 1;
-        gbc.gridwidth = 1;
-        gbc.fill = GridBagConstraints.NONE;
-        gbc.weightx = 0;
-        topPanel.add(new JLabel("Skills 目录:"), gbc);
-        
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
+        JPanel checkboxRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+        checkboxRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        checkboxRow.add(enableSkillsCheckBox);
+        topPanel.add(checkboxRow);
+
         skillsDirectoryField = new JTextField("", 40);
         skillsDirectoryField.setEnabled(false);
-        skillsDirectoryField.setToolTipText("包含 SKILL.md 文件的目录路径");
-        topPanel.add(skillsDirectoryField, gbc);
-        
-        gbc.gridx = 2;
-        gbc.fill = GridBagConstraints.NONE;
-        gbc.weightx = 0;
-        browseSkillsDirButton = new JButton("浏览...");
-        browseSkillsDirButton.setEnabled(false);
-        browseSkillsDirButton.addActionListener(e -> browseSkillsDirectory());
-        topPanel.add(browseSkillsDirButton, gbc);
+        skillsDirectoryField.setEditable(false);
+        skillsDirectoryField.setToolTipText("自动使用 Workplace/skills");
         
         // 按钮面板
-        gbc.gridx = 0;
-        gbc.gridy = 2;
-        gbc.gridwidth = 3;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
         JPanel buttonsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+        buttonsPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
         
         refreshSkillsButton = new JButton("刷新 Skills");
         refreshSkillsButton.setEnabled(false);
@@ -1046,7 +1084,8 @@ public class AIAnalyzerTab extends JPanel {
         createExampleSkillButton.addActionListener(e -> createExampleSkill());
         buttonsPanel.add(createExampleSkillButton);
         
-        topPanel.add(buttonsPanel, gbc);
+        topPanel.add(Box.createVerticalStrut(6));
+        topPanel.add(buttonsPanel);
         
         skillsPanel.add(topPanel, BorderLayout.NORTH);
         
@@ -1144,38 +1183,99 @@ public class AIAnalyzerTab extends JPanel {
     }
     
     /**
-     * 浏览 Skills 目录
+     * 浏览并设置 Workplace 根目录
      */
-    private void browseSkillsDirectory() {
+    private void browseWorkplaceDirectory() {
         JFileChooser fileChooser = new JFileChooser();
         fileChooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-        fileChooser.setDialogTitle("选择 Skills 目录");
-        
-        // 如果已有路径，从该路径开始
-        String currentPath = skillsDirectoryField.getText().trim();
+        fileChooser.setDialogTitle("选择 Workplace 目录");
+
+        String currentPath = workplaceDirectoryField != null ? workplaceDirectoryField.getText().trim() : "";
         if (!currentPath.isEmpty()) {
             File currentDir = new File(currentPath);
             if (currentDir.exists()) {
                 fileChooser.setCurrentDirectory(currentDir);
             }
         }
-        
+
         int result = fileChooser.showOpenDialog(this);
         if (result == JFileChooser.APPROVE_OPTION) {
             String selectedPath = fileChooser.getSelectedFile().getAbsolutePath();
-            skillsDirectoryField.setText(selectedPath);
-            apiClient.setSkillsDirectoryPath(selectedPath);
-            refreshSkills();
+            workplaceDirectoryField.setText(selectedPath);
+            applyWorkplaceToDerivedPaths(true, true);
         }
     }
-    
+
+    private void openWorkplaceRootDirectory() {
+        if (workplaceDirectoryField == null) return;
+        String workplace = workplaceDirectoryField.getText() != null ? workplaceDirectoryField.getText().trim() : "";
+        if (workplace.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "请先设置 Workplace 目录", "提示", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        File dir = new File(workplace);
+        if (!dir.exists() && !dir.mkdirs()) {
+            JOptionPane.showMessageDialog(this, "创建目录失败: " + dir.getAbsolutePath(), "错误", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        try {
+            if (Desktop.isDesktopSupported()) {
+                Desktop.getDesktop().open(dir);
+            } else {
+                JOptionPane.showMessageDialog(this, "当前环境不支持打开文件管理器: " + dir.getAbsolutePath(), "提示", JOptionPane.INFORMATION_MESSAGE);
+            }
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(this, "打开目录失败: " + e.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    /**
+     * 根据 Workplace 同步派生目录（skills/rag/python-workdir）到 UI 与客户端。
+     */
+    private void applyWorkplaceToDerivedPaths(boolean pushToClients, boolean createDirs) {
+        if (workplaceDirectoryField == null) return;
+        String workplace = workplaceDirectoryField.getText() != null ? workplaceDirectoryField.getText().trim() : "";
+        if (workplace.isEmpty()) return;
+
+        File workplaceDir = new File(workplace);
+        File skillsDir = new File(workplaceDir, "skills");
+        File ragDir = new File(workplaceDir, "rag");
+        File pythonDir = new File(workplaceDir, "python-workdir");
+        File notebooksDir = new File(workplaceDir, "notebooks");
+
+        if (createDirs) {
+            if (!workplaceDir.exists()) workplaceDir.mkdirs();
+            if (!skillsDir.exists()) skillsDir.mkdirs();
+            if (!ragDir.exists()) ragDir.mkdirs();
+            if (!pythonDir.exists()) pythonDir.mkdirs();
+            if (!notebooksDir.exists()) notebooksDir.mkdirs();
+        }
+
+        if (skillsDirectoryField != null) {
+            skillsDirectoryField.setText(skillsDir.getAbsolutePath());
+        }
+        if (ragMcpDocumentsPathField != null) {
+            ragMcpDocumentsPathField.setText(ragDir.getAbsolutePath());
+        }
+
+        if (pushToClients) {
+            apiClient.setWorkplaceDirectoryPath(workplaceDir.getAbsolutePath());
+            apiClient.setSkillsDirectoryPath(skillsDir.getAbsolutePath());
+            apiClient.setRagMcpDocumentsPath(ragDir.getAbsolutePath());
+            if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
+                passiveScanManager.getApiClient().setWorkplaceDirectoryPath(workplaceDir.getAbsolutePath());
+                passiveScanManager.getApiClient().setRagMcpDocumentsPath(ragDir.getAbsolutePath());
+            }
+        }
+    }
+
     /**
      * 刷新 Skills 列表
      */
     private void refreshSkills() {
         String dirPath = skillsDirectoryField.getText().trim();
         if (dirPath.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "请先设置 Skills 目录路径", "提示", JOptionPane.WARNING_MESSAGE);
+            JOptionPane.showMessageDialog(this, "请先设置 Workplace 目录", "提示", JOptionPane.WARNING_MESSAGE);
             return;
         }
         
@@ -1525,40 +1625,96 @@ public class AIAnalyzerTab extends JPanel {
         return panel;
     }
 
-    private JPanel createResultPanel() {
+    private JPanel createResultPanel(boolean passiveMode) {
         JPanel panel = new JPanel(new BorderLayout());
         panel.setBorder(BorderFactory.createTitledBorder("AI分析结果"));
 
-        resultTextPane = new JTextPane() {
+        JTextPane localResultTextPane = new JTextPane() {
             @Override
             public boolean getScrollableTracksViewportWidth() {
                 return true;
             }
         };
-        resultTextPane.setEditable(false);
-        resultTextPane.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
-        resultTextPane.setContentType("text/plain");
-        resultTextPane.setBackground(Color.WHITE);
-        resultTextPane.setForeground(Color.BLACK);
-        // 被动扫描与主动分析共用同一结果区域
-        passiveScanResultPane = resultTextPane;
-        JScrollPane resultScrollPane = new JScrollPane(resultTextPane);
+        localResultTextPane.setEditable(false);
+        localResultTextPane.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        localResultTextPane.setContentType("text/plain");
+        applyEditorTheme(localResultTextPane);
+        JScrollPane resultScrollPane = new JScrollPane(localResultTextPane);
         resultScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         panel.add(resultScrollPane, BorderLayout.CENTER);
 
-        // 用户提示词区域
         JPanel promptPanel = new JPanel(new BorderLayout());
         promptPanel.setBorder(BorderFactory.createTitledBorder("分析提示词"));
-        userPromptArea = new JTextArea(3, 50);
-        userPromptArea.setLineWrap(true);
-        userPromptArea.setWrapStyleWord(true);
-        userPromptArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
-        userPromptArea.setBackground(Color.WHITE);
-        userPromptArea.setForeground(Color.BLACK);
-        userPromptArea.setText("请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议");
-        JScrollPane promptScrollPane = new JScrollPane(userPromptArea);
+        JTextArea localPromptArea = new JTextArea(3, 50);
+        localPromptArea.setLineWrap(true);
+        localPromptArea.setWrapStyleWord(true);
+        localPromptArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        applyEditorTheme(localPromptArea);
+        localPromptArea.setText("请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议");
+        JScrollPane promptScrollPane = new JScrollPane(localPromptArea);
         promptPanel.add(promptScrollPane, BorderLayout.CENTER);
 
+        panel.add(promptPanel, BorderLayout.SOUTH);
+
+        passiveModeResultTextPane = localResultTextPane;
+        passiveScanResultPane = localResultTextPane;
+        passiveModePromptArea = localPromptArea;
+        resultTextPane = localResultTextPane;
+        userPromptArea = localPromptArea;
+
+        return panel;
+    }
+
+    /**
+     * 创建主动模式面板 - 聊天式布局，独立组件
+     * 结果区保留上下文（追加式），输入框动态高度、提交后清空
+     * 底部按钮复用 createButtonPanel()，不在此处重复创建
+     */
+    private JPanel createActiveModePanel() {
+        JPanel panel = new JPanel(new BorderLayout(0, 5));
+
+        // ---- 结果区域 ----
+        activeModeResultTextPane = new JTextPane() {
+            @Override
+            public boolean getScrollableTracksViewportWidth() {
+                return true;
+            }
+        };
+        activeModeResultTextPane.setEditable(false);
+        activeModeResultTextPane.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        activeModeResultTextPane.setContentType("text/plain");
+        applyEditorTheme(activeModeResultTextPane);
+        JScrollPane resultScrollPane = new JScrollPane(activeModeResultTextPane);
+        resultScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        resultScrollPane.setBorder(BorderFactory.createTitledBorder("AI分析结果"));
+        panel.add(resultScrollPane, BorderLayout.CENTER);
+
+        // ---- 底部：输入区域 ----
+        JPanel promptPanel = new JPanel(new BorderLayout());
+        promptPanel.setBorder(BorderFactory.createTitledBorder("输入"));
+
+        activeModePromptArea = new JTextArea(5, 50);
+        activeModePromptArea.setLineWrap(true);
+        activeModePromptArea.setWrapStyleWord(true);
+        activeModePromptArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 13));
+        applyEditorTheme(activeModePromptArea);
+
+        JScrollPane promptScroll = new JScrollPane(activeModePromptArea);
+        promptScroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+        promptScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+
+        // Enter 发送，Shift+Enter 换行（与 ChatPanel 一致）
+        activeModePromptArea.addKeyListener(new java.awt.event.KeyAdapter() {
+            @Override
+            public void keyPressed(java.awt.event.KeyEvent e) {
+                if (e.getKeyCode() == java.awt.event.KeyEvent.VK_ENTER && !e.isShiftDown()) {
+                    e.consume();
+                    performAnalysis();
+                }
+            }
+        });
+
+        promptPanel.add(promptScroll, BorderLayout.CENTER);
         panel.add(promptPanel, BorderLayout.SOUTH);
 
         return panel;
@@ -1604,6 +1760,39 @@ public class AIAnalyzerTab extends JPanel {
         panel.add(buttonPanel, BorderLayout.EAST);
 
         return panel;
+    }
+
+    private void switchAnalysisMode(String selectedMode) {
+        boolean active = MODE_ACTIVE.equals(selectedMode);
+        activeModeSelected = active;
+        if (centerModeCardLayout != null && centerModeCardPanel != null) {
+            centerModeCardLayout.show(centerModeCardPanel, active ? CARD_ACTIVE : CARD_PASSIVE);
+        }
+        if (passiveControlDetailsPanel != null && passiveControlDetailsPanel.getLayout() instanceof CardLayout) {
+            ((CardLayout) passiveControlDetailsPanel.getLayout()).show(passiveControlDetailsPanel, active ? CARD_ACTIVE : CARD_PASSIVE);
+        }
+        if (active) {
+            resultTextPane = activeModeResultTextPane;
+            userPromptArea = activeModePromptArea;
+        } else {
+            resultTextPane = passiveModeResultTextPane;
+            userPromptArea = passiveModePromptArea;
+        }
+        revalidate();
+        repaint();
+    }
+
+    private void applyEditorTheme(JTextComponent component) {
+        if (component == null) return;
+        Color bg = UIManager.getColor("TextArea.background");
+        Color fg = UIManager.getColor("TextArea.foreground");
+        Color caret = UIManager.getColor("TextArea.caretForeground");
+        if (bg == null) bg = UIManager.getColor("Panel.background");
+        if (fg == null) fg = UIManager.getColor("Panel.foreground");
+        if (caret == null) caret = fg;
+        if (bg != null) component.setBackground(bg);
+        if (fg != null) component.setForeground(fg);
+        if (caret != null) component.setCaretColor(caret);
     }
 
     private void updateRequestDisplay(RequestData requestData) {
@@ -1664,7 +1853,7 @@ public class AIAnalyzerTab extends JPanel {
         // 允许没有选择请求时也能进行分析（自由对话模式）
         RequestData requestData = null;
         ScanResult scanResult = null;
-        int selectedRow = passiveScanTable.getSelectedRow();
+        int selectedRow = (activeModeSelected || passiveScanTable == null) ? -1 : passiveScanTable.getSelectedRow();
         if (selectedRow >= 0) {
             // 优先从被动扫描结果获取
             Integer id = (Integer) passiveScanTableModel.getValueAt(selectedRow, 0);
@@ -1703,19 +1892,25 @@ public class AIAnalyzerTab extends JPanel {
         isAnalyzing = true;
         analyzeButton.setEnabled(false);
         analyzeButton.setText("分析中...");
-        stopButton.setEnabled(true); // 启用停止按钮
+        stopButton.setEnabled(true);
+
+        // 主动模式：提交后立即清空输入框
+        final boolean isActiveMode = activeModeSelected;
+        if (isActiveMode && activeModePromptArea != null) {
+            activeModePromptArea.setText("");
+        }
         
         String finalUserPrompt = userPrompt;
-        final RequestData finalRequestData = requestData; // 创建final引用供内部类使用
-        final ScanResult finalScanResult = scanResult; // 创建final引用供内部类使用
+        final RequestData finalRequestData = requestData;
+        final ScanResult finalScanResult = scanResult;
+        final JTextPane targetResultPane = resultTextPane;
         currentWorker = new SwingWorker<Void, String>() {
             private StringBuilder fullResponse = new StringBuilder();
-            private int aiMessageStartPos = 0; // 记录AI消息开始位置（分析开始时resultTextPane被清空，所以从0开始）
+            private int aiMessageStartPos = 0;
 
             @Override
             protected Void doInBackground() throws Exception {
                 try {
-                    // 构建HTTP内容（使用统一的格式化工具）
                     String httpContent = "";
                     if (finalScanResult != null && finalScanResult.getRequestResponse() != null) {
                         httpContent = com.ai.analyzer.utils.HttpFormatter.formatHttpRequestResponse(
@@ -1724,18 +1919,40 @@ public class AIAnalyzerTab extends JPanel {
                         httpContent = finalRequestData.getFullRequestResponse();
                     }
                     
-                    // 检查HTTP内容是否过长
                     final boolean httpTooLong = !httpContent.isEmpty() 
                         && httpContent.length() > com.ai.analyzer.utils.HttpFormatter.DEFAULT_MAX_LENGTH;
                     final int httpOrigLen = httpContent.length();
                     
-                    // 清空结果面板，如果内容过长则添加压缩提示
                     try {
                         SwingUtilities.invokeAndWait(() -> {
-                            resultTextPane.setText("");
+                            if (isActiveMode) {
+                                try {
+                                    StyledDocument doc = targetResultPane.getStyledDocument();
+                                    if (doc.getLength() > 0) {
+                                        doc.insertString(doc.getLength(), "\n", doc.getStyle("regular"));
+                                    }
+                                    // "你:" 蓝色加粗
+                                    javax.swing.text.Style senderStyle = doc.addStyle("userSender", null);
+                                    javax.swing.text.StyleConstants.setBold(senderStyle, true);
+                                    javax.swing.text.StyleConstants.setForeground(senderStyle, Color.BLUE);
+                                    doc.insertString(doc.getLength(), "你: ", senderStyle);
+                                    // 消息文本
+                                    javax.swing.text.Style msgStyle = doc.addStyle("userMsg", null);
+                                    Color textColor = UIManager.getColor("TextArea.foreground");
+                                    javax.swing.text.StyleConstants.setForeground(msgStyle, textColor != null ? textColor : Color.BLACK);
+                                    doc.insertString(doc.getLength(), finalUserPrompt + "\n\n", msgStyle);
+                                    // "AI助手:" 绿色加粗
+                                    javax.swing.text.Style aiSenderStyle = doc.addStyle("aiSender", null);
+                                    javax.swing.text.StyleConstants.setBold(aiSenderStyle, true);
+                                    javax.swing.text.StyleConstants.setForeground(aiSenderStyle, Color.GREEN);
+                                    doc.insertString(doc.getLength(), "AI助手: \n", aiSenderStyle);
+                                } catch (Exception ignored) {}
+                            } else {
+                                targetResultPane.setText("");
+                            }
                             if (httpTooLong) {
                                 try {
-                                    StyledDocument doc = resultTextPane.getStyledDocument();
+                                    StyledDocument doc = targetResultPane.getStyledDocument();
                                     javax.swing.text.Style warnStyle = doc.addStyle("httpWarning", null);
                                     javax.swing.text.StyleConstants.setForeground(warnStyle, new Color(255, 140, 0));
                                     javax.swing.text.StyleConstants.setItalic(warnStyle, true);
@@ -1745,7 +1962,7 @@ public class AIAnalyzerTab extends JPanel {
                                         "HTTP内容过长（" + httpOrigLen + " 字符），已自动压缩处理\n\n", warnStyle);
                                 } catch (Exception ignored) {}
                             }
-                            aiMessageStartPos = resultTextPane.getStyledDocument().getLength();
+                            aiMessageStartPos = targetResultPane.getStyledDocument().getLength();
                         });
                     } catch (Exception e) {
                         aiMessageStartPos = 0;
@@ -1755,41 +1972,33 @@ public class AIAnalyzerTab extends JPanel {
                         httpContent,
                         finalUserPrompt,
                         chunk -> {
-                            // 检查是否已取消（检查 SwingWorker 和 isAnalyzing 状态）
                             if (currentWorker.isCancelled() || !isAnalyzing) {
-                                return; // 立即返回，不再处理后续的 chunk
+                                return;
                             }
                             
-                            // 将chunk添加到缓冲区
                             fullResponse.append(chunk);
                             
-                            // 流式输出时，实时进行Markdown解析和渲染
-                            // 使用invokeAndWait确保最后一个chunk的渲染完成
                             try {
                                 SwingUtilities.invokeAndWait(() -> {
-                                    // 再次检查取消状态（双重检查）
                                     if (currentWorker.isCancelled() || !isAnalyzing) {
                                         return;
                                     }
                                     try {
-                                        // 使用流式Markdown渲染
-                                        MarkdownRenderer.appendMarkdownStreaming(resultTextPane, fullResponse.toString(), aiMessageStartPos);
-                                        resultTextPane.setCaretPosition(resultTextPane.getStyledDocument().getLength());
+                                        MarkdownRenderer.appendMarkdownStreaming(targetResultPane, fullResponse.toString(), aiMessageStartPos);
+                                        targetResultPane.setCaretPosition(targetResultPane.getStyledDocument().getLength());
                                     } catch (Exception e) {
                                         api.logging().logToError("流式Markdown渲染失败: " + e.getMessage());
                                         e.printStackTrace();
                                     }
                                 });
                             } catch (Exception e) {
-                                // 如果invokeAndWait失败，回退到invokeLater
                                 SwingUtilities.invokeLater(() -> {
-                                    // 再次检查取消状态
                                     if (currentWorker.isCancelled() || !isAnalyzing) {
                                         return;
                                     }
                                     try {
-                                        MarkdownRenderer.appendMarkdownStreaming(resultTextPane, fullResponse.toString(), aiMessageStartPos);
-                                        resultTextPane.setCaretPosition(resultTextPane.getStyledDocument().getLength());
+                                        MarkdownRenderer.appendMarkdownStreaming(targetResultPane, fullResponse.toString(), aiMessageStartPos);
+                                        targetResultPane.setCaretPosition(targetResultPane.getStyledDocument().getLength());
                                     } catch (Exception ex) {
                                         api.logging().logToError("流式Markdown渲染失败: " + ex.getMessage());
                                     }
@@ -1798,21 +2007,18 @@ public class AIAnalyzerTab extends JPanel {
                         }
                     );
                     
-                    // 流式输出完成后，使用完整的Markdown渲染替换流式渲染的内容
                     String finalContent = fullResponse.toString();
                     if (!finalContent.isEmpty()) {
                         try {
                             SwingUtilities.invokeAndWait(() -> {
                                 try {
-                                    StyledDocument doc = resultTextPane.getStyledDocument();
-                                    // 删除流式渲染的内容
+                                    StyledDocument doc = targetResultPane.getStyledDocument();
                                     int currentLength = doc.getLength();
                                     if (currentLength > aiMessageStartPos) {
                                         doc.remove(aiMessageStartPos, currentLength - aiMessageStartPos);
                                     }
-                                    // 使用完整的Markdown渲染
-                                    MarkdownRenderer.appendMarkdown(resultTextPane, finalContent);
-                                    resultTextPane.setCaretPosition(resultTextPane.getStyledDocument().getLength());
+                                    MarkdownRenderer.appendMarkdown(targetResultPane, finalContent);
+                                    targetResultPane.setCaretPosition(targetResultPane.getStyledDocument().getLength());
                                 } catch (BadLocationException e) {
                                     api.logging().logToError("流式输出完成后完整渲染失败: " + e.getMessage());
                                 } catch (Exception e) {
@@ -1820,16 +2026,15 @@ public class AIAnalyzerTab extends JPanel {
                                 }
                             });
                         } catch (Exception e) {
-                            // 如果invokeAndWait失败，使用invokeLater作为备选
                             SwingUtilities.invokeLater(() -> {
                                 try {
-                                    StyledDocument doc = resultTextPane.getStyledDocument();
+                                    StyledDocument doc = targetResultPane.getStyledDocument();
                                     int currentLength = doc.getLength();
                                     if (currentLength > aiMessageStartPos) {
                                         doc.remove(aiMessageStartPos, currentLength - aiMessageStartPos);
                                     }
-                                    MarkdownRenderer.appendMarkdown(resultTextPane, finalContent);
-                                    resultTextPane.setCaretPosition(resultTextPane.getStyledDocument().getLength());
+                                    MarkdownRenderer.appendMarkdown(targetResultPane, finalContent);
+                                    targetResultPane.setCaretPosition(targetResultPane.getStyledDocument().getLength());
                                 } catch (BadLocationException ex) {
                                     api.logging().logToError("流式输出完成后完整渲染失败: " + ex.getMessage());
                                 } catch (Exception ex) {
@@ -1874,7 +2079,8 @@ public class AIAnalyzerTab extends JPanel {
             javax.swing.text.Style regularStyle = doc.addStyle("regular", null);
             javax.swing.text.StyleConstants.setFontFamily(regularStyle, "Microsoft YaHei");
             javax.swing.text.StyleConstants.setFontSize(regularStyle, 12);
-            javax.swing.text.StyleConstants.setForeground(regularStyle, Color.BLACK);
+            Color textColor = UIManager.getColor("TextArea.foreground");
+            javax.swing.text.StyleConstants.setForeground(regularStyle, textColor != null ? textColor : Color.BLACK);
             doc.insertString(doc.getLength(), chunk, regularStyle);
             resultTextPane.setCaretPosition(doc.getLength());
         } catch (Exception e) {
@@ -1888,7 +2094,8 @@ public class AIAnalyzerTab extends JPanel {
             javax.swing.text.Style regularStyle = doc.addStyle("regular", null);
             javax.swing.text.StyleConstants.setFontFamily(regularStyle, "Microsoft YaHei");
             javax.swing.text.StyleConstants.setFontSize(regularStyle, 12);
-            javax.swing.text.StyleConstants.setForeground(regularStyle, Color.BLACK);
+            Color textColor = UIManager.getColor("TextArea.foreground");
+            javax.swing.text.StyleConstants.setForeground(regularStyle, textColor != null ? textColor : Color.BLACK);
             doc.insertString(doc.getLength(), text + "\n", regularStyle);
             resultTextPane.setCaretPosition(doc.getLength());
         } catch (Exception e) {
@@ -1926,7 +2133,6 @@ public class AIAnalyzerTab extends JPanel {
     }
     
     private void clearResults() {
-        // 如果正在分析，先停止
         if (currentWorker != null && !currentWorker.isDone()) {
             if (apiClient != null) {
                 apiClient.cancelStreaming();
@@ -1939,8 +2145,9 @@ public class AIAnalyzerTab extends JPanel {
         }
         
         resultTextPane.setText("");
-        // 清空 Assistant 的聊天记忆（共享实例）
-        // 注意：apiClient.clearContext() 内部已经会先调用 cancelStreaming()
+        if (activeModeResultTextPane != null && activeModeResultTextPane != resultTextPane) {
+            activeModeResultTextPane.setText("");
+        }
         apiClient.clearContext();
     }
 
@@ -1988,11 +2195,13 @@ public class AIAnalyzerTab extends JPanel {
             
             // 设置 Python 脚本执行选项
             settings.setEnablePythonScript(enablePythonScriptCheckbox != null && enablePythonScriptCheckbox.isSelected());
+            settings.setEnableNotebook(enableNotebookCheckbox != null && enableNotebookCheckbox.isSelected());
             
             // 设置 Skills 选项
             settings.setEnableSkills(enableSkillsCheckBox.isSelected());
             settings.setSkillsDirectoryPath(skillsDirectoryField.getText().trim());
             settings.setEnabledSkillNames(apiClient.getSkillManager().getEnabledSkillNames());
+            settings.setWorkplaceDirectoryPath(workplaceDirectoryField != null ? workplaceDirectoryField.getText().trim() : "");
 
             ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream("ai_analyzer_settings.dat"));
             oos.writeObject(settings);
@@ -2067,7 +2276,10 @@ public class AIAnalyzerTab extends JPanel {
         apiKeyField.setText(settings.getApiKey());
         modelField.setText(settings.getModel());
         customParametersField.setText(settings.getCustomParameters());
-        userPromptArea.setText(settings.getUserPrompt());
+        if (workplaceDirectoryField != null) {
+            workplaceDirectoryField.setText(settings.getWorkplaceDirectoryPath());
+        }
+        setPromptTextForAllModes(settings.getUserPrompt());
         enableThinkingCheckBox.setSelected((isDashScope || isAnthropic) && settings.isEnableThinking());
         enableSearchCheckBox.setSelected(isDashScope && settings.isEnableSearch());
         
@@ -2120,16 +2332,20 @@ public class AIAnalyzerTab extends JPanel {
         
         // Skills 配置
         enableSkillsCheckBox.setSelected(settings.isEnableSkills());
-        skillsDirectoryField.setText(settings.getSkillsDirectoryPath());
-        skillsDirectoryField.setEnabled(settings.isEnableSkills());
-        browseSkillsDirButton.setEnabled(settings.isEnableSkills());
+        String effectiveSkillsPath = settings.resolveSkillsDirectoryPath();
+        if (effectiveSkillsPath == null || effectiveSkillsPath.isEmpty()) {
+            effectiveSkillsPath = settings.getSkillsDirectoryPath();
+        }
+        skillsDirectoryField.setText(effectiveSkillsPath != null ? effectiveSkillsPath : "");
+        skillsDirectoryField.setEnabled(false);
         refreshSkillsButton.setEnabled(settings.isEnableSkills());
         createExampleSkillButton.setEnabled(settings.isEnableSkills());
         skillsTable.setEnabled(settings.isEnableSkills());
         
         apiClient.setEnableSkills(settings.isEnableSkills());
-        if (settings.getSkillsDirectoryPath() != null && !settings.getSkillsDirectoryPath().isEmpty()) {
-            apiClient.setSkillsDirectoryPath(settings.getSkillsDirectoryPath());
+        apiClient.setWorkplaceDirectoryPath(settings.getWorkplaceDirectoryPath());
+        if (effectiveSkillsPath != null && !effectiveSkillsPath.isEmpty()) {
+            apiClient.setSkillsDirectoryPath(effectiveSkillsPath);
             apiClient.getSkillManager().loadSkills();
             // 恢复已启用的 skills
             if (settings.getEnabledSkillNames() != null) {
@@ -2137,6 +2353,7 @@ public class AIAnalyzerTab extends JPanel {
             }
             updateSkillsTable();
         }
+        applyWorkplaceToDerivedPaths(true, true);
         
         // 前置扫描器配置
         if (enablePreScanCheckbox != null) {
@@ -2155,6 +2372,16 @@ public class AIAnalyzerTab extends JPanel {
             enablePythonScriptCheckbox.setSelected(settings.isEnablePythonScript());
             apiClient.setEnablePythonScript(settings.isEnablePythonScript());
         }
+        if (enableNotebookCheckbox != null) {
+            enableNotebookCheckbox.setSelected(settings.isEnableNotebook());
+            apiClient.setEnableNotebook(settings.isEnableNotebook());
+        }
+    }
+
+    private void setPromptTextForAllModes(String text) {
+        String prompt = text != null ? text : "";
+        if (passiveModePromptArea != null) passiveModePromptArea.setText(prompt);
+        // 主动模式输入框不设置默认文本（聊天式交互，每次提交后清空）
     }
     
     /**

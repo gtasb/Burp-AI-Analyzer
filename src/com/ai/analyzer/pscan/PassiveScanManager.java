@@ -29,8 +29,8 @@ import java.util.function.Consumer;
 public class PassiveScanManager {
     
     // ========== 配置 ==========
-    private static final int DEFAULT_THREAD_COUNT = 3;
-    private static final int MAX_THREAD_COUNT = 10;
+    private static final int DEFAULT_THREAD_COUNT = 10;
+    private static final int MAX_THREAD_COUNT = 50;
     private static final int MIN_THREAD_COUNT = 1;
     private static final int QUEUE_CAPACITY = 1000; // 队列容量
     

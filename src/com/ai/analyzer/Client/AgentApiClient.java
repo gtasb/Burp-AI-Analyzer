@@ -1,6 +1,7 @@
-package com.ai.analyzer.api;
+package com.ai.analyzer.Client;
 
 import com.ai.analyzer.Agent.Assistant;
+import com.ai.analyzer.Client.AgentConfig.ApiProvider;
 import com.ai.analyzer.mcpClient.AllMcpToolProvider;
 import com.ai.analyzer.mcpClient.McpToolMappingConfig;
 import com.ai.analyzer.mcpClient.ToolExecutionFormatter;
@@ -24,7 +25,7 @@ import java.util.Map;
 
 import com.ai.analyzer.model.PluginSettings;
 import com.ai.analyzer.multiModels.ChatModelFactory;
-import com.ai.analyzer.api.AgentConfig.ApiProvider;
+
 import burp.api.montoya.MontoyaApi;
 import dev.langchain4j.model.chat.response.PartialResponse;
 import dev.langchain4j.model.chat.response.StreamingHandle;
@@ -45,6 +46,7 @@ import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.service.tool.ToolProvider;
 import com.ai.analyzer.Tools.BurpExtTools;
 import com.ai.analyzer.Tools.PythonScriptTool;
+import com.ai.analyzer.Tools.NotebookTools;
 import com.ai.analyzer.Tools.FileSystemAccessTools;
 import lombok.Getter;
 
@@ -53,6 +55,11 @@ import lombok.Getter;
  * 负责与 AI 模型交互，支持流式输出、工具调用、上下文管理
  */
 public class AgentApiClient {
+    private static final int DEFAULT_CHAT_MEMORY_MAX_MESSAGES = 100;
+    private static final int COMPACT_CHAT_MEMORY_MAX_MESSAGES = 30;
+    private static final int RETRY_CONTENT_MAX_CHARS = 25000;
+    private static final int RETRY_CONTENT_ULTRA_MAX_CHARS = 12000;
+    private static final int RETRY_CONTENT_MINI_MAX_CHARS = 5000;
     
     // ========== 配置 ==========
     @Getter
@@ -67,6 +74,8 @@ public class AgentApiClient {
     private SkillManager skillManager;
     private SkillToolsProvider skillToolsProvider;
     private PreScanFilterManager preScanFilterManager;
+    private volatile int chatMemoryMaxMessages = DEFAULT_CHAT_MEMORY_MAX_MESSAGES;
+    private volatile Consumer<String> systemNoticeConsumer;
     
     // ========== 状态标志 ==========
     private boolean isFirstInitialization = true;
@@ -126,6 +135,10 @@ public class AgentApiClient {
     public void setApi(MontoyaApi api) {
         this.api = api;
     }
+
+    public void setSystemNoticeConsumer(Consumer<String> systemNoticeConsumer) {
+        this.systemNoticeConsumer = systemNoticeConsumer;
+    }
     
     public String getApiKey() { return config.getApiKey(); }
     public String getApiUrl() { return config.getApiUrl(); }
@@ -143,6 +156,7 @@ public class AgentApiClient {
     public boolean isEnableFileSystemAccess() { return config.isEnableFileSystemAccess(); }
     public boolean isEnableSkills() { return config.isEnableSkills(); }
     public boolean isEnablePythonScript() { return config.isEnablePythonScript(); }
+    public boolean isEnableNotebook() { return config.isEnableNotebook(); }
     public String getCustomParameters() { return config.getCustomParameters(); }
 
     public void setApiUrl(String apiUrl) {
@@ -298,6 +312,27 @@ public class AgentApiClient {
             logInfo("Python 脚本执行已" + (enablePythonScript ? "启用" : "禁用"));
         }
     }
+
+    public void setEnableNotebook(boolean enableNotebook) {
+        if (config.isEnableNotebook() != enableNotebook) {
+            config.setEnableNotebook(enableNotebook);
+            assistant = null;
+            logInfo("Notebook 工具已" + (enableNotebook ? "启用" : "禁用"));
+        }
+    }
+
+    public void setWorkplaceDirectoryPath(String workplaceDirectoryPath) {
+        String normalized = workplaceDirectoryPath == null ? "" : workplaceDirectoryPath.trim();
+        if (!java.util.Objects.equals(config.getWorkplaceDirectoryPath(), normalized)) {
+            config.setWorkplaceDirectoryPath(normalized);
+            if (!normalized.isEmpty()) {
+                setSkillsDirectoryPath(new File(normalized, "skills").getAbsolutePath());
+                config.setRagMcpDocumentsPath(new File(normalized, "rag").getAbsolutePath());
+            }
+            assistant = null;
+            logInfo("Workplace 目录已更新: " + normalized);
+        }
+    }
     
     public SkillManager getSkillManager() {
         if (skillManager == null) {
@@ -398,9 +433,9 @@ public class AgentApiClient {
         // 过小会淘汰原始 UserMessage，导致 DashScope InputRequiredException
         if (chatMemory == null) {
             chatMemory = MessageWindowChatMemory.builder()
-                    .maxMessages(100)
+                    .maxMessages(chatMemoryMaxMessages)
                     .build();
-            logInfo("ChatMemory 已创建（最大100条消息）");
+            logInfo("ChatMemory 已创建（最大" + chatMemoryMaxMessages + "条消息）");
         }
         
         // 创建 Assistant
@@ -432,23 +467,36 @@ public class AgentApiClient {
         
         // @Tool 注解工具
         if (api != null) {
-            if (config.isEnableMcp()) {
+/*             if (config.isEnableMcp()) {
                 BurpExtTools burpExtTools = new BurpExtTools(api);
                 assistantBuilder.tools(burpExtTools);
                 logInfo("已添加 BurpExtTools");
-            }
+            } */
             
             if (config.isEnablePythonScript()) {
                 PythonScriptTool pythonTool = new PythonScriptTool();
+                String pythonWorkingDir = config.getEffectivePythonWorkingDirectoryPath();
+                if (!pythonWorkingDir.isEmpty()) {
+                    pythonTool.setWorkingDirectory(pythonWorkingDir);
+                }
                 assistantBuilder.tools(pythonTool);
                 logInfo("已添加 PythonScriptTool");
+            }
+
+            if (config.isEnableNotebook()) {
+                NotebookTools notebookTools = new NotebookTools();
+                if (config.getWorkplaceDirectoryPath() != null && !config.getWorkplaceDirectoryPath().trim().isEmpty()) {
+                    notebookTools.setWorkplaceDirectory(config.getWorkplaceDirectoryPath().trim());
+                }
+                assistantBuilder.tools(notebookTools);
+                logInfo("已添加 NotebookTools");
             }
             
             if (config.isEnableFileSystemAccess() && config.hasRagDocumentsPath()) {
                 FileSystemAccessTools fsaTools = new FileSystemAccessTools(api);
-                fsaTools.setAllowedRootPath(config.getRagMcpDocumentsPath());
+                fsaTools.setAllowedRootPath(config.getEffectiveRagDocumentsPath());
                 assistantBuilder.tools(fsaTools);
-                logInfo("已添加 FileSystemAccessTools (知识库: " + config.getRagMcpDocumentsPath() + ")");
+                logInfo("已添加 FileSystemAccessTools (知识库: " + config.getEffectiveRagDocumentsPath() + ")");
             }
             
             // SkillToolsProvider: execute_skill_tool + list_skill_tools（二进制执行）
@@ -519,11 +567,11 @@ public class AgentApiClient {
             // RAG MCP
             if (config.isEnableRagMcp() && config.hasRagDocumentsPath()) {
                         try {
-                    McpTransport ragTransport = mcpProviderHelper.createRagMcpTransport(config.getRagMcpDocumentsPath().trim());
+                    McpTransport ragTransport = mcpProviderHelper.createRagMcpTransport(config.getEffectiveRagDocumentsPath().trim());
                             McpClient ragMcpClient = mcpProviderHelper.createMcpClient(ragTransport, "RagMCPClient");
                             allMcpClients.add(ragMcpClient);
                     allFilterTools.addAll(List.of("index_document", "query_document"));
-                    logInfo("RAG MCP 客户端已添加，知识库路径: " + config.getRagMcpDocumentsPath());
+                    logInfo("RAG MCP 客户端已添加，知识库路径: " + config.getEffectiveRagDocumentsPath());
                         } catch (Exception e) {
                     logInfo("RAG MCP 客户端初始化失败: " + e.getMessage());
                         }
@@ -624,6 +672,24 @@ public class AgentApiClient {
             ? settings.getModel() : defaultModel);
         config.setEnableThinking(settings.isEnableThinking());
         config.setEnableSearch(settings.isEnableSearch());
+        config.setWorkplaceDirectoryPath(settings.getWorkplaceDirectoryPath());
+        if (settings.getRagMcpDocumentsPath() != null && !settings.getRagMcpDocumentsPath().isEmpty()) {
+            config.setRagMcpDocumentsPath(settings.getRagMcpDocumentsPath());
+        }
+        if (settings.isEnableSkills() && settings.getSkillsDirectoryPath() != null && !settings.getSkillsDirectoryPath().isEmpty()) {
+            setSkillsDirectoryPath(settings.getSkillsDirectoryPath());
+        } else if (settings.hasWorkplaceDirectory()) {
+            setSkillsDirectoryPath(settings.resolveSkillsDirectoryPath());
+        }
+        config.setEnableSkills(settings.isEnableSkills());
+        config.setEnablePythonScript(settings.isEnablePythonScript());
+        config.setEnableNotebook(settings.isEnableNotebook());
+        config.setEnableFileSystemAccess(settings.isEnableFileSystemAccess());
+        config.setEnableRagMcp(settings.isEnableRagMcp());
+        config.setEnableChromeMcp(settings.isEnableChromeMcp());
+        config.setChromeMcpUrl(settings.getChromeMcpUrl());
+        config.setBurpMcpUrl(settings.getMcpUrl());
+        config.setRagMcpUrl(settings.getRagMcpUrl());
     }
     
     private PluginSettings loadSettingsFromFile(File settingsFile) {
@@ -698,19 +764,24 @@ public class AgentApiClient {
         }
 
         String userContent = buildAnalysisContent(httpRequest, userPrompt, sourceInfo);
-        UserMessage userMessage = new UserMessage(userContent);
 
         logInfo("使用LangChain4j发送流式请求");
         logInfo("模型: " + (config.getModel() != null ? config.getModel() : "qwen-max"));
 
-        int maxRetries = 3;
+        int maxRetries = 5;
         int retryCount = 0;
         Exception lastException = null;
         final int[] contentChunkCount = {0};
+        boolean retriedWithCompressedMessage = false;
+        boolean retriedWithCompactedContext = false;
+        boolean retriedWithMinimalMode = false;
+        userContent = compressContentForRetry(userContent, 90000);
+        UserMessage userMessage = new UserMessage(userContent);
 
         while (retryCount < maxRetries) {
             try {
                 ensureAssistantInitialized();
+                final boolean[] thinkingNoticeShown = {false};
                 
                 List<ChatMessage> messages = List.of(userMessage);
                 TokenStream tokenStream = assistant.chat(messages);
@@ -727,13 +798,20 @@ public class AgentApiClient {
                         }
                         String text = partialResponse != null ? partialResponse.text() : null;
                         if (text != null && !text.isEmpty() && !isStreamingCancelled) {
+                                if (thinkingNoticeShown[0]) {
+                                    thinkingNoticeShown[0] = false;
+                                }
                                 onChunk.accept(text);
                                 contentChunkCount[0]++;
                         }
                     })
                     .onPartialThinking((PartialThinking partialThinking) -> {
                         if (!isStreamingCancelled) {
-                        logDebug("Thinking: " + partialThinking);
+                            logDebug("Thinking: " + partialThinking);
+                            if (!thinkingNoticeShown[0]) {
+                                emitSystemNotice("思考中...");
+                                thinkingNoticeShown[0] = true;
+                            }
                         }
                     })
                     .beforeToolExecution((BeforeToolExecution beforeToolExecution) -> {
@@ -774,6 +852,39 @@ public class AgentApiClient {
             } catch (java.util.concurrent.ExecutionException e) {
                 cleanupStreamingState();
                 Throwable cause = e.getCause();
+                String errorText = extractErrorText(cause);
+                if (isInputLengthExceededError(errorText)) {
+                    if (!retriedWithCompressedMessage) {
+                        userContent = compressContentForRetry(userContent, RETRY_CONTENT_MAX_CHARS);
+                        userMessage = new UserMessage(userContent);
+                        retriedWithCompressedMessage = true;
+                        retryCount++;
+                        logInfo("检测到输入长度超限，已自动压缩当前消息并重试");
+                        emitSystemNotice("输入过长，已自动压缩当前消息后重试。");
+                        continue;
+                    }
+                    if (!retriedWithCompactedContext) {
+                        userContent = compressContentForRetry(userContent, RETRY_CONTENT_ULTRA_MAX_CHARS);
+                        userMessage = new UserMessage(userContent);
+                        emitSystemNotice("压缩上下文中...");
+                        summarizeAndCompactConversationContext(userContent);
+                        retriedWithCompactedContext = true;
+                        retryCount++;
+                        logInfo("输入仍超限，已自动压缩上下文窗口并重试");
+                        emitSystemNotice("已进一步压缩消息并收缩上下文窗口后重试。");
+                        continue;
+                    }
+                    if (!retriedWithMinimalMode) {
+                        compactConversationContextOnly();
+                        userContent = buildMinimalFallbackContent(userContent);
+                        userMessage = new UserMessage(userContent);
+                        retriedWithMinimalMode = true;
+                        retryCount++;
+                        logInfo("输入持续超限，已切换轻量分析模式重试");
+                        emitSystemNotice("上下文仍过长，已切换轻量分析模式重试。");
+                        continue;
+                    }
+                }
                 lastException = cause instanceof Exception ? (Exception) cause : new Exception("流式输出失败", cause);
                 retryCount++;
             } catch (InterruptedException e) {
@@ -790,12 +901,113 @@ public class AgentApiClient {
         if (lastException != null && retryCount >= maxRetries) {
             throw new Exception(lastException.getMessage() + " (已重试 " + maxRetries + " 次)", lastException);
         }
-        }
+        chatMemoryMaxMessages = DEFAULT_CHAT_MEMORY_MAX_MESSAGES;
+    }
 
     private void cleanupStreamingState() {
         currentTokenStream = null;
         streamingHandle = null;
         isStreamingCancelled = false;
+    }
+
+    private boolean isInputLengthExceededError(String errorText) {
+        if (errorText == null) return false;
+        return errorText.contains("Range of input length should be")
+                || errorText.contains("InternalError.Algo.InvalidParameter")
+                || errorText.contains("input length");
+    }
+
+    private String extractErrorText(Throwable error) {
+        if (error == null) return "";
+        String msg = error.getMessage();
+        if (msg != null && !msg.isEmpty()) return msg;
+        return extractErrorText(error.getCause());
+    }
+
+    private String compressContentForRetry(String content, int maxChars) {
+        if (content == null) return "";
+        String normalized = content.replace("\r\n", "\n").replaceAll("\n{3,}", "\n\n");
+        if (normalized.length() <= maxChars) return normalized;
+
+        int headLen = (int) (maxChars * 0.75);
+        int tailLen = Math.max(0, maxChars - headLen - 60);
+        if (tailLen <= 0 || headLen <= 0 || normalized.length() < headLen + tailLen) {
+            return normalized.substring(0, Math.min(maxChars, normalized.length()));
+        }
+
+        return normalized.substring(0, headLen)
+                + "\n\n...[中间内容已压缩省略，以控制输入长度]...\n\n"
+                + normalized.substring(normalized.length() - tailLen);
+    }
+
+    private void summarizeAndCompactConversationContext(String latestUserContent) {
+        String contextSummary = buildContextSummary();
+        chatMemoryMaxMessages = COMPACT_CHAT_MEMORY_MAX_MESSAGES;
+        assistant = null;
+        chatMemory = MessageWindowChatMemory.builder()
+                .maxMessages(chatMemoryMaxMessages)
+                .build();
+        if (contextSummary != null && !contextSummary.isEmpty()) {
+            chatMemory.add(new UserMessage(
+                    "[系统自动压缩的历史上下文摘要]\n"
+                            + contextSummary
+                            + "\n\n[当前请求摘要]\n"
+                            + compressContentForRetry(latestUserContent, 3000)
+            ));
+        }
+        logInfo("已自动收缩上下文窗口至 " + COMPACT_CHAT_MEMORY_MAX_MESSAGES + " 条消息");
+    }
+
+    private void compactConversationContextOnly() {
+        chatMemoryMaxMessages = COMPACT_CHAT_MEMORY_MAX_MESSAGES;
+        assistant = null;
+        chatMemory = MessageWindowChatMemory.builder()
+                .maxMessages(chatMemoryMaxMessages)
+                .build();
+        logInfo("已重置并收缩上下文窗口至 " + COMPACT_CHAT_MEMORY_MAX_MESSAGES + " 条消息");
+    }
+
+    private void emitSystemNotice(String message) {
+        Consumer<String> consumer = this.systemNoticeConsumer;
+        if (consumer == null || message == null || message.trim().isEmpty()) return;
+        try {
+            consumer.accept(message.trim());
+        } catch (Exception e) {
+            logDebug("系统提示回调失败: " + e.getMessage());
+        }
+    }
+
+    private String buildMinimalFallbackContent(String currentUserContent) {
+        String compact = compressContentForRetry(currentUserContent, RETRY_CONTENT_MINI_MAX_CHARS);
+        return "请基于以下压缩后的信息给出结论，避免再次调用大量工具，优先输出最终风险评估与可执行建议：\n\n"
+                + compact;
+    }
+
+    private String buildContextSummary() {
+        if (chatMemory == null) return "";
+        try {
+            List<ChatMessage> history = chatMemory.messages();
+            if (history == null || history.isEmpty()) return "";
+
+            int keepFrom = Math.max(0, history.size() - 20);
+            StringBuilder sb = new StringBuilder();
+            sb.append("已保留最近对话要点（压缩版）:\n");
+            for (int i = keepFrom; i < history.size(); i++) {
+                ChatMessage msg = history.get(i);
+                String role = msg.getClass().getSimpleName();
+                String text = msg.toString();
+                if (text == null) text = "";
+                text = text.replace('\r', ' ').replace('\n', ' ');
+                if (text.length() > 240) {
+                    text = text.substring(0, 240) + "...";
+                }
+                sb.append("- ").append(role).append(": ").append(text).append("\n");
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            logDebug("构建上下文摘要失败: " + e.getMessage());
+            return "";
+        }
     }
 
     private String buildAnalysisContent(String httpContent, String userPrompt, 
@@ -838,6 +1050,7 @@ public class AgentApiClient {
                 config.isEnableSearch(), config.isEnableMcp(),
                 config.isEnableRagMcp(), config.isEnableChromeMcp(),
                 config.isEnableFileSystemAccess(), config.isEnableSkills(),
+                config.isEnableNotebook(),
                 config.getRagMcpDocumentsPath(),
                 skillManager != null ? skillManager.getEnabledSkillCount() : 0);
         String cached = cachedSystemPrompt;

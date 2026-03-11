@@ -3,11 +3,12 @@ package com.ai.analyzer.pscan;
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.http.message.HttpRequestResponse;
 import com.ai.analyzer.Agent.Assistant;
+import com.ai.analyzer.Client.AgentConfig.ApiProvider;
 import com.ai.analyzer.Tools.BurpExtTools;
 import com.ai.analyzer.Tools.CurlTools;
 import com.ai.analyzer.Tools.FileSystemAccessTools;
 import com.ai.analyzer.Tools.PythonScriptTool;
-import com.ai.analyzer.api.AgentConfig.ApiProvider;
+import com.ai.analyzer.Tools.NotebookTools;
 import com.ai.analyzer.mcpClient.AllMcpToolProvider;
 import com.ai.analyzer.mcpClient.McpToolMappingConfig;
 import com.ai.analyzer.mcpClient.ToolExecutionFormatter;
@@ -111,9 +112,13 @@ public class PassiveScanApiClient {
     @Getter
     private boolean enablePythonScript = false;
     @Getter
+    private boolean enableNotebook = false;
+    @Getter
     private boolean enableSkills = false;
     @Getter
     private String skillsDirectoryPath = "";
+    @Getter
+    private String workplaceDirectoryPath = "";
     
     // Skills 管理
     private volatile SkillManager skillManager;
@@ -209,8 +214,14 @@ public class PassiveScanApiClient {
         this.enableChromeMcp = settings.isEnableChromeMcp();
         this.chromeMcpUrl = settings.getChromeMcpUrl();
         this.enableFileSystemAccess = settings.isEnableFileSystemAccess();
+        this.enableNotebook = settings.isEnableNotebook();
         this.enableSkills = settings.isEnableSkills();
+        this.workplaceDirectoryPath = settings.getWorkplaceDirectoryPath();
         this.skillsDirectoryPath = settings.getSkillsDirectoryPath();
+        if (this.workplaceDirectoryPath != null && !this.workplaceDirectoryPath.trim().isEmpty()) {
+            this.ragMcpDocumentsPath = settings.resolveRagDocumentsPath();
+            this.skillsDirectoryPath = settings.resolveSkillsDirectoryPath();
+        }
         
         // 初始化 SkillManager
         if (enableSkills && skillsDirectoryPath != null && !skillsDirectoryPath.isEmpty()) {
@@ -388,6 +399,60 @@ public class PassiveScanApiClient {
             }
         }
     }
+
+    public void setEnableNotebook(boolean enableNotebook) {
+        if (this.enableNotebook != enableNotebook) {
+            this.enableNotebook = enableNotebook;
+            synchronized (assistantLock) {
+                assistant = null;
+            }
+        }
+    }
+
+    public void setEnableSkills(boolean enableSkills) {
+        if (this.enableSkills != enableSkills) {
+            this.enableSkills = enableSkills;
+            if (!enableSkills) {
+                this.skillManager = null;
+                this.skillToolsProvider = null;
+            } else if (this.skillsDirectoryPath != null && !this.skillsDirectoryPath.isEmpty()) {
+                initializeSkillManager(new PluginSettings());
+            }
+            synchronized (assistantLock) {
+                assistant = null;
+            }
+        }
+    }
+
+    public void setSkillsDirectoryPath(String skillsDirectoryPath) {
+        String normalized = skillsDirectoryPath == null ? "" : skillsDirectoryPath.trim();
+        if (!java.util.Objects.equals(this.skillsDirectoryPath, normalized)) {
+            this.skillsDirectoryPath = normalized;
+            if (enableSkills && !normalized.isEmpty()) {
+                initializeSkillManager(new PluginSettings());
+            }
+            synchronized (assistantLock) {
+                assistant = null;
+            }
+        }
+    }
+
+    public void setWorkplaceDirectoryPath(String workplaceDirectoryPath) {
+        String normalized = workplaceDirectoryPath == null ? "" : workplaceDirectoryPath.trim();
+        if (!java.util.Objects.equals(this.workplaceDirectoryPath, normalized)) {
+            this.workplaceDirectoryPath = normalized;
+            if (!normalized.isEmpty()) {
+                this.ragMcpDocumentsPath = new File(normalized, "rag").getAbsolutePath();
+                this.skillsDirectoryPath = new File(normalized, "skills").getAbsolutePath();
+            }
+            synchronized (assistantLock) {
+                assistant = null;
+            }
+            if (enableSkills) {
+                skillManager = null;
+            }
+        }
+    }
     
     /**
      * 设置前置扫描过滤器管理器
@@ -473,27 +538,40 @@ public class PassiveScanApiClient {
                     
                     // @Tool 注解工具
                     if (api != null) {
-                        CurlTools curlTools = new CurlTools(api);
+/*                         CurlTools curlTools = new CurlTools(api);
                         assistantBuilder.tools(curlTools);
-                        logInfo("已添加 CurlTools");
+                        logInfo("已添加 CurlTools"); */
                         
-                        if (enableMcp) {
+/*                         if (enableMcp) {
                             BurpExtTools burpExtTools = new BurpExtTools(api);
                             assistantBuilder.tools(burpExtTools);
                             logInfo("已添加 BurpExtTools");
-                        }
+                        } */
                         
-                        if (enableFileSystemAccess && ragMcpDocumentsPath != null && !ragMcpDocumentsPath.isEmpty()) {
+                        if (enableFileSystemAccess && getEffectiveRagDocumentsPath() != null && !getEffectiveRagDocumentsPath().isEmpty()) {
                             FileSystemAccessTools fsaTools = new FileSystemAccessTools(api);
-                            fsaTools.setAllowedRootPath(ragMcpDocumentsPath);
+                            fsaTools.setAllowedRootPath(getEffectiveRagDocumentsPath());
                             assistantBuilder.tools(fsaTools);
                             logInfo("已添加 FileSystemAccessTools");
                         }
                         
                         if (enablePythonScript) {
                             PythonScriptTool pythonTool = new PythonScriptTool();
+                            String pythonWorkdir = getEffectivePythonWorkdir();
+                            if (!pythonWorkdir.isEmpty()) {
+                                pythonTool.setWorkingDirectory(pythonWorkdir);
+                            }
                             assistantBuilder.tools(pythonTool);
                             logInfo("已添加 PythonScriptTool");
+                        }
+
+                        if (enableNotebook) {
+                            NotebookTools notebookTools = new NotebookTools();
+                            if (workplaceDirectoryPath != null && !workplaceDirectoryPath.trim().isEmpty()) {
+                                notebookTools.setWorkplaceDirectory(workplaceDirectoryPath.trim());
+                            }
+                            assistantBuilder.tools(notebookTools);
+                            logInfo("已添加 NotebookTools");
                         }
                         
                         // SkillToolsProvider: execute_skill_tool + list_skill_tools（二进制执行）
@@ -579,13 +657,13 @@ public class PassiveScanApiClient {
                 }
                 
                 // 2. RAG MCP 客户端
-                if (enableRagMcp && ragMcpDocumentsPath != null && !ragMcpDocumentsPath.trim().isEmpty()) {
+                if (enableRagMcp && getEffectiveRagDocumentsPath() != null && !getEffectiveRagDocumentsPath().trim().isEmpty()) {
                     try {
-                        McpTransport ragTransport = mcpProviderHelper.createRagMcpTransport(ragMcpDocumentsPath.trim());
+                        McpTransport ragTransport = mcpProviderHelper.createRagMcpTransport(getEffectiveRagDocumentsPath().trim());
                         McpClient ragMcpClient = mcpProviderHelper.createMcpClient(ragTransport, "RagMCPClient");
                         allMcpClients.add(ragMcpClient);
                         allFilterTools.addAll(List.of("index_document", "query_document"));
-                        logInfo("RAG MCP 客户端已添加，知识库路径: " + ragMcpDocumentsPath);
+                        logInfo("RAG MCP 客户端已添加，知识库路径: " + getEffectiveRagDocumentsPath());
                     } catch (Exception e) {
                         logError("RAG MCP 客户端初始化失败: " + e.getMessage());
                     }
@@ -597,6 +675,7 @@ public class PassiveScanApiClient {
                         McpTransport chromeTransport = mcpProviderHelper.createStreamableHttpTransport(chromeMcpUrl.trim());
                         McpClient chromeMcpClient = mcpProviderHelper.createMcpClient(chromeTransport, "ChromeMCPClient");
                         allMcpClients.add(chromeMcpClient);
+                        // allFilterTools.addAll(List.of("get_windows_and_tabs", "chrome_navigate"));
                         logInfo("Chrome MCP 客户端已添加，地址: " + chromeMcpUrl);
                     } catch (Exception e) {
                         logError("Chrome MCP 客户端初始化失败: " + e.getMessage());
@@ -882,23 +961,35 @@ public class PassiveScanApiClient {
         
         // @Tool 注解工具
         if (api != null) {
-            CurlTools curlTools = new CurlTools(api);
-            builder.tools(curlTools);
+/*             CurlTools curlTools = new CurlTools(api);
+            builder.tools(curlTools); */
             
-            if (enableMcp) {
+/*             if (enableMcp) {
                 BurpExtTools burpExtTools = new BurpExtTools(api);
                 builder.tools(burpExtTools);
-            }
+            } */
             
-            if (enableFileSystemAccess && ragMcpDocumentsPath != null && !ragMcpDocumentsPath.isEmpty()) {
+            if (enableFileSystemAccess && getEffectiveRagDocumentsPath() != null && !getEffectiveRagDocumentsPath().isEmpty()) {
                 FileSystemAccessTools fsaTools = new FileSystemAccessTools(api);
-                fsaTools.setAllowedRootPath(ragMcpDocumentsPath);
+                fsaTools.setAllowedRootPath(getEffectiveRagDocumentsPath());
                 builder.tools(fsaTools);
             }
             
             if (enablePythonScript) {
                 PythonScriptTool pythonTool = new PythonScriptTool();
+                String pythonWorkdir = getEffectivePythonWorkdir();
+                if (!pythonWorkdir.isEmpty()) {
+                    pythonTool.setWorkingDirectory(pythonWorkdir);
+                }
                 builder.tools(pythonTool);
+            }
+
+            if (enableNotebook) {
+                NotebookTools notebookTools = new NotebookTools();
+                if (workplaceDirectoryPath != null && !workplaceDirectoryPath.trim().isEmpty()) {
+                    notebookTools.setWorkplaceDirectory(workplaceDirectoryPath.trim());
+                }
+                builder.tools(notebookTools);
             }
             
             if (enableSkills && skillManager != null && skillManager.hasEnabledTools()) {
@@ -940,7 +1031,7 @@ public class PassiveScanApiClient {
      */
     private String buildSystemPrompt() {
         int hash = java.util.Objects.hash(
-                enableSearch, enableSkills,
+                enableSearch, enableSkills, enableNotebook,
                 skillManager != null ? skillManager.getEnabledSkillCount() : 0);
         String cached = cachedSystemPrompt;
         if (cached != null && hash == cachedPromptConfigHash) return cached;
@@ -1004,5 +1095,19 @@ public class PassiveScanApiClient {
         if (api != null) {
             api.logging().logToOutput("[PassiveScan-DEBUG] " + message);
         }
+    }
+
+    private String getEffectiveRagDocumentsPath() {
+        if (workplaceDirectoryPath != null && !workplaceDirectoryPath.trim().isEmpty()) {
+            return new File(workplaceDirectoryPath.trim(), "rag").getAbsolutePath();
+        }
+        return ragMcpDocumentsPath != null ? ragMcpDocumentsPath.trim() : "";
+    }
+
+    private String getEffectivePythonWorkdir() {
+        if (workplaceDirectoryPath != null && !workplaceDirectoryPath.trim().isEmpty()) {
+            return new File(workplaceDirectoryPath.trim(), "python-workdir").getAbsolutePath();
+        }
+        return "";
     }
 }

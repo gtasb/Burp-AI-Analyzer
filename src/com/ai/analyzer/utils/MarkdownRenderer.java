@@ -2,31 +2,120 @@ package com.ai.analyzer.utils;
 import javax.swing.*;
 import javax.swing.text.*;
 import java.awt.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import org.commonmark.Extension;
+import org.commonmark.ext.gfm.tables.*;
 import org.commonmark.node.*;
 import org.commonmark.parser.Parser;
-import org.commonmark.renderer.html.HtmlRenderer;
 
 public class MarkdownRenderer {
-    // 简洁专业配色方案
-    private static final Color HEADER1_COLOR = new Color(192, 57, 43);   // 深红色 - 一级标题（高危）
-    private static final Color HEADER2_COLOR = new Color(41, 128, 185);  // 蓝色 - 二级标题
-    private static final Color HEADER3_COLOR = new Color(44, 62, 80);    // 深灰 - 三级标题
-    private static final Color CODE_COLOR = new Color(192, 57, 43);      // 红色 - 行内代码
-    private static final Color CODE_BG_COLOR = new Color(245, 245, 245); // 浅灰背景 - 代码背景
-    private static final Color CODE_BLOCK_BG = new Color(243, 244, 246);  // 浅灰背景 - 代码块（与工具块一致 #f3f4f6）
-    private static final Color CODE_BLOCK_FG = new Color(40, 40, 40);    // 深色文字 - 代码块
-    private static final Color BOLD_COLOR = new Color(44, 62, 80);       // 深灰 - 粗体
-    private static final Color ITALIC_COLOR = new Color(127, 140, 141);  // 灰色 - 斜体
-    private static final Color LIST_COLOR = new Color(44, 62, 80);       // 深灰 - 列表
-    private static final Color LINK_COLOR = new Color(41, 128, 185);     // 蓝色 - 链接
-    
-    // 工具执行块样式 - 类似 Cursor 风格
-    private static final Color TOOL_BLOCK_BG = new Color(243, 244, 246);     // 浅灰背景 #f3f4f6
-    private static final Color TOOL_BLOCK_BORDER = new Color(209, 213, 219); // 边框色 #d1d5db
-    private static final Color TOOL_NAME_COLOR = new Color(79, 70, 229);     // 靛蓝色工具名 #4f46e5
-    private static final Color TOOL_PARAM_KEY_COLOR = new Color(107, 114, 128); // 灰色参数名 #6b7280
-    private static final Color TOOL_PARAM_VAL_COLOR = new Color(55, 65, 81);    // 深灰参数值 #374151
-    private static final Color TOOL_ICON_COLOR = new Color(16, 185, 129);       // 绿色图标 #10b981
+
+    private static boolean isDarkTheme(JTextPane textPane) {
+        Color bg = textPane.getBackground();
+        if (bg == null) bg = UIManager.getColor("TextArea.background");
+        if (bg == null) return false;
+        double lum = 0.299 * bg.getRed() + 0.587 * bg.getGreen() + 0.114 * bg.getBlue();
+        return lum < 128;
+    }
+
+    // ---- 浅色主题 ----
+    private static final Color L_REGULAR_FG = new Color(51, 51, 51);
+    private static final Color L_HEADER1 = new Color(192, 57, 43);
+    private static final Color L_HEADER2 = new Color(41, 128, 185);
+    private static final Color L_HEADER3 = new Color(44, 62, 80);
+    private static final Color L_CODE_FG = new Color(192, 57, 43);
+    private static final Color L_CODE_BG = new Color(245, 245, 245);
+    private static final Color L_CODE_BLOCK_BG = new Color(243, 244, 246);
+    private static final Color L_CODE_BLOCK_FG = new Color(40, 40, 40);
+    private static final Color L_BOLD = new Color(44, 62, 80);
+    private static final Color L_ITALIC = new Color(127, 140, 141);
+    private static final Color L_LIST = new Color(44, 62, 80);
+    private static final Color L_LINK = new Color(41, 128, 185);
+    private static final Color L_TABLE_HEADER_BG = new Color(229, 236, 246);
+    private static final Color L_TABLE_HEADER_FG = new Color(44, 62, 80);
+    private static final Color L_TABLE_BORDER = new Color(189, 195, 199);
+    private static final Color L_TABLE_EVEN_BG = Color.WHITE;
+    private static final Color L_TABLE_ODD_BG = new Color(249, 250, 251);
+    private static final Color L_TABLE_CELL_FG = new Color(51, 51, 51);
+    private static final Color L_TOOL_BLOCK_BG = new Color(243, 244, 246);
+    private static final Color L_TOOL_NAME = new Color(79, 70, 229);
+    private static final Color L_TOOL_PARAM_KEY = new Color(107, 114, 128);
+    private static final Color L_TOOL_PARAM_VAL = new Color(55, 65, 81);
+    private static final Color L_TOOL_ICON = new Color(16, 185, 129);
+
+    // ---- 深色主题 ----
+    private static final Color D_REGULAR_FG = new Color(210, 210, 210);
+    private static final Color D_HEADER1 = new Color(255, 100, 80);
+    private static final Color D_HEADER2 = new Color(100, 180, 255);
+    private static final Color D_HEADER3 = new Color(180, 195, 210);
+    private static final Color D_CODE_FG = new Color(255, 120, 85);
+    private static final Color D_CODE_BG = new Color(55, 55, 60);
+    private static final Color D_CODE_BLOCK_BG = new Color(40, 42, 48);
+    private static final Color D_CODE_BLOCK_FG = new Color(200, 210, 215);
+    private static final Color D_BOLD = new Color(220, 225, 230);
+    private static final Color D_ITALIC = new Color(160, 170, 175);
+    private static final Color D_LIST = new Color(200, 210, 215);
+    private static final Color D_LINK = new Color(100, 180, 255);
+    private static final Color D_TABLE_HEADER_BG = new Color(50, 58, 70);
+    private static final Color D_TABLE_HEADER_FG = new Color(200, 210, 220);
+    private static final Color D_TABLE_BORDER = new Color(80, 88, 100);
+    private static final Color D_TABLE_EVEN_BG = new Color(35, 38, 43);
+    private static final Color D_TABLE_ODD_BG = new Color(42, 46, 52);
+    private static final Color D_TABLE_CELL_FG = new Color(200, 205, 210);
+    private static final Color D_TOOL_BLOCK_BG = new Color(40, 44, 52);
+    private static final Color D_TOOL_NAME = new Color(140, 130, 255);
+    private static final Color D_TOOL_PARAM_KEY = new Color(140, 150, 165);
+    private static final Color D_TOOL_PARAM_VAL = new Color(185, 195, 205);
+    private static final Color D_TOOL_ICON = new Color(50, 210, 160);
+
+    private static class Theme {
+        final Color regularFg, header1, header2, header3, codeFg, codeBg;
+        final Color codeBlockBg, codeBlockFg, bold, italic, list, link;
+        final Color tableHeaderBg, tableHeaderFg, tableBorder, tableEvenBg, tableOddBg, tableCellFg;
+        final Color toolBlockBg, toolName, toolParamKey, toolParamVal, toolIcon;
+        final Color regularBg;
+
+        Theme(boolean dark, Color paneBg) {
+            this.regularBg = paneBg;
+            if (dark) {
+                regularFg = D_REGULAR_FG; header1 = D_HEADER1; header2 = D_HEADER2; header3 = D_HEADER3;
+                codeFg = D_CODE_FG; codeBg = D_CODE_BG; codeBlockBg = D_CODE_BLOCK_BG; codeBlockFg = D_CODE_BLOCK_FG;
+                bold = D_BOLD; italic = D_ITALIC; list = D_LIST; link = D_LINK;
+                tableHeaderBg = D_TABLE_HEADER_BG; tableHeaderFg = D_TABLE_HEADER_FG;
+                tableBorder = D_TABLE_BORDER; tableEvenBg = D_TABLE_EVEN_BG; tableOddBg = D_TABLE_ODD_BG;
+                tableCellFg = D_TABLE_CELL_FG;
+                toolBlockBg = D_TOOL_BLOCK_BG; toolName = D_TOOL_NAME;
+                toolParamKey = D_TOOL_PARAM_KEY; toolParamVal = D_TOOL_PARAM_VAL; toolIcon = D_TOOL_ICON;
+            } else {
+                regularFg = L_REGULAR_FG; header1 = L_HEADER1; header2 = L_HEADER2; header3 = L_HEADER3;
+                codeFg = L_CODE_FG; codeBg = L_CODE_BG; codeBlockBg = L_CODE_BLOCK_BG; codeBlockFg = L_CODE_BLOCK_FG;
+                bold = L_BOLD; italic = L_ITALIC; list = L_LIST; link = L_LINK;
+                tableHeaderBg = L_TABLE_HEADER_BG; tableHeaderFg = L_TABLE_HEADER_FG;
+                tableBorder = L_TABLE_BORDER; tableEvenBg = L_TABLE_EVEN_BG; tableOddBg = L_TABLE_ODD_BG;
+                tableCellFg = L_TABLE_CELL_FG;
+                toolBlockBg = L_TOOL_BLOCK_BG; toolName = L_TOOL_NAME;
+                toolParamKey = L_TOOL_PARAM_KEY; toolParamVal = L_TOOL_PARAM_VAL; toolIcon = L_TOOL_ICON;
+            }
+        }
+    }
+
+    private static final ThreadLocal<Theme> currentTheme = new ThreadLocal<>();
+
+    private static Theme resolveTheme(JTextPane textPane) {
+        boolean dark = isDarkTheme(textPane);
+        Color bg = textPane.getBackground();
+        if (bg == null) bg = dark ? new Color(30, 30, 30) : Color.WHITE;
+        Theme t = new Theme(dark, bg);
+        currentTheme.set(t);
+        return t;
+    }
+
+    private static Theme theme() {
+        Theme t = currentTheme.get();
+        return t != null ? t : new Theme(false, Color.WHITE);
+    }
 
     /**
      * 渲染Markdown到JTextPane的末尾（不清空现有内容）
@@ -38,67 +127,63 @@ public class MarkdownRenderer {
         if (markdown == null) {
             markdown = "";
         }
+        Theme t = resolveTheme(textPane);
         StyledDocument doc = textPane.getStyledDocument();
+        Style[] styles = buildStyles(doc, t);
 
-        // 设置默认样式
+        try {
+            renderWithToolBlocks(doc, markdown, styles[0], styles[1], styles[2], styles[3], styles[4], styles[5], styles[6], styles[7], styles[8]);
+        } catch (BadLocationException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static Style[] buildStyles(StyledDocument doc, Theme t) {
         Style defaultStyle = StyleContext.getDefaultStyleContext().getStyle(StyleContext.DEFAULT_STYLE);
         Style regular = getOrCreateStyle(doc, "regular", defaultStyle);
         StyleConstants.setFontFamily(regular, "Microsoft YaHei");
         StyleConstants.setFontSize(regular, 13);
-        StyleConstants.setForeground(regular, new Color(51, 51, 51));
-        StyleConstants.setBackground(regular, Color.WHITE);
-        StyleConstants.setLineSpacing(regular, 0.3f);  // 行距：30% 额外间距
+        StyleConstants.setForeground(regular, t.regularFg);
+        StyleConstants.setBackground(regular, t.regularBg);
+        StyleConstants.setLineSpacing(regular, 0.3f);
 
-        // 一级标题 - 红色粗体（高危/风险）
         Style header1 = getOrCreateStyle(doc, "header1", regular);
         StyleConstants.setFontSize(header1, 15);
         StyleConstants.setBold(header1, true);
-        StyleConstants.setForeground(header1, HEADER1_COLOR);
+        StyleConstants.setForeground(header1, t.header1);
 
-        // 二级标题 - 蓝色粗体
         Style header2 = getOrCreateStyle(doc, "header2", regular);
         StyleConstants.setFontSize(header2, 14);
         StyleConstants.setBold(header2, true);
-        StyleConstants.setForeground(header2, HEADER2_COLOR);
+        StyleConstants.setForeground(header2, t.header2);
 
-        // 三级标题 - 深灰粗体
         Style header3 = getOrCreateStyle(doc, "header3", regular);
         StyleConstants.setFontSize(header3, 13);
         StyleConstants.setBold(header3, true);
-        StyleConstants.setForeground(header3, HEADER3_COLOR);
+        StyleConstants.setForeground(header3, t.header3);
 
-        // 粗体
         Style bold = getOrCreateStyle(doc, "bold", regular);
         StyleConstants.setBold(bold, true);
-        StyleConstants.setForeground(bold, BOLD_COLOR);
+        StyleConstants.setForeground(bold, t.bold);
 
-        // 斜体
         Style italic = getOrCreateStyle(doc, "italic", regular);
         StyleConstants.setItalic(italic, true);
-        StyleConstants.setForeground(italic, ITALIC_COLOR);
+        StyleConstants.setForeground(italic, t.italic);
 
-        // 行内代码 - 红色带浅灰背景
         Style code = getOrCreateStyle(doc, "code", regular);
         StyleConstants.setFontFamily(code, "Consolas");
         StyleConstants.setFontSize(code, 12);
-        StyleConstants.setBackground(code, CODE_BG_COLOR);
-        StyleConstants.setForeground(code, CODE_COLOR);
+        StyleConstants.setBackground(code, t.codeBg);
+        StyleConstants.setForeground(code, t.codeFg);
 
-        // 列表
         Style list = getOrCreateStyle(doc, "list", regular);
-        StyleConstants.setForeground(list, LIST_COLOR);
+        StyleConstants.setForeground(list, t.list);
 
-        // 链接 - 蓝色下划线
         Style link = getOrCreateStyle(doc, "link", regular);
-        StyleConstants.setForeground(link, LINK_COLOR);
+        StyleConstants.setForeground(link, t.link);
         StyleConstants.setUnderline(link, true);
 
-        // 预处理：提取工具块，避免 Markdown 解析器破坏 | 字符
-        try {
-            renderWithToolBlocks(doc, markdown, regular, bold, italic, code, link, header1, header2, header3, list);
-        } catch (BadLocationException e) {
-            e.printStackTrace();
-        }
+        return new Style[]{regular, bold, italic, code, link, header1, header2, header3, list};
     }
     
     /**
@@ -110,7 +195,8 @@ public class MarkdownRenderer {
         
         if (markdown == null || markdown.isEmpty()) return;
         
-        Parser parser = Parser.builder().build();
+        List<Extension> extensions = Collections.singletonList(TablesExtension.create());
+        Parser parser = Parser.builder().extensions(extensions).build();
         int pos = 0;
         
         while (pos < markdown.length()) {
@@ -242,8 +328,9 @@ public class MarkdownRenderer {
                 renderFencedCodeBlock(doc, (FencedCodeBlock) child, code);
             } else if (child instanceof IndentedCodeBlock) {
                 renderIndentedCodeBlock(doc, (IndentedCodeBlock) child, code);
+            } else if (child instanceof TableBlock) {
+                renderTable(doc, (TableBlock) child, regular, bold, italic, code, link);
             } else if (child instanceof ThematicBreak) {
-                // 分隔线，添加空行
                 doc.insertString(doc.getLength(), "\n", regular);
             }
             
@@ -380,17 +467,15 @@ public class MarkdownRenderer {
     private static void renderFencedCodeBlock(StyledDocument doc, FencedCodeBlock codeBlock, Style code) throws BadLocationException {
         String literal = codeBlock.getLiteral();
         if (literal != null && !literal.isEmpty()) {
-            // 创建代码块样式（深色背景，浅色文字）
+            Theme t = theme();
             Style codeBlockStyle = doc.addStyle("codeBlock", null);
             StyleConstants.setFontFamily(codeBlockStyle, "Consolas");
             StyleConstants.setFontSize(codeBlockStyle, 12);
-            StyleConstants.setBackground(codeBlockStyle, CODE_BLOCK_BG);
-            StyleConstants.setForeground(codeBlockStyle, CODE_BLOCK_FG);
+            StyleConstants.setBackground(codeBlockStyle, t.codeBlockBg);
+            StyleConstants.setForeground(codeBlockStyle, t.codeBlockFg);
             
-            // 添加代码块前的空行和标记
             doc.insertString(doc.getLength(), "\n", codeBlockStyle);
             doc.insertString(doc.getLength(), literal, codeBlockStyle);
-            // 确保代码块后有换行
             if (!literal.endsWith("\n")) {
                 doc.insertString(doc.getLength(), "\n", codeBlockStyle);
             }
@@ -403,12 +488,12 @@ public class MarkdownRenderer {
     private static void renderIndentedCodeBlock(StyledDocument doc, IndentedCodeBlock codeBlock, Style code) throws BadLocationException {
         String literal = codeBlock.getLiteral();
         if (literal != null && !literal.isEmpty()) {
-            // 使用与代码块相同的样式
+            Theme t = theme();
             Style codeBlockStyle = doc.addStyle("indentedCodeBlock", null);
             StyleConstants.setFontFamily(codeBlockStyle, "Consolas");
             StyleConstants.setFontSize(codeBlockStyle, 12);
-            StyleConstants.setBackground(codeBlockStyle, CODE_BLOCK_BG);
-            StyleConstants.setForeground(codeBlockStyle, CODE_BLOCK_FG);
+            StyleConstants.setBackground(codeBlockStyle, t.codeBlockBg);
+            StyleConstants.setForeground(codeBlockStyle, t.codeBlockFg);
             
             doc.insertString(doc.getLength(), "\n", codeBlockStyle);
             doc.insertString(doc.getLength(), literal, codeBlockStyle);
@@ -418,6 +503,168 @@ public class MarkdownRenderer {
         }
     }
     
+    // ======================== 表格渲染 ========================
+
+    /**
+     * 渲染 GFM 表格：两趟处理 — 先收集数据计算列宽，再对齐输出。
+     */
+    private static void renderTable(StyledDocument doc, TableBlock table,
+            Style regular, Style bold, Style italic, Style code, Style link) throws BadLocationException {
+
+        List<List<String>> headerRows = new ArrayList<>();
+        List<List<String>> bodyRows = new ArrayList<>();
+        List<TableCell.Alignment> alignments = new ArrayList<>();
+
+        // --- Pass 1: 收集所有单元格纯文本 + 对齐方式 ---
+        Node section = table.getFirstChild();
+        while (section != null) {
+            boolean isHead = section instanceof TableHead;
+            List<List<String>> target = isHead ? headerRows : bodyRows;
+            Node row = section.getFirstChild();
+            while (row != null) {
+                if (row instanceof TableRow) {
+                    List<String> cells = new ArrayList<>();
+                    Node cell = row.getFirstChild();
+                    while (cell != null) {
+                        if (cell instanceof TableCell) {
+                            cells.add(extractText(cell).trim());
+                            if (isHead && alignments.size() < cells.size()) {
+                                alignments.add(((TableCell) cell).getAlignment());
+                            }
+                        }
+                        cell = cell.getNext();
+                    }
+                    target.add(cells);
+                }
+                row = row.getNext();
+            }
+            section = section.getNext();
+        }
+
+        int numCols = 0;
+        for (List<String> r : headerRows) numCols = Math.max(numCols, r.size());
+        for (List<String> r : bodyRows) numCols = Math.max(numCols, r.size());
+        if (numCols == 0) return;
+        while (alignments.size() < numCols) alignments.add(null);
+
+        // --- 计算每列显示宽度（CJK 感知） ---
+        int[] colW = new int[numCols];
+        for (List<String> r : headerRows) fillColWidths(r, colW);
+        for (List<String> r : bodyRows) fillColWidths(r, colW);
+        for (int i = 0; i < numCols; i++) colW[i] = Math.min(colW[i] + 2, 40);
+
+        // --- 样式 ---
+        Theme t = theme();
+        Style tableMono = getOrCreateStyle(doc, "tableMono", regular);
+        StyleConstants.setFontFamily(tableMono, "Consolas");
+        StyleConstants.setFontSize(tableMono, 12);
+
+        Style headerStyle = doc.addStyle("tableHeader", tableMono);
+        StyleConstants.setBold(headerStyle, true);
+        StyleConstants.setForeground(headerStyle, t.tableHeaderFg);
+        StyleConstants.setBackground(headerStyle, t.tableHeaderBg);
+
+        Style borderStyle = doc.addStyle("tableBorder", tableMono);
+        StyleConstants.setForeground(borderStyle, t.tableBorder);
+
+        Style evenStyle = doc.addStyle("tableRowEven", tableMono);
+        StyleConstants.setBackground(evenStyle, t.tableEvenBg);
+        StyleConstants.setForeground(evenStyle, t.tableCellFg);
+
+        Style oddStyle = doc.addStyle("tableRowOdd", tableMono);
+        StyleConstants.setBackground(oddStyle, t.tableOddBg);
+        StyleConstants.setForeground(oddStyle, t.tableCellFg);
+
+        if (doc.getLength() > 0) doc.insertString(doc.getLength(), "\n", regular);
+
+        // --- Pass 2: 渲染 ---
+        for (List<String> row : headerRows) {
+            renderTableRow(doc, row, colW, alignments, numCols, headerStyle, borderStyle);
+        }
+        renderTableSeparator(doc, colW, numCols, borderStyle);
+        for (int i = 0; i < bodyRows.size(); i++) {
+            Style rowStyle = (i % 2 == 0) ? evenStyle : oddStyle;
+            renderTableRow(doc, bodyRows.get(i), colW, alignments, numCols, rowStyle, borderStyle);
+        }
+    }
+
+    private static void renderTableRow(StyledDocument doc, List<String> cells,
+            int[] colW, List<TableCell.Alignment> aligns, int numCols,
+            Style cellStyle, Style borderStyle) throws BadLocationException {
+        for (int i = 0; i < numCols; i++) {
+            String text = i < cells.size() ? cells.get(i) : "";
+            TableCell.Alignment align = i < aligns.size() ? aligns.get(i) : null;
+            String padded = " " + padToWidth(text, colW[i] - 1, align);
+            doc.insertString(doc.getLength(), padded, cellStyle);
+            if (i < numCols - 1) {
+                doc.insertString(doc.getLength(), "│", borderStyle);
+            }
+        }
+        doc.insertString(doc.getLength(), "\n", cellStyle);
+    }
+
+    private static void renderTableSeparator(StyledDocument doc,
+            int[] colW, int numCols, Style borderStyle) throws BadLocationException {
+        for (int i = 0; i < numCols; i++) {
+            doc.insertString(doc.getLength(), "─".repeat(colW[i]), borderStyle);
+            if (i < numCols - 1) {
+                doc.insertString(doc.getLength(), "┼", borderStyle);
+            }
+        }
+        doc.insertString(doc.getLength(), "\n", borderStyle);
+    }
+
+    private static void fillColWidths(List<String> row, int[] colW) {
+        for (int i = 0; i < row.size() && i < colW.length; i++) {
+            colW[i] = Math.max(colW[i], displayWidth(row.get(i)));
+        }
+    }
+
+    /**
+     * 将文本填充到指定显示宽度（CJK 感知），支持左/中/右对齐。
+     */
+    private static String padToWidth(String s, int targetWidth, TableCell.Alignment align) {
+        int current = displayWidth(s);
+        int padding = targetWidth - current;
+        if (padding <= 0) return s;
+        if (align == TableCell.Alignment.RIGHT) {
+            return " ".repeat(padding) + s;
+        } else if (align == TableCell.Alignment.CENTER) {
+            int left = padding / 2;
+            return " ".repeat(left) + s + " ".repeat(padding - left);
+        }
+        return s + " ".repeat(padding);
+    }
+
+    /**
+     * 计算字符串的显示宽度（CJK / 全角字符占 2 列）。
+     */
+    private static int displayWidth(String s) {
+        if (s == null) return 0;
+        int w = 0;
+        for (int i = 0; i < s.length(); ) {
+            int cp = s.codePointAt(i);
+            w += isWideChar(cp) ? 2 : 1;
+            i += Character.charCount(cp);
+        }
+        return w;
+    }
+
+    private static boolean isWideChar(int cp) {
+        Character.UnicodeBlock b = Character.UnicodeBlock.of(cp);
+        return b == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS
+                || b == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A
+                || b == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_B
+                || b == Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS
+                || b == Character.UnicodeBlock.CJK_SYMBOLS_AND_PUNCTUATION
+                || b == Character.UnicodeBlock.HALFWIDTH_AND_FULLWIDTH_FORMS
+                || b == Character.UnicodeBlock.HIRAGANA
+                || b == Character.UnicodeBlock.KATAKANA
+                || b == Character.UnicodeBlock.HANGUL_SYLLABLES;
+    }
+
+    // ======================== 内联内容渲染 ========================
+
     /**
      * 渲染内联内容（文本、粗体、斜体、代码、链接）
      */
@@ -541,35 +788,34 @@ public class MarkdownRenderer {
         String toolName = parts[0];
         String params = parts.length > 1 ? parts[1] : "";
         
-        // 创建样式
+        Theme t = theme();
         Style blockBgStyle = doc.addStyle("toolBlockBg", regular);
-        StyleConstants.setBackground(blockBgStyle, TOOL_BLOCK_BG);
+        StyleConstants.setBackground(blockBgStyle, t.toolBlockBg);
         
         Style iconStyle = doc.addStyle("toolIcon", blockBgStyle);
-        StyleConstants.setForeground(iconStyle, TOOL_ICON_COLOR);
+        StyleConstants.setForeground(iconStyle, t.toolIcon);
         StyleConstants.setFontSize(iconStyle, 13);
         StyleConstants.setBold(iconStyle, true);
-        StyleConstants.setBackground(iconStyle, TOOL_BLOCK_BG);
+        StyleConstants.setBackground(iconStyle, t.toolBlockBg);
         
         Style nameStyle = doc.addStyle("toolName", blockBgStyle);
-        StyleConstants.setForeground(nameStyle, TOOL_NAME_COLOR);
+        StyleConstants.setForeground(nameStyle, t.toolName);
         StyleConstants.setFontFamily(nameStyle, "Consolas");
         StyleConstants.setFontSize(nameStyle, 13);
         StyleConstants.setBold(nameStyle, true);
-        StyleConstants.setBackground(nameStyle, TOOL_BLOCK_BG);
+        StyleConstants.setBackground(nameStyle, t.toolBlockBg);
         
         Style paramKeyStyle = doc.addStyle("toolParamKey", blockBgStyle);
-        StyleConstants.setForeground(paramKeyStyle, TOOL_PARAM_KEY_COLOR);
+        StyleConstants.setForeground(paramKeyStyle, t.toolParamKey);
         StyleConstants.setFontFamily(paramKeyStyle, "Consolas");
         StyleConstants.setFontSize(paramKeyStyle, 11);
-        StyleConstants.setBackground(paramKeyStyle, TOOL_BLOCK_BG);
+        StyleConstants.setBackground(paramKeyStyle, t.toolBlockBg);
         
-        // 参数值样式 - 使用支持中文的字体
         Style paramValStyle = doc.addStyle("toolParamVal", blockBgStyle);
-        StyleConstants.setForeground(paramValStyle, TOOL_PARAM_VAL_COLOR);
+        StyleConstants.setForeground(paramValStyle, t.toolParamVal);
         StyleConstants.setFontFamily(paramValStyle, "Microsoft YaHei");
         StyleConstants.setFontSize(paramValStyle, 11);
-        StyleConstants.setBackground(paramValStyle, TOOL_BLOCK_BG);
+        StyleConstants.setBackground(paramValStyle, t.toolBlockBg);
         
         // 渲染：▶ 工具名（独立一行）
         doc.insertString(doc.getLength(), "▶ ", iconStyle);
@@ -617,9 +863,10 @@ public class MarkdownRenderer {
      * 简单渲染工具块（用于旧格式兼容）
      */
     private static void renderToolBlockSimple(StyledDocument doc, String content, Style regular) throws BadLocationException {
+        Theme t = theme();
         Style blockStyle = doc.addStyle("toolBlockSimple", regular);
-        StyleConstants.setBackground(blockStyle, TOOL_BLOCK_BG);
-        StyleConstants.setForeground(blockStyle, TOOL_NAME_COLOR);
+        StyleConstants.setBackground(blockStyle, t.toolBlockBg);
+        StyleConstants.setForeground(blockStyle, t.toolName);
         StyleConstants.setFontFamily(blockStyle, "Consolas");
         StyleConstants.setFontSize(blockStyle, 12);
         StyleConstants.setBold(blockStyle, true);
@@ -641,83 +888,29 @@ public class MarkdownRenderer {
         if (startPos < 0) {
             startPos = 0;
         }
+        Theme t = resolveTheme(textPane);
         StyledDocument doc = textPane.getStyledDocument();
         
         try {
-            // 删除从startPos开始的所有内容
             int currentLength = doc.getLength();
             if (currentLength > startPos) {
                 doc.remove(startPos, currentLength - startPos);
             }
             
-            // 设置默认样式（与 appendMarkdown 保持一致）
-            Style defaultStyle = StyleContext.getDefaultStyleContext().getStyle(StyleContext.DEFAULT_STYLE);
-            Style regular = getOrCreateStyle(doc, "regular", defaultStyle);
-            StyleConstants.setFontFamily(regular, "Microsoft YaHei");
-            StyleConstants.setFontSize(regular, 13);
-            StyleConstants.setForeground(regular, new Color(51, 51, 51));
-            StyleConstants.setBackground(regular, Color.WHITE);
-            StyleConstants.setLineSpacing(regular, 0.3f);  // 行距：30% 额外间距
+            Style[] styles = buildStyles(doc, t);
 
-            // 一级标题 - 红色粗体
-            Style header1 = getOrCreateStyle(doc, "header1", regular);
-            StyleConstants.setFontSize(header1, 15);
-            StyleConstants.setBold(header1, true);
-            StyleConstants.setForeground(header1, HEADER1_COLOR);
-
-            // 二级标题 - 蓝色粗体
-            Style header2 = getOrCreateStyle(doc, "header2", regular);
-            StyleConstants.setFontSize(header2, 14);
-            StyleConstants.setBold(header2, true);
-            StyleConstants.setForeground(header2, HEADER2_COLOR);
-
-            // 三级标题 - 深灰粗体
-            Style header3 = getOrCreateStyle(doc, "header3", regular);
-            StyleConstants.setFontSize(header3, 13);
-            StyleConstants.setBold(header3, true);
-            StyleConstants.setForeground(header3, HEADER3_COLOR);
-
-            // 粗体
-            Style bold = getOrCreateStyle(doc, "bold", regular);
-            StyleConstants.setBold(bold, true);
-            StyleConstants.setForeground(bold, BOLD_COLOR);
-
-            // 斜体
-            Style italic = getOrCreateStyle(doc, "italic", regular);
-            StyleConstants.setItalic(italic, true);
-            StyleConstants.setForeground(italic, ITALIC_COLOR);
-
-            // 行内代码 - 红色带浅灰背景
-            Style code = getOrCreateStyle(doc, "code", regular);
-            StyleConstants.setFontFamily(code, "Consolas");
-            StyleConstants.setFontSize(code, 12);
-            StyleConstants.setBackground(code, CODE_BG_COLOR);
-            StyleConstants.setForeground(code, CODE_COLOR);
-
-            // 列表
-            Style list = getOrCreateStyle(doc, "list", regular);
-            StyleConstants.setForeground(list, LIST_COLOR);
-
-            // 链接 - 蓝色下划线
-            Style link = getOrCreateStyle(doc, "link", regular);
-            StyleConstants.setForeground(link, LINK_COLOR);
-            StyleConstants.setUnderline(link, true);
-
-            // 预处理：提取工具块，避免 Markdown 解析器破坏 | 字符
             try {
-                renderWithToolBlocks(doc, markdown, regular, bold, italic, code, link, header1, header2, header3, list);
+                renderWithToolBlocks(doc, markdown, styles[0], styles[1], styles[2], styles[3], styles[4], styles[5], styles[6], styles[7], styles[8]);
             } catch (Exception e) {
-                // 如果解析失败（比如不完整的Markdown），先用纯文本显示
-                doc.insertString(doc.getLength(), markdown, regular);
+                doc.insertString(doc.getLength(), markdown, styles[0]);
             }
         } catch (BadLocationException e) {
-            // 如果出错，记录但不中断
             try {
                 Style regular = getOrCreateStyle(doc, "regular", 
                     StyleContext.getDefaultStyleContext().getStyle(StyleContext.DEFAULT_STYLE));
                 doc.insertString(doc.getLength(), markdown, regular);
             } catch (BadLocationException e2) {
-                // 忽略
+                // ignored
             }
         }
     }

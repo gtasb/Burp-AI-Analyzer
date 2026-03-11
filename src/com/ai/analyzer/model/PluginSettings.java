@@ -1,6 +1,7 @@
 package com.ai.analyzer.model;
 
 import java.io.Serializable;
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -26,12 +27,14 @@ public class PluginSettings implements Serializable {
     private String chromeMcpUrl = ""; // Chrome MCP 服务器地址
     private boolean enableRag = false; // 默认禁用 RAG
     private String ragDocumentsPath = ""; // RAG 文档路径
+    private String workplaceDirectoryPath = ""; // 统一工作目录（skills/rag/python 均基于此目录）
     
     // 前置扫描器配置
     private boolean enablePreScanFilter = false; // 默认禁用前置扫描器（快速规则匹配）
     
     // Python 脚本执行配置
     private boolean enablePythonScript = false;
+    private boolean enableNotebook = false;
     
     // Skills 配置
     private boolean enableSkills = false; // 默认禁用 Skills
@@ -245,7 +248,8 @@ public class PluginSettings implements Serializable {
     }
     
     public String getRagMcpDocumentsPath() {
-        return ragMcpDocumentsPath;
+        String effective = resolveRagDocumentsPath();
+        return !effective.isEmpty() ? effective : ragMcpDocumentsPath;
     }
     
     public void setRagMcpDocumentsPath(String ragMcpDocumentsPath) {
@@ -277,7 +281,8 @@ public class PluginSettings implements Serializable {
     }
     
     public String getRagDocumentsPath() {
-        return ragDocumentsPath;
+        String effective = resolveRagDocumentsPath();
+        return !effective.isEmpty() ? effective : ragDocumentsPath;
     }
     
     public void setRagDocumentsPath(String ragDocumentsPath) {
@@ -302,11 +307,41 @@ public class PluginSettings implements Serializable {
     }
     
     public String getSkillsDirectoryPath() {
-        return skillsDirectoryPath;
+        String effective = resolveSkillsDirectoryPath();
+        return !effective.isEmpty() ? effective : skillsDirectoryPath;
     }
     
     public void setSkillsDirectoryPath(String skillsDirectoryPath) {
         this.skillsDirectoryPath = skillsDirectoryPath;
+    }
+
+    public String getWorkplaceDirectoryPath() {
+        return workplaceDirectoryPath != null ? workplaceDirectoryPath : "";
+    }
+
+    public void setWorkplaceDirectoryPath(String workplaceDirectoryPath) {
+        this.workplaceDirectoryPath = workplaceDirectoryPath != null ? workplaceDirectoryPath.trim() : "";
+    }
+
+    public boolean hasWorkplaceDirectory() {
+        return workplaceDirectoryPath != null && !workplaceDirectoryPath.trim().isEmpty();
+    }
+
+    public String resolveSkillsDirectoryPath() {
+        return resolveUnderWorkplace("skills");
+    }
+
+    public String resolveRagDocumentsPath() {
+        return resolveUnderWorkplace("rag");
+    }
+
+    public String resolvePythonWorkingDirectoryPath() {
+        return resolveUnderWorkplace("python-workdir");
+    }
+
+    private String resolveUnderWorkplace(String subDirName) {
+        if (!hasWorkplaceDirectory()) return "";
+        return new File(workplaceDirectoryPath.trim(), subDirName).getAbsolutePath();
     }
     
     public List<String> getEnabledSkillNames() {
@@ -324,6 +359,14 @@ public class PluginSettings implements Serializable {
     
     public void setEnablePythonScript(boolean enablePythonScript) {
         this.enablePythonScript = enablePythonScript;
+    }
+
+    public boolean isEnableNotebook() {
+        return enableNotebook;
+    }
+
+    public void setEnableNotebook(boolean enableNotebook) {
+        this.enableNotebook = enableNotebook;
     }
     
     // 前置扫描器配置

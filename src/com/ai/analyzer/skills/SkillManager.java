@@ -147,25 +147,28 @@ public class SkillManager {
                         name = skillDir.getFileName().toString();
                     }
                     String content = extractContent(raw);
+                    String safeName = ensureNonBlank(name, skillDir.getFileName().toString());
+                    String safeDesc = ensureNonBlank(desc, "Skill: " + safeName);
+                    String safeContent = ensureNonBlank(content, "No additional instructions.");
 
                     List<SkillResource> resources = loadResourcesSafely(skillDir);
 
                     dev.langchain4j.skills.Skill officialSkill = dev.langchain4j.skills.Skill.builder()
-                            .name(name)
-                            .description(desc != null ? desc : "")
-                            .content(content != null ? content : "")
+                            .name(safeName)
+                            .description(safeDesc)
+                            .content(safeContent)
                             .resources(resources)
                             .build();
 
-                    Skill entry = new Skill(name, desc, content, skillMd.toString());
+                    Skill entry = new Skill(safeName, safeDesc, safeContent, skillMd.toString());
                     entry.setFolderPath(skillDir.toString());
                     entry.setBuiltOfficialSkill(officialSkill);
-                    entry.setEnabled(previouslyEnabled.contains(name));
+                    entry.setEnabled(previouslyEnabled.contains(safeName));
                     parseCustomToolsFromRaw(entry, raw, skillDir.toString());
-                    skills.put(name, entry);
-                    logInfo("(手工) 已加载 Skill: " + name + " (资源: " + resources.size() + ")");
-                } catch (IOException e) {
-                    logError("手工加载失败: " + skillDir + " - " + e.getMessage());
+                    skills.put(safeName, entry);
+                    logInfo("(手工) 已加载 Skill: " + safeName + " (资源: " + resources.size() + ")");
+                } catch (Exception e) {
+                    logError("手工加载失败（已跳过该技能）: " + skillDir + " - " + e.getMessage());
                 }
             }
         } catch (IOException e) {
@@ -391,11 +394,19 @@ public class SkillManager {
     private dev.langchain4j.skills.Skill toOfficialSkill(Skill entry) {
         if (entry.getFileSystemSkill() != null) return entry.getFileSystemSkill();
         if (entry.getBuiltOfficialSkill() != null) return entry.getBuiltOfficialSkill();
+        String safeName = ensureNonBlank(entry.getName(), "unknown-skill");
+        String safeDesc = ensureNonBlank(entry.getDescription(), "Skill: " + safeName);
+        String safeContent = ensureNonBlank(entry.getContent(), "No additional instructions.");
         return dev.langchain4j.skills.Skill.builder()
-                .name(entry.getName())
-                .description(entry.getDescription() != null ? entry.getDescription() : "")
-                .content(entry.getContent() != null ? entry.getContent() : "")
+                .name(safeName)
+                .description(safeDesc)
+                .content(safeContent)
                 .build();
+    }
+
+    private static String ensureNonBlank(String value, String fallback) {
+        if (value == null || value.trim().isEmpty()) return fallback;
+        return value.trim();
     }
 
     /**

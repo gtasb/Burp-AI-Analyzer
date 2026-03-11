@@ -1,7 +1,7 @@
 package com.ai.analyzer.ui;
 
 import burp.api.montoya.MontoyaApi;
-import com.ai.analyzer.api.AgentApiClient;
+import com.ai.analyzer.Client.AgentApiClient;
 import com.ai.analyzer.utils.MarkdownRenderer;
 // import com.example.ai.analyzer.Tools.ToolDefinitions;
 // import com.example.ai.analyzer.Tools.ToolExecutor;
@@ -12,6 +12,8 @@ import java.awt.*;
 import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener;
 import java.io.*;
+import java.security.MessageDigest;
+import java.util.Base64;
 import java.util.ArrayList;
 import java.util.List;
 import burp.api.montoya.http.message.HttpRequestResponse;
@@ -29,6 +31,7 @@ public class ChatPanel extends JPanel {
     private JCheckBox enableSearchCheckBox;
     private List<ChatMessage> chatHistory;
     private HttpRequestResponse currentRequest;
+    private String lastSentRequestFingerprint;
     private boolean isStreaming = false;
     private SwingWorker<Void, String> currentWorker;
     // private ToolExecutor toolExecutor;
@@ -112,8 +115,7 @@ public class ChatPanel extends JPanel {
         };
         chatArea.setEditable(false);
         chatArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
-        chatArea.setBackground(Color.WHITE);
-        chatArea.setForeground(Color.BLACK);
+        applyEditorTheme(chatArea);
         JScrollPane chatScrollPane = new JScrollPane(chatArea);
         chatScrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
         chatScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
@@ -122,8 +124,7 @@ public class ChatPanel extends JPanel {
         debugLogArea = new JTextArea();
         debugLogArea.setEditable(false);
         debugLogArea.setFont(new Font("Consolas", Font.PLAIN, 11));
-        debugLogArea.setBackground(new Color(240, 240, 240));
-        debugLogArea.setForeground(Color.BLACK);
+        applyEditorTheme(debugLogArea);
         debugLogArea.setRows(5);
         debugLogScrollPane = new JScrollPane(debugLogArea);
         debugLogScrollPane.setBorder(BorderFactory.createTitledBorder("Debug日志"));
@@ -197,9 +198,8 @@ public class ChatPanel extends JPanel {
         inputField = new JTextArea(2, 0);
         inputField.setLineWrap(true);
         inputField.setWrapStyleWord(true);
-        inputField.setBackground(Color.WHITE);
-        inputField.setForeground(Color.BLACK);
         inputField.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        applyEditorTheme(inputField);
         inputField.addKeyListener(new KeyListener() {
             @Override
             public void keyTyped(KeyEvent e) {}
@@ -302,8 +302,14 @@ public class ChatPanel extends JPanel {
         sendButton.setEnabled(false);
         stopButton.setEnabled(true);
         
-        // 检查HTTP内容是否过长，提前通知用户
-        if (currentRequest != null) {
+        // 检查HTTP内容是否过长，提前通知用户（仅在本轮会发送请求详情时提示）
+        String currentFingerprint = buildRequestFingerprint(currentRequest);
+        boolean shouldSendRequestPayload = currentRequest != null
+                && (currentFingerprint == null || !currentFingerprint.equals(lastSentRequestFingerprint));
+        if (currentRequest != null && !shouldSendRequestPayload) {
+            appendToChat("系统", "当前请求响应与上次一致，本轮仅发送新增问题。", false);
+        }
+        if (shouldSendRequestPayload) {
             int totalLength = 0;
             if (currentRequest.request() != null) {
                 totalLength += currentRequest.request().toByteArray().getBytes().length;
@@ -385,38 +391,81 @@ public class ChatPanel extends JPanel {
                     final long RENDER_INTERVAL_MS = 200;
 
                     api.logging().logToOutput("[ChatPanel] 开始调用analyzeRequestStream");
-                    apiClient.analyzeRequestStream(
-                        currentRequest,
-                        finalMessage,
-                        chunk -> {
-                            if (currentWorker.isCancelled() || !isStreaming) return;
-
-                            fullResponse.append(chunk);
-
-                            long now = System.currentTimeMillis();
-                            if (now - lastRenderTime[0] < RENDER_INTERVAL_MS) return;
-                            lastRenderTime[0] = now;
-
-                            String snapshot = fullResponse.toString();
-                            SwingUtilities.invokeLater(() -> {
-                                if (currentWorker.isCancelled() || !isStreaming) return;
-                                try {
-                                    if (aiMessageStartPos >= 0) {
-                                        MarkdownRenderer.appendMarkdownStreaming(chatArea, snapshot, aiMessageStartPos);
-                                        chatArea.setCaretPosition(chatArea.getStyledDocument().getLength());
-                                    } else {
-                                        StyledDocument doc = chatArea.getStyledDocument();
-                                        Style messageStyle = doc.addStyle("message", null);
-                                        StyleConstants.setForeground(messageStyle, Color.BLACK);
-                                        doc.insertString(doc.getLength(), chunk, messageStyle);
-                                        chatArea.setCaretPosition(doc.getLength());
-                                    }
-                                } catch (Exception e) {
-                                    api.logging().logToError("流式Markdown渲染失败: " + e.getMessage());
-                                }
-                            });
-                        }
+                    apiClient.setSystemNoticeConsumer(systemNotice ->
+                        SwingUtilities.invokeLater(() -> appendToChat("系统", systemNotice, false))
                     );
+                    try {
+                        if (shouldSendRequestPayload && currentRequest != null) {
+                            apiClient.analyzeRequestStream(
+                                currentRequest,
+                                finalMessage,
+                                chunk -> {
+                                    if (currentWorker.isCancelled() || !isStreaming) return;
+
+                                    fullResponse.append(chunk);
+
+                                    long now = System.currentTimeMillis();
+                                    if (now - lastRenderTime[0] < RENDER_INTERVAL_MS) return;
+                                    lastRenderTime[0] = now;
+
+                                    String snapshot = fullResponse.toString();
+                                    SwingUtilities.invokeLater(() -> {
+                                        if (currentWorker.isCancelled() || !isStreaming) return;
+                                        try {
+                                            if (aiMessageStartPos >= 0) {
+                                                MarkdownRenderer.appendMarkdownStreaming(chatArea, snapshot, aiMessageStartPos);
+                                                chatArea.setCaretPosition(chatArea.getStyledDocument().getLength());
+                                            } else {
+                                                StyledDocument doc = chatArea.getStyledDocument();
+                                                Style messageStyle = doc.addStyle("message", null);
+                                                StyleConstants.setForeground(messageStyle, Color.BLACK);
+                                                doc.insertString(doc.getLength(), chunk, messageStyle);
+                                                chatArea.setCaretPosition(doc.getLength());
+                                            }
+                                        } catch (Exception e) {
+                                            api.logging().logToError("流式Markdown渲染失败: " + e.getMessage());
+                                        }
+                                    });
+                                }
+                            );
+                            lastSentRequestFingerprint = currentFingerprint;
+                        } else {
+                            apiClient.analyzeRequestStream(
+                                "",
+                                finalMessage,
+                                chunk -> {
+                                    if (currentWorker.isCancelled() || !isStreaming) return;
+
+                                    fullResponse.append(chunk);
+
+                                    long now = System.currentTimeMillis();
+                                    if (now - lastRenderTime[0] < RENDER_INTERVAL_MS) return;
+                                    lastRenderTime[0] = now;
+
+                                    String snapshot = fullResponse.toString();
+                                    SwingUtilities.invokeLater(() -> {
+                                        if (currentWorker.isCancelled() || !isStreaming) return;
+                                        try {
+                                            if (aiMessageStartPos >= 0) {
+                                                MarkdownRenderer.appendMarkdownStreaming(chatArea, snapshot, aiMessageStartPos);
+                                                chatArea.setCaretPosition(chatArea.getStyledDocument().getLength());
+                                            } else {
+                                                StyledDocument doc = chatArea.getStyledDocument();
+                                                Style messageStyle = doc.addStyle("message", null);
+                                                StyleConstants.setForeground(messageStyle, Color.BLACK);
+                                                doc.insertString(doc.getLength(), chunk, messageStyle);
+                                                chatArea.setCaretPosition(doc.getLength());
+                                            }
+                                        } catch (Exception e) {
+                                            api.logging().logToError("流式Markdown渲染失败: " + e.getMessage());
+                                        }
+                                    });
+                                }
+                            );
+                        }
+                    } finally {
+                        apiClient.setSystemNoticeConsumer(null);
+                    }
                     
                     api.logging().logToOutput("[ChatPanel] analyzeRequestStream调用完成，fullResponse长度: " + fullResponse.length());
                     api.logging().logToOutput("[ChatPanel] fullResponse内容: " + (fullResponse.length() > 500 ? fullResponse.substring(0, 500) + "..." : fullResponse.toString()));
@@ -530,7 +579,8 @@ public class ChatPanel extends JPanel {
             
             // 消息样式
             Style messageStyle = doc.addStyle("message", null);
-            StyleConstants.setForeground(messageStyle, Color.BLACK);
+            Color textColor = UIManager.getColor("TextArea.foreground");
+            StyleConstants.setForeground(messageStyle, textColor != null ? textColor : Color.BLACK);
             
             // 添加发送者和消息
             doc.insertString(doc.getLength(), sender + ": ", senderStyle);
@@ -542,6 +592,19 @@ public class ChatPanel extends JPanel {
         } catch (Exception e) {
             api.logging().logToError("添加聊天消息失败: " + e.getMessage());
         }
+    }
+
+    private void applyEditorTheme(JTextComponent component) {
+        if (component == null) return;
+        Color bg = UIManager.getColor("TextArea.background");
+        Color fg = UIManager.getColor("TextArea.foreground");
+        Color caret = UIManager.getColor("TextArea.caretForeground");
+        if (bg == null) bg = UIManager.getColor("Panel.background");
+        if (fg == null) fg = UIManager.getColor("Panel.foreground");
+        if (caret == null) caret = fg;
+        if (bg != null) component.setBackground(bg);
+        if (fg != null) component.setForeground(fg);
+        if (caret != null) component.setCaretColor(caret);
     }
 
     private void clearContext() {
@@ -561,11 +624,15 @@ public class ChatPanel extends JPanel {
         // 清空 Assistant 的聊天记忆（共享实例）
         // 注意：apiClient.clearContext() 内部已经会先调用 cancelStreaming()
         apiClient.clearContext();
+        lastSentRequestFingerprint = null;
         api.logging().logToOutput("聊天上下文已清空");
     }
 
     public void setCurrentRequest(HttpRequestResponse request) {
         this.currentRequest = request;
+        if (request == null) {
+            lastSentRequestFingerprint = null;
+        }
         if (request != null) {
             appendToChat("系统", "已更新当前请求信息", false);
         }
@@ -573,6 +640,23 @@ public class ChatPanel extends JPanel {
 
     public HttpRequestResponse getCurrentRequest() {
         return currentRequest;
+    }
+
+    private String buildRequestFingerprint(HttpRequestResponse request) {
+        if (request == null) return null;
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            if (request.request() != null) {
+                digest.update(request.request().toByteArray().getBytes());
+            }
+            if (request.response() != null) {
+                digest.update(request.response().toByteArray().getBytes());
+            }
+            return Base64.getEncoder().encodeToString(digest.digest());
+        } catch (Exception e) {
+            api.logging().logToError("计算请求指纹失败: " + e.getMessage());
+            return null;
+        }
     }
 
     public void notifyRequestUpdated(HttpRequestResponse request) {

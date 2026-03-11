@@ -1,6 +1,6 @@
 package com.ai.analyzer.multiModels;
 
-import com.ai.analyzer.api.AgentConfig.ApiProvider;
+import com.ai.analyzer.Client.AgentConfig.ApiProvider;
 import com.ai.analyzer.utils.JsonParser;
 import dev.langchain4j.community.model.dashscope.QwenChatRequestParameters;
 import dev.langchain4j.community.model.dashscope.QwenStreamingChatModel;

@@ -5,7 +5,7 @@ import com.ai.analyzer.skills.SkillManager;
 /**
  * 被动扫描系统提示词构建器
  *
- * 与 {@link com.ai.analyzer.api.SystemPromptBuilder} 并行，
+ * 与 {@link com.ai.analyzer.Client.SystemPromptBuilder} 并行，
  * 专为被动扫描（DAST 风格）场景定制。
  *
  * 设计原则：
@@ -50,7 +50,7 @@ public class SystemPromptBuilder {
             buildSearchSection(prompt);
         }
 
-        buildVulnerabilityStrategies(prompt);
+        //buildVulnerabilityStrategies(prompt);
         buildOutputFormat(prompt);
 
         if (enableSkills && skillManager != null && skillManager.hasEnabledSkills()) {
@@ -107,7 +107,6 @@ public class SystemPromptBuilder {
         prompt.append("- ❌ 对非目标系统发送请求\n");
         prompt.append("- ❌ 发送破坏性 payload（DELETE、DROP 等）\n\n");
         prompt.append("- ❌ 检测CORS配置错误漏洞\n");
-        prompt.append("- ❌ 使用表格语法（`|` 和 `---`）\n");
     }
 
     private void buildSearchSection(StringBuilder prompt) {
@@ -165,7 +164,7 @@ public class SystemPromptBuilder {
 
     private void buildOutputFormat(StringBuilder prompt) {
         prompt.append("# 输出格式\n");
-        prompt.append("- 使用 Markdown 格式，**禁止使用表格**（不要用 `|` 和 `---`）\n");
+        prompt.append("- 使用 Markdown 格式，禁止使用表格格式\n");
         prompt.append("- 风险等级: [严重/高/中/无]\n");
         prompt.append("- 如有发现，报告：问题名称、风险点、测试结果、验证方法\n");
         prompt.append("- 无中危以上问题则输出：风险等级: 无，未发现明显的安全问题\n\n");
