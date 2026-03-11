@@ -64,7 +64,7 @@ class PassiveScanManagerTest {
         @Test
         @DisplayName("should_have_default_thread_count_when_created")
         void should_have_default_thread_count_when_created() {
-            assertThat(manager.getThreadCount()).isEqualTo(3);
+            assertThat(manager.getThreadCount()).isEqualTo(10);
         }
 
         @Test
@@ -89,7 +89,7 @@ class PassiveScanManagerTest {
         @DisplayName("should_clamp_to_max_when_exceeds_maximum")
         void should_clamp_to_max_when_exceeds_maximum() {
             manager.setThreadCount(100);
-            assertThat(manager.getThreadCount()).isEqualTo(10);
+            assertThat(manager.getThreadCount()).isEqualTo(50);
         }
 
         @Test
@@ -112,8 +112,8 @@ class PassiveScanManagerTest {
             manager.setThreadCount(1);
             assertThat(manager.getThreadCount()).isEqualTo(1);
 
-            manager.setThreadCount(10);
-            assertThat(manager.getThreadCount()).isEqualTo(10);
+            manager.setThreadCount(50);
+            assertThat(manager.getThreadCount()).isEqualTo(50);
         }
     }
 
