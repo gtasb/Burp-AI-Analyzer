@@ -233,6 +233,12 @@ mvn clean package
 
 ## 📝 更新日志
 
+### v1.2.1
+- ✅ 修复了一些问题
+- ✅ 增加主动模式
+- ✅ 增加 Notebook 模块，现在可以把项目中的重要信息记载到其中，更好进行人机协同
+- ✅ 增加 workplace 功能，用于统一管理 skills/知识库/python脚本/Notebook
+
 ### v1.2.0
 - ✅ 允许 Agent 运行 python 代码
 - ✅ 完善了被动扫描功能
