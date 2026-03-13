@@ -76,7 +76,53 @@ public class AgentApiClient {
     private PreScanFilterManager preScanFilterManager;
     private volatile int chatMemoryMaxMessages = DEFAULT_CHAT_MEMORY_MAX_MESSAGES;
     private volatile Consumer<String> systemNoticeConsumer;
-    
+
+    // ========== 共享聊天 UI 历史（供多个 ChatPanel 实例同步显示） ==========
+    private static final int MAX_SHARED_UI_HISTORY = 200;
+    private final java.util.List<Object[]> sharedChatUiHistory = new java.util.ArrayList<>();
+    private final java.util.List<Runnable> chatUiListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private volatile int sharedHistoryVersion = 0;
+
+    public int getSharedHistoryVersion() { return sharedHistoryVersion; }
+
+    public java.util.List<Object[]> getSharedChatUiHistorySnapshot() {
+        synchronized (sharedChatUiHistory) {
+            return new java.util.ArrayList<>(sharedChatUiHistory);
+        }
+    }
+    public int getSharedChatUiHistorySize() {
+        synchronized (sharedChatUiHistory) { return sharedChatUiHistory.size(); }
+    }
+    public Object[] getSharedChatUiHistoryEntry(int index) {
+        synchronized (sharedChatUiHistory) { return sharedChatUiHistory.get(index); }
+    }
+    public void addChatUiEntryDirect(Object[] entry) {
+        synchronized (sharedChatUiHistory) { sharedChatUiHistory.add(entry); }
+    }
+    public void addChatUiEntry(String sender, String content, boolean isUser) {
+        synchronized (sharedChatUiHistory) {
+            sharedChatUiHistory.add(new Object[]{sender, content, isUser});
+            if (sharedChatUiHistory.size() > MAX_SHARED_UI_HISTORY) {
+                sharedChatUiHistory.subList(0, sharedChatUiHistory.size() - MAX_SHARED_UI_HISTORY).clear();
+            }
+            sharedHistoryVersion++;
+        }
+        for (Runnable listener : chatUiListeners) {
+            try { listener.run(); } catch (Exception ignored) {}
+        }
+    }
+    public void addChatUiListener(Runnable listener) { chatUiListeners.add(listener); }
+    public void removeChatUiListener(Runnable listener) { chatUiListeners.remove(listener); }
+    public void clearSharedChatUiHistory() {
+        synchronized (sharedChatUiHistory) {
+            sharedChatUiHistory.clear();
+            sharedHistoryVersion++;
+        }
+        for (Runnable listener : chatUiListeners) {
+            try { listener.run(); } catch (Exception ignored) {}
+        }
+    }
+
     // ========== 状态标志 ==========
     private boolean isFirstInitialization = true;
     private boolean needsReinitialization = false;
@@ -318,6 +364,14 @@ public class AgentApiClient {
             config.setEnableNotebook(enableNotebook);
             assistant = null;
             logInfo("Notebook 工具已" + (enableNotebook ? "启用" : "禁用"));
+        }
+    }
+
+    public void setCustomSystemPrompt(String prompt) {
+        String normalized = prompt == null ? "" : prompt;
+        if (!java.util.Objects.equals(config.getCustomSystemPrompt(), normalized)) {
+            config.setCustomSystemPrompt(normalized);
+            cachedSystemPrompt = null;
         }
     }
 
@@ -1052,6 +1106,7 @@ public class AgentApiClient {
                 config.isEnableFileSystemAccess(), config.isEnableSkills(),
                 config.isEnableNotebook(),
                 config.getRagMcpDocumentsPath(),
+                config.getCustomSystemPrompt(),
                 skillManager != null ? skillManager.getEnabledSkillCount() : 0);
         String cached = cachedSystemPrompt;
         if (cached != null && hash == cachedPromptConfigHash) return cached;
@@ -1065,6 +1120,7 @@ public class AgentApiClient {
                 .enableSkills(config.isEnableSkills())
                 .ragMcpDocumentsPath(config.getRagMcpDocumentsPath())
                 .skillManager(skillManager)
+                .customBasePrompt(config.getCustomSystemPrompt())
                 .build();
         cachedSystemPrompt = cached;
         cachedPromptConfigHash = hash;
