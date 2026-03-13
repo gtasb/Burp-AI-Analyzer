@@ -472,11 +472,6 @@ public class PassiveScanManager {
      * 手动添加单个请求到扫描队列
      */
     public ScanResult addRequest(HttpRequestResponse requestResponse) {
-        if (!isRunning.get()) {
-            logInfo("被动扫描未启动，请先启动");
-            return null;
-        }
-        
         ScanResult result = new ScanResult(nextId.getAndIncrement(), requestResponse);
         String dedupeKey = result.getDeduplicationKey();
         
@@ -489,17 +484,18 @@ public class PassiveScanManager {
         scanResults.add(result);
         totalCount.incrementAndGet();
         
-        if (scanQueue.offer(result)) {
-            queuedCount.incrementAndGet();
-            if (onNewRequestQueued != null) {
-                onNewRequestQueued.accept(result);
+        if (isRunning.get()) {
+            if (scanQueue.offer(result)) {
+                queuedCount.incrementAndGet();
+                if (onNewRequestQueued != null) {
+                    onNewRequestQueued.accept(result);
+                }
+            } else {
+                result.markError("队列已满");
             }
-            updateStatus();
-            return result;
-        } else {
-            result.markError("队列已满");
-            return result;
         }
+        updateStatus();
+        return result;
     }
     
     // ========== 清空和重置 ==========

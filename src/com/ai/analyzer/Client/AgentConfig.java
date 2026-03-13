@@ -40,6 +40,7 @@ public class AgentConfig {
     private boolean enablePythonScript = false;
     private boolean enableNotebook = false;
     private String workplaceDirectoryPath = "";
+    private String customSystemPrompt = "";
     
     /**
      * API 提供者类型枚举
@@ -98,6 +99,7 @@ public class AgentConfig {
         this.enablePythonScript = other.enablePythonScript;
         this.enableNotebook = other.enableNotebook;
         this.workplaceDirectoryPath = other.workplaceDirectoryPath;
+        this.customSystemPrompt = other.customSystemPrompt;
     }
     
     /**

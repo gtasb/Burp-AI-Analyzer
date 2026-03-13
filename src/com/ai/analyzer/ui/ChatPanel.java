@@ -29,40 +29,32 @@ public class ChatPanel extends JPanel {
     private JButton stopButton;
     private JCheckBox enableThinkingCheckBox;
     private JCheckBox enableSearchCheckBox;
-    private List<ChatMessage> chatHistory;
     private HttpRequestResponse currentRequest;
     private String lastSentRequestFingerprint;
     private boolean isStreaming = false;
     private SwingWorker<Void, String> currentWorker;
-    // private ToolExecutor toolExecutor;
-    // private List<AgentApiClient.ToolCall> pendingToolCalls;
     private boolean debugEnabled = false;
     private JTextArea debugLogArea;
     private JScrollPane debugLogScrollPane;
+    private int lastSyncedHistorySize = 0;
+    private javax.swing.Timer saveDebouncerTimer;
+    private final Runnable sharedHistoryListener;
 
     public ChatPanel(MontoyaApi api, AgentApiClient apiClient) {
         this.api = api;
         this.apiClient = apiClient;
-        this.chatHistory = new ArrayList<>();
-        // this.toolExecutor = new ToolExecutor(api);
-        // this.pendingToolCalls = new ArrayList<>();
-        
-        /* Tools call 相关代码已注释
-        // 设置工具定义
-        apiClient.setTools(ToolDefinitions.getBurpTools());
-        
-        // 设置工具调用处理器
-        apiClient.setToolCallHandler(toolCall -> {
-            SwingUtilities.invokeLater(() -> {
-                handleToolCall(toolCall);
-            });
-        });
-        */
         
         initializeUI();
         
-        // 从磁盘恢复上次聊天历史（插件重载后不丢失）
-        loadChatHistory();
+        if (apiClient.getSharedChatUiHistorySize() == 0) {
+            loadChatHistory();
+        } else {
+            syncChatAreaFromSharedHistory();
+        }
+
+        sharedHistoryListener = () ->
+            SwingUtilities.invokeLater(this::syncChatAreaFromSharedHistory);
+        apiClient.addChatUiListener(sharedHistoryListener);
     }
     
     /**
@@ -288,11 +280,8 @@ public class ChatPanel extends JPanel {
         // 如果没有用户输入，使用默认分析提示
         String finalMessage = message.isEmpty() ? "请分析当前请求的安全风险" : message;
         
-        // 只有当用户确实输入了内容时才添加到聊天
         if (!message.isEmpty()) {
-            appendToChat("你", message, true);
-            chatHistory.add(new ChatMessage("user", message));
-            saveChatHistory();
+            appendToChatAndShare("你", message, true);
         }
         
         inputField.setText("");
@@ -307,7 +296,7 @@ public class ChatPanel extends JPanel {
         boolean shouldSendRequestPayload = currentRequest != null
                 && (currentFingerprint == null || !currentFingerprint.equals(lastSentRequestFingerprint));
         if (currentRequest != null && !shouldSendRequestPayload) {
-            appendToChat("系统", "当前请求响应与上次一致，本轮仅发送新增问题。", false);
+            //appendToChat("系统", "当前请求响应与上次一致，本轮仅发送新增问题。", false);
         }
         if (shouldSendRequestPayload) {
             int totalLength = 0;
@@ -527,11 +516,8 @@ public class ChatPanel extends JPanel {
                     api.logging().logToOutput("[ChatPanel] fullResponse最终长度: " + fullResponse.length());
                     api.logging().logToOutput("[ChatPanel] fullResponse最终内容: " + (fullResponse.length() > 500 ? fullResponse.substring(0, 500) + "..." : fullResponse.toString()));
                     
-                    // 添加到历史记录
-                    chatHistory.add(new ChatMessage("assistant", fullResponse.toString()));
-                    
-                    // 持久化到磁盘（插件重载后可恢复）
-                    saveChatHistory();
+                    addToSharedHistory("AI助手", fullResponse.toString(), false);
+                    debouncedSave();
                     
                     // 流式输出已完成，在done()中已经完成了完整渲染，这里不需要再渲染
                 } catch (Exception e) {
@@ -564,7 +550,7 @@ public class ChatPanel extends JPanel {
             isStreaming = false;
             sendButton.setEnabled(true);
             stopButton.setEnabled(false);
-            appendToChat("AI助手", "[输出已中断]", false);
+            appendToChatAndShare("AI助手", "[输出已中断]", false);
         }
     }
 
@@ -572,26 +558,68 @@ public class ChatPanel extends JPanel {
         try {
             StyledDocument doc = chatArea.getStyledDocument();
             
-            // 发送者样式
             Style senderStyle = doc.addStyle("sender", null);
             StyleConstants.setBold(senderStyle, true);
             StyleConstants.setForeground(senderStyle, isUser ? Color.BLUE : Color.GREEN);
             
-            // 消息样式
             Style messageStyle = doc.addStyle("message", null);
             Color textColor = UIManager.getColor("TextArea.foreground");
             StyleConstants.setForeground(messageStyle, textColor != null ? textColor : Color.BLACK);
             
-            // 添加发送者和消息
             doc.insertString(doc.getLength(), sender + ": ", senderStyle);
             doc.insertString(doc.getLength(), message, messageStyle);
             doc.insertString(doc.getLength(), "\n\n", messageStyle);
             
-            // 滚动到底部
             chatArea.setCaretPosition(doc.getLength());
         } catch (Exception e) {
             api.logging().logToError("添加聊天消息失败: " + e.getMessage());
         }
+    }
+
+    private void appendToChatAndShare(String sender, String message, boolean isUser) {
+        appendToChat(sender, message, isUser);
+        addToSharedHistory(sender, message, isUser);
+        debouncedSave();
+    }
+
+    private void addToSharedHistory(String sender, String content, boolean isUser) {
+        apiClient.addChatUiEntry(sender, content, isUser);
+        lastSyncedHistorySize = apiClient.getSharedChatUiHistorySize();
+    }
+
+    private void debouncedSave() {
+        if (saveDebouncerTimer != null) {
+            saveDebouncerTimer.restart();
+        } else {
+            saveDebouncerTimer = new javax.swing.Timer(2000, e -> {
+                saveDebouncerTimer.stop();
+                saveChatHistory();
+            });
+            saveDebouncerTimer.setRepeats(false);
+            saveDebouncerTimer.start();
+        }
+    }
+
+    private void syncChatAreaFromSharedHistory() {
+        int currentSize = apiClient.getSharedChatUiHistorySize();
+        if (currentSize == 0 && lastSyncedHistorySize > 0) {
+            chatArea.setText("");
+            lastSyncedHistorySize = 0;
+            return;
+        }
+        if (currentSize <= lastSyncedHistorySize) return;
+        for (int i = lastSyncedHistorySize; i < currentSize; i++) {
+            Object[] entry = apiClient.getSharedChatUiHistoryEntry(i);
+            String sender = (String) entry[0];
+            String content = (String) entry[1];
+            boolean isUser = (Boolean) entry[2];
+            if ("AI助手".equals(sender) && content.length() > 100) {
+                appendMarkdownToChat(sender, content);
+            } else {
+                appendToChat(sender, content, isUser);
+            }
+        }
+        lastSyncedHistorySize = currentSize;
     }
 
     private void applyEditorTheme(JTextComponent component) {
@@ -617,12 +645,11 @@ public class ChatPanel extends JPanel {
             stopButton.setEnabled(false);
         }
         
-        chatHistory.clear();
+        apiClient.clearSharedChatUiHistory();
+        lastSyncedHistorySize = 0;
         chatArea.setText("");
-        // 清空磁盘上的聊天历史文件
         deleteChatHistoryFile();
-        // 清空 Assistant 的聊天记忆（共享实例）
-        // 注意：apiClient.clearContext() 内部已经会先调用 cancelStreaming()
+        if (saveDebouncerTimer != null) saveDebouncerTimer.stop();
         apiClient.clearContext();
         lastSentRequestFingerprint = null;
         api.logging().logToOutput("聊天上下文已清空");
@@ -634,7 +661,7 @@ public class ChatPanel extends JPanel {
             lastSentRequestFingerprint = null;
         }
         if (request != null) {
-            appendToChat("系统", "已更新当前请求信息", false);
+            appendToChatAndShare("系统", "已更新当前请求信息", false);
         }
     }
 
@@ -768,52 +795,57 @@ public class ChatPanel extends JPanel {
     
     private static final String CHAT_HISTORY_FILENAME = ".burp_ai_chat_history.dat";
     private static final int MAX_PERSISTED_MESSAGES = 50;
+    private static final int MAX_MESSAGE_PERSIST_LENGTH = 8000;
     
     private File getChatHistoryFile() {
         return new File(System.getProperty("user.home"), CHAT_HISTORY_FILENAME);
     }
     
-    /**
-     * 保存聊天历史到磁盘。
-     * 仅保留最近 MAX_PERSISTED_MESSAGES 条消息，避免文件过大。
-     */
     private void saveChatHistory() {
         try {
-            List<ChatMessage> toSave = chatHistory;
-            if (toSave.size() > MAX_PERSISTED_MESSAGES) {
-                toSave = new ArrayList<>(toSave.subList(
-                    toSave.size() - MAX_PERSISTED_MESSAGES, toSave.size()));
+            java.util.List<Object[]> snapshot = apiClient.getSharedChatUiHistorySnapshot();
+            List<ChatMessage> toSave = new ArrayList<>();
+            for (Object[] entry : snapshot) {
+                String sender = (String) entry[0];
+                String content = (String) entry[1];
+                boolean isUser = (Boolean) entry[2];
+                if (content != null && content.length() > MAX_MESSAGE_PERSIST_LENGTH) {
+                    content = content.substring(0, MAX_MESSAGE_PERSIST_LENGTH) + "\n...[已截断]";
+                }
+                toSave.add(new ChatMessage(isUser ? "user" : ("AI助手".equals(sender) ? "assistant" : "system"), content));
             }
-            try (ObjectOutputStream oos = new ObjectOutputStream(
-                    new FileOutputStream(getChatHistoryFile()))) {
-                oos.writeObject(new ArrayList<>(toSave));
+            if (toSave.size() > MAX_PERSISTED_MESSAGES) {
+                toSave = new ArrayList<>(toSave.subList(toSave.size() - MAX_PERSISTED_MESSAGES, toSave.size()));
+            }
+            try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(getChatHistoryFile()))) {
+                oos.writeObject(toSave);
             }
         } catch (Exception e) {
             api.logging().logToError("[ChatPanel] 保存聊天历史失败: " + e.getMessage());
         }
     }
     
-    /**
-     * 从磁盘加载聊天历史，并还原到聊天区域。
-     */
     @SuppressWarnings("unchecked")
     private void loadChatHistory() {
         File historyFile = getChatHistoryFile();
         if (!historyFile.exists()) return;
         
-        try (ObjectInputStream ois = new ObjectInputStream(
-                new FileInputStream(historyFile))) {
+        try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(historyFile))) {
             List<ChatMessage> loaded = (List<ChatMessage>) ois.readObject();
             if (loaded != null && !loaded.isEmpty()) {
-                chatHistory.addAll(loaded);
                 for (ChatMessage msg : loaded) {
                     boolean isUser = "user".equals(msg.getRole());
+                    String sender = isUser ? "你" : ("assistant".equals(msg.getRole()) ? "AI助手" : "系统");
+                    apiClient.addChatUiEntryDirect(new Object[]{sender, msg.getContent(), isUser});
                     if (isUser) {
                         appendToChat("你", msg.getContent(), true);
-                    } else {
+                    } else if ("assistant".equals(msg.getRole())) {
                         appendMarkdownToChat("AI助手", msg.getContent());
+                    } else {
+                        appendToChat("系统", msg.getContent(), false);
                     }
                 }
+                lastSyncedHistorySize = apiClient.getSharedChatUiHistorySize();
                 api.logging().logToOutput("[ChatPanel] 已恢复 " + loaded.size() + " 条聊天历史");
             }
         } catch (Exception e) {

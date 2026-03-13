@@ -7,7 +7,7 @@ import java.util.List;
 
 public class PluginSettings implements Serializable {
     
-    private static final long serialVersionUID = 6L;
+    private static final long serialVersionUID = 7L;
     private String apiUrl;
     private String apiKey;
     private String model;
@@ -40,6 +40,14 @@ public class PluginSettings implements Serializable {
     private boolean enableSkills = false; // 默认禁用 Skills
     private String skillsDirectoryPath = ""; // Skills 目录路径
     private List<String> enabledSkillNames = new ArrayList<>(); // 已启用的 skill 名称列表
+    
+    // 自定义系统提示词（初始值留空，getter 中兜底返回默认提示词）
+    private String customActiveSystemPrompt = null;
+    private String customPassiveSystemPrompt = null;
+    
+    // 被动扫描过滤配置
+    private String passiveScanSkipExtensions = "";
+    private String passiveScanDomainBlacklist = "";
     
     public PluginSettings() {
         // 默认设置
@@ -376,5 +384,43 @@ public class PluginSettings implements Serializable {
     
     public void setEnablePreScanFilter(boolean enablePreScanFilter) {
         this.enablePreScanFilter = enablePreScanFilter;
+    }
+    
+    public String getCustomActiveSystemPrompt() {
+        if (customActiveSystemPrompt == null || customActiveSystemPrompt.isBlank()) {
+            return com.ai.analyzer.Client.SystemPromptBuilder.getDefaultBasePrompt();
+        }
+        return customActiveSystemPrompt;
+    }
+    
+    public void setCustomActiveSystemPrompt(String v) {
+        this.customActiveSystemPrompt = v;
+    }
+    
+    public String getCustomPassiveSystemPrompt() {
+        if (customPassiveSystemPrompt == null || customPassiveSystemPrompt.isBlank()) {
+            return com.ai.analyzer.pscan.SystemPromptBuilder.getDefaultBasePrompt();
+        }
+        return customPassiveSystemPrompt;
+    }
+    
+    public void setCustomPassiveSystemPrompt(String v) {
+        this.customPassiveSystemPrompt = v;
+    }
+    
+    public String getPassiveScanSkipExtensions() {
+        return passiveScanSkipExtensions != null ? passiveScanSkipExtensions : "";
+    }
+    
+    public void setPassiveScanSkipExtensions(String v) {
+        this.passiveScanSkipExtensions = v != null ? v : "";
+    }
+    
+    public String getPassiveScanDomainBlacklist() {
+        return passiveScanDomainBlacklist != null ? passiveScanDomainBlacklist : "";
+    }
+    
+    public void setPassiveScanDomainBlacklist(String v) {
+        this.passiveScanDomainBlacklist = v != null ? v : "";
     }
 }

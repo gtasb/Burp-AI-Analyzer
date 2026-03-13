@@ -119,6 +119,8 @@ public class PassiveScanApiClient {
     private String skillsDirectoryPath = "";
     @Getter
     private String workplaceDirectoryPath = "";
+    @Getter
+    private String customSystemPrompt = "";
     
     // Skills 管理
     private volatile SkillManager skillManager;
@@ -451,6 +453,14 @@ public class PassiveScanApiClient {
             if (enableSkills) {
                 skillManager = null;
             }
+        }
+    }
+    
+    public void setCustomSystemPrompt(String prompt) {
+        String normalized = prompt == null ? "" : prompt;
+        if (!java.util.Objects.equals(this.customSystemPrompt, normalized)) {
+            this.customSystemPrompt = normalized;
+            cachedSystemPrompt = null;
         }
     }
     
@@ -1032,6 +1042,7 @@ public class PassiveScanApiClient {
     private String buildSystemPrompt() {
         int hash = java.util.Objects.hash(
                 enableSearch, enableSkills, enableNotebook,
+                customSystemPrompt,
                 skillManager != null ? skillManager.getEnabledSkillCount() : 0);
         String cached = cachedSystemPrompt;
         if (cached != null && hash == cachedPromptConfigHash) return cached;
@@ -1040,6 +1051,7 @@ public class PassiveScanApiClient {
                 .enableSearch(enableSearch)
                 .enableSkills(enableSkills)
                 .skillManager(skillManager)
+                .customBasePrompt(customSystemPrompt)
                 .build();
         cachedSystemPrompt = cached;
         cachedPromptConfigHash = hash;

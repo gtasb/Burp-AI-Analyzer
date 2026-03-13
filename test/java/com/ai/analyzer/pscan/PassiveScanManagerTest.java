@@ -165,8 +165,8 @@ class PassiveScanManagerTest {
     class ManualAdd {
 
         @Test
-        @DisplayName("should_return_null_when_not_running")
-        void should_return_null_when_not_running() {
+        @DisplayName("should_add_to_list_even_when_not_running")
+        void should_add_to_list_even_when_not_running() {
             var mockReqResp = mock(burp.api.montoya.http.message.HttpRequestResponse.class);
             var mockReq = mock(burp.api.montoya.http.message.requests.HttpRequest.class);
             when(mockReqResp.request()).thenReturn(mockReq);
@@ -174,7 +174,8 @@ class PassiveScanManagerTest {
             when(mockReq.url()).thenReturn("https://example.com/api");
 
             ScanResult result = manager.addRequest(mockReqResp);
-            assertThat(result).isNull();
+            assertThat(result).isNotNull();
+            assertThat(result.getMethod()).isEqualTo("GET");
         }
     }
 

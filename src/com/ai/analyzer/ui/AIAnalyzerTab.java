@@ -8,6 +8,7 @@ import com.ai.analyzer.model.PluginSettings;
 import com.ai.analyzer.model.RequestData;
 import com.ai.analyzer.pscan.PassiveScanApiClient;
 import com.ai.analyzer.pscan.PassiveScanManager;
+import com.ai.analyzer.pscan.PassiveScanTask;
 import com.ai.analyzer.pscan.ScanResult;
 import com.ai.analyzer.skills.Skill;
 import com.ai.analyzer.skills.SkillManager;
@@ -79,6 +80,12 @@ public class AIAnalyzerTab extends JPanel {
     private JButton browseWorkplaceDirButton;
     private JButton refreshSkillsButton;
     private JButton createExampleSkillButton;
+    
+    // 自定义系统提示词 & 被动扫描过滤
+    private JTextArea activeSystemPromptArea;
+    private JTextArea passiveSystemPromptArea;
+    private JTextArea passiveScanSkipExtensionsArea;
+    private JTextArea passiveScanDomainBlacklistArea;
     
     // 已替换为 passiveScanTable 和 passiveScanTableModel
     // private JTable requestListTable;
@@ -338,9 +345,10 @@ public class AIAnalyzerTab extends JPanel {
             SwingUtilities.invokeLater(() -> {
                 if (passiveScanResultPane == null) return;
                 // 检查当前选中的行是否正在流式输出
-                int selectedRow = passiveScanTable.getSelectedRow();
-                if (selectedRow >= 0) {
-                    Integer selectedId = (Integer) passiveScanTableModel.getValueAt(selectedRow, 0);
+                int viewRow = passiveScanTable.getSelectedRow();
+                if (viewRow >= 0) {
+                    int modelRow = passiveScanTable.convertRowIndexToModel(viewRow);
+                    Integer selectedId = (Integer) passiveScanTableModel.getValueAt(modelRow, 0);
                     ScanResult currentStreaming = passiveScanManager.getCurrentStreamingScanResult();
                     
                     // 只有当前选中的行正在流式输出时，才显示流式输出
@@ -501,535 +509,419 @@ public class AIAnalyzerTab extends JPanel {
     
     /**
      * 创建配置标签页（第二个标签页）
-     * 包含 API 配置、功能开关、设置按钮等
+     * 使用子标签页组织：基础配置、功能开关、系统提示词、被动扫描过滤
      */
     private JPanel createConfigTabPanel() {
-        JPanel configPanel = new JPanel(new BorderLayout(10, 10));
-        configPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        JPanel configPanel = new JPanel(new BorderLayout());
         
-        // 创建配置面板（复用原有的 createConfigPanel 逻辑，但去掉边框）
-        JPanel apiConfigPanel = new JPanel(new GridBagLayout());
+        JTabbedPane subTabs = new JTabbedPane(JTabbedPane.TOP);
+        subTabs.addTab("基础配置", createConfigSubTab_Basic());
+        subTabs.addTab("功能开关", createConfigSubTab_Features());
+        subTabs.addTab("系统提示词", createConfigSubTab_Prompts());
+        subTabs.addTab("被动扫描过滤", createConfigSubTab_Filters());
+        
+        configPanel.add(subTabs, BorderLayout.CENTER);
+        return configPanel;
+    }
+    
+    private JPanel createConfigSubTab_Basic() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        panel.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
         GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.insets = new Insets(4, 5, 4, 5);
         gbc.anchor = GridBagConstraints.WEST;
+        int row = 0;
         
-        // API 提供者选择
-        gbc.gridx = 0;
-        gbc.gridy = 0;
-        apiConfigPanel.add(new JLabel("API 提供者:"), gbc);
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
+        // API 提供者
+        gbc.gridx = 0; gbc.gridy = row;
+        gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("API 提供者:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         String[] providers = {"DashScope", "OpenAI兼容", "Anthropic兼容"};
         apiProviderComboBox = new JComboBox<>(providers);
-        apiProviderComboBox.setSelectedIndex(0); // 默认 DashScope
+        apiProviderComboBox.setSelectedIndex(0);
         apiProviderComboBox.addActionListener(e -> {
-            String selectedProvider = (String) apiProviderComboBox.getSelectedItem();
-            apiClient.setApiProvider(selectedProvider);
-            // 根据选择更新默认 URL 和功能开关
-            if ("DashScope".equals(selectedProvider)) {
-                if (apiUrlField.getText().contains("openai.com") || apiUrlField.getText().contains("anthropic.com") || apiUrlField.getText().isEmpty()) {
+            String sel = (String) apiProviderComboBox.getSelectedItem();
+            apiClient.setApiProvider(sel);
+            if ("DashScope".equals(sel)) {
+                if (apiUrlField.getText().contains("openai.com") || apiUrlField.getText().contains("anthropic.com") || apiUrlField.getText().isEmpty())
                     apiUrlField.setText("https://dashscope.aliyuncs.com/api/v1");
-                }
                 enableThinkingCheckBox.setEnabled(true);
                 enableSearchCheckBox.setEnabled(true);
-            } else if ("Anthropic兼容".equals(selectedProvider)) {
-                if (apiUrlField.getText().contains("dashscope") || apiUrlField.getText().contains("openai.com") || apiUrlField.getText().isEmpty()) {
+            } else if ("Anthropic兼容".equals(sel)) {
+                if (apiUrlField.getText().contains("dashscope") || apiUrlField.getText().contains("openai.com") || apiUrlField.getText().isEmpty())
                     apiUrlField.setText("https://api.anthropic.com");
-                }
-                enableThinkingCheckBox.setEnabled(true);  // Anthropic 支持 Extended Thinking
+                enableThinkingCheckBox.setEnabled(true);
                 enableSearchCheckBox.setEnabled(false);
                 enableSearchCheckBox.setSelected(false);
             } else {
-                if (apiUrlField.getText().contains("dashscope") || apiUrlField.getText().contains("anthropic.com") || apiUrlField.getText().isEmpty()) {
+                if (apiUrlField.getText().contains("dashscope") || apiUrlField.getText().contains("anthropic.com") || apiUrlField.getText().isEmpty())
                     apiUrlField.setText("https://api.openai.com/v1");
-                }
                 enableThinkingCheckBox.setEnabled(false);
                 enableThinkingCheckBox.setSelected(false);
                 enableSearchCheckBox.setEnabled(false);
                 enableSearchCheckBox.setSelected(false);
             }
         });
-        apiProviderComboBox.setToolTipText("选择 API 提供者：DashScope（通义千问）、OpenAI 兼容格式（OpenAI、Ollama、LM Studio 等）或 Anthropic 兼容（Claude）");
-        apiConfigPanel.add(apiProviderComboBox, gbc);
+        apiProviderComboBox.setToolTipText("选择 API 提供者：DashScope（通义千问）、OpenAI 兼容格式、Anthropic 兼容（Claude）");
+        panel.add(apiProviderComboBox, gbc);
         
         // API URL
-        gbc.gridx = 0;
-        gbc.gridy = 1;
-        gbc.fill = GridBagConstraints.NONE;
-        gbc.weightx = 0;
-        apiConfigPanel.add(new JLabel("API URL:"), gbc);
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("API URL:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         apiUrlField = new JTextField("https://dashscope.aliyuncs.com/api/v1", 30);
-        apiConfigPanel.add(apiUrlField, gbc);
+        panel.add(apiUrlField, gbc);
         
         // API Key
-        gbc.gridx = 0;
-        gbc.gridy = 2;
-        gbc.fill = GridBagConstraints.NONE;
-        gbc.weightx = 0;
-        apiConfigPanel.add(new JLabel("API Key:"), gbc);
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("API Key:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         apiKeyField = new JTextField("", 30);
-        apiConfigPanel.add(apiKeyField, gbc);
+        panel.add(apiKeyField, gbc);
         
         // Model
-        gbc.gridx = 0;
-        gbc.gridy = 3;
-        gbc.fill = GridBagConstraints.NONE;
-        gbc.weightx = 0;
-        apiConfigPanel.add(new JLabel("Model:"), gbc);
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("Model:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         modelField = new JTextField("qwen-max", 30);
-        apiConfigPanel.add(modelField, gbc);
+        panel.add(modelField, gbc);
         
         // 自定义参数
-        gbc.gridx = 0;
-        gbc.gridy = 4;
-        gbc.fill = GridBagConstraints.NONE;
-        gbc.weightx = 0;
-        apiConfigPanel.add(new JLabel("自定义参数:"), gbc);
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("自定义参数:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         customParametersField = new JTextField("", 30);
-        customParametersField.setToolTipText("<html><b>自定义参数（JSON 格式，直接透传到 API）</b><br/>" +
-            "<br/><b>OpenAI 标准参数：</b><br/>" +
-            "temperature, top_p, max_tokens, frequency_penalty, presence_penalty, seed, stop<br/>" +
-            "<br/><b>Ollama 专有参数：</b><br/>" +
-            "• format: \"json\" 或 JSON Schema 对象（结构化输出）<br/>" +
-            "• options: {\"num_ctx\": 8192, \"top_k\": 50, \"min_p\": 0.05, ...}<br/>" +
-            "• keep_alive: \"30m\" / \"24h\" / -1（永久）/ 0（立即卸载）<br/>" +
-            "• think: true（启用 reasoning 模式，如 qwen3-thinking）<br/>" +
-            "<br/><b>示例：</b><br/>" +
-            "{\"format\": \"json\", \"keep_alive\": \"30m\", \"options\": {\"num_ctx\": 8192}}</html>");
-        apiConfigPanel.add(customParametersField, gbc);
+        customParametersField.setToolTipText("<html><b>自定义参数（JSON 格式，透传到 API）</b><br/>" +
+            "temperature, top_p, max_tokens, frequency_penalty 等<br/>" +
+            "Ollama: {\"options\": {\"num_ctx\": 8192}, \"keep_alive\": \"30m\"}</html>");
+        panel.add(customParametersField, gbc);
         
-        // Workplace 根目录（统一管理 skills/rag/python/notebooks 目录）
-        gbc.gridx = 0;
-        gbc.gridy = 5;
-        gbc.gridwidth = 1;
-        gbc.fill = GridBagConstraints.NONE;
-        gbc.weightx = 0;
-        apiConfigPanel.add(new JLabel("Workplace 目录:"), gbc);
-
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
+        // Workplace 目录
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 1;
+        gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("Workplace 目录:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         workplaceDirectoryField = new JTextField("", 30);
-        workplaceDirectoryField.setToolTipText("统一工作目录。自动派生：skills / rag / python-workdir / notebooks");
+        workplaceDirectoryField.setToolTipText("统一工作目录，自动派生：skills / rag / python-workdir / notebooks");
         workplaceDirectoryField.getDocument().addDocumentListener(new DocumentListener() {
             @Override public void insertUpdate(DocumentEvent e) { applyWorkplaceToDerivedPaths(true, false); }
             @Override public void removeUpdate(DocumentEvent e) { applyWorkplaceToDerivedPaths(true, false); }
             @Override public void changedUpdate(DocumentEvent e) { applyWorkplaceToDerivedPaths(true, false); }
         });
-        apiConfigPanel.add(workplaceDirectoryField, gbc);
-
-        gbc.gridx = 2;
-        gbc.fill = GridBagConstraints.NONE;
-        gbc.weightx = 0;
+        panel.add(workplaceDirectoryField, gbc);
+        gbc.gridx = 2; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
         browseWorkplaceDirButton = new JButton("浏览...");
         browseWorkplaceDirButton.addActionListener(e -> browseWorkplaceDirectory());
-        apiConfigPanel.add(browseWorkplaceDirButton, gbc);
-
-        // Workplace 快捷打开按钮
-        gbc.gridx = 1;
-        gbc.gridy = 6;
-        gbc.gridwidth = 2;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
-        JPanel workplaceActionsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        panel.add(browseWorkplaceDirButton, gbc);
+        
+        // Workplace 快捷按钮 + 保存/加载
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 3;
+        gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        JPanel actionsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
         JButton openWorkplaceRootButton = new JButton("打开 Workplace 目录");
         openWorkplaceRootButton.addActionListener(e -> openWorkplaceRootDirectory());
-        workplaceActionsPanel.add(openWorkplaceRootButton);
-        apiConfigPanel.add(workplaceActionsPanel, gbc);
-
-        // MCP 配置分隔线
-        gbc.gridx = 0;
-        gbc.gridy = 7;
-        gbc.gridwidth = 2;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
-        JSeparator mcpSeparator = new JSeparator();
-        apiConfigPanel.add(mcpSeparator, gbc);
+        saveSettingsButton = new JButton("保存设置");
+        loadSettingsButton = new JButton("加载设置");
+        saveSettingsButton.addActionListener(e -> saveSettings());
+        loadSettingsButton.addActionListener(e -> loadSettings());
+        actionsPanel.add(openWorkplaceRootButton);
+        actionsPanel.add(Box.createHorizontalStrut(20));
+        actionsPanel.add(saveSettingsButton);
+        actionsPanel.add(loadSettingsButton);
+        panel.add(actionsPanel, gbc);
         
-        // Burp MCP 工具调用开关
-        gbc.gridx = 0;
-        gbc.gridy = 8;
-        gbc.gridwidth = 1;
-        gbc.fill = GridBagConstraints.NONE;
-        gbc.weightx = 0;
-        apiConfigPanel.add(new JLabel("启用 Burp MCP 工具:"), gbc);
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
+        // 底部填充
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 3;
+        gbc.weighty = 1.0; gbc.fill = GridBagConstraints.BOTH;
+        panel.add(new JLabel(), gbc);
+        
+        return panel;
+    }
+    
+    private JPanel createConfigSubTab_Features() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        panel.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(3, 5, 3, 5);
+        gbc.anchor = GridBagConstraints.WEST;
+        int row = 0;
+        
+        // Burp MCP
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 1;
+        gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("Burp MCP:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         enableMcpCheckBox = new JCheckBox("启用 Burp MCP 工具调用", false);
         enableMcpCheckBox.addActionListener(e -> {
             boolean enabled = enableMcpCheckBox.isSelected();
             BurpMcpUrlField.setEnabled(enabled);
             apiClient.setEnableMcp(enabled);
-            if (enabled && !BurpMcpUrlField.getText().trim().isEmpty()) {
+            if (enabled && !BurpMcpUrlField.getText().trim().isEmpty())
                 apiClient.setBurpMcpUrl(BurpMcpUrlField.getText().trim());
-            }
         });
-        apiConfigPanel.add(enableMcpCheckBox, gbc);
+        panel.add(enableMcpCheckBox, gbc);
         
-        // Burp MCP 地址
-        gbc.gridx = 0;
-        gbc.gridy = 9;
-        gbc.fill = GridBagConstraints.NONE;
-        gbc.weightx = 0;
-        apiConfigPanel.add(new JLabel("Burp MCP 地址:"), gbc);
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("  MCP 地址:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         BurpMcpUrlField = new JTextField("http://127.0.0.1:9876/", 30);
-        BurpMcpUrlField.setEnabled(false); // 默认禁用，只有启用 MCP 时才可用
-        BurpMcpUrlField.addActionListener(e -> {
-            if (enableMcpCheckBox.isSelected()) {
-                apiClient.setBurpMcpUrl(BurpMcpUrlField.getText().trim());
-            }
-        });
+        BurpMcpUrlField.setEnabled(false);
         BurpMcpUrlField.getDocument().addDocumentListener(new DocumentListener() {
-            @Override
-            public void insertUpdate(DocumentEvent e) {
-                updateBurpMcpUrl();
-            }
-            @Override
-            public void removeUpdate(DocumentEvent e) {
-                updateBurpMcpUrl();
-            }
-            @Override
-            public void changedUpdate(DocumentEvent e) {
-                updateBurpMcpUrl();
-            }
-            private void updateBurpMcpUrl() {
-                if (enableMcpCheckBox.isSelected() && !BurpMcpUrlField.getText().trim().isEmpty()) {
+            @Override public void insertUpdate(DocumentEvent e) { syncBurpMcpUrl(); }
+            @Override public void removeUpdate(DocumentEvent e) { syncBurpMcpUrl(); }
+            @Override public void changedUpdate(DocumentEvent e) { syncBurpMcpUrl(); }
+            private void syncBurpMcpUrl() {
+                if (enableMcpCheckBox.isSelected() && !BurpMcpUrlField.getText().trim().isEmpty())
                     apiClient.setBurpMcpUrl(BurpMcpUrlField.getText().trim());
-                }
             }
         });
-        apiConfigPanel.add(BurpMcpUrlField, gbc);
-
-        // 知识库检索工具开关（两个选项放同一行）
-        gbc.gridx = 0;
-        gbc.gridy = 10;
-        gbc.gridwidth = 1;
-        gbc.fill = GridBagConstraints.NONE;
-        gbc.weightx = 0;
-        apiConfigPanel.add(new JLabel("启用知识库检索工具:"), gbc);
+        panel.add(BurpMcpUrlField, gbc);
         
-        // 创建一个面板放两个 checkbox，左对齐无边距
+        // 知识库
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("知识库:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         JPanel knowledgeBasePanel = new JPanel();
         knowledgeBasePanel.setLayout(new BoxLayout(knowledgeBasePanel, BoxLayout.X_AXIS));
-        
         enableRagMcpCheckBox = new JCheckBox("RAG MCP（语义检索）", false);
-        enableRagMcpCheckBox.setToolTipText("通过 RAG MCP 服务进行语义检索（需要 uvx rag-mcp）");
         enableRagMcpCheckBox.addActionListener(e -> {
             boolean enabled = enableRagMcpCheckBox.isSelected();
             ragMcpDocumentsPathField.setEnabled(enabled || enableFileSystemAccessCheckBox.isSelected());
             apiClient.setEnableRagMcp(enabled);
-            if (enabled && !ragMcpDocumentsPathField.getText().trim().isEmpty()) {
+            if (enabled && !ragMcpDocumentsPathField.getText().trim().isEmpty())
                 apiClient.setRagMcpDocumentsPath(ragMcpDocumentsPathField.getText().trim());
-            }
         });
         knowledgeBasePanel.add(enableRagMcpCheckBox);
-        knowledgeBasePanel.add(Box.createHorizontalStrut(15)); // 间距
-        
+        knowledgeBasePanel.add(Box.createHorizontalStrut(10));
         enableFileSystemAccessCheckBox = new JCheckBox("直接查找（文件浏览）", false);
-        enableFileSystemAccessCheckBox.setToolTipText("让 AI 主动浏览、搜索、读取知识库文件（无需额外服务）");
         enableFileSystemAccessCheckBox.addActionListener(e -> {
             boolean enabled = enableFileSystemAccessCheckBox.isSelected();
             ragMcpDocumentsPathField.setEnabled(enabled || enableRagMcpCheckBox.isSelected());
             apiClient.setEnableFileSystemAccess(enabled);
-            if (enabled && !ragMcpDocumentsPathField.getText().trim().isEmpty()) {
+            if (enabled && !ragMcpDocumentsPathField.getText().trim().isEmpty())
                 apiClient.setRagMcpDocumentsPath(ragMcpDocumentsPathField.getText().trim());
-            }
         });
         knowledgeBasePanel.add(enableFileSystemAccessCheckBox);
-        
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
-        apiConfigPanel.add(knowledgeBasePanel, gbc);
-        
-        // RAG MCP 地址输入框暂时隐藏
-        // // RAG MCP 命令
-        // gbc.gridx = 0;
-        // gbc.gridy = 7;
-        // gbc.fill = GridBagConstraints.NONE;
-        // gbc.weightx = 0;
-        // apiConfigPanel.add(new JLabel("RAG MCP 地址:"), gbc);
-        // gbc.gridx = 1;
-        // gbc.fill = GridBagConstraints.HORIZONTAL;
-        // gbc.weightx = 1.0;
-        // ragMcpUrlField = new JTextField(" ", 30);
-        // ragMcpUrlField.setEnabled(false); // 默认禁用，只有启用 RAG MCP 时才可用
-        // ragMcpUrlField.addActionListener(e -> {
-        //     if (enableRagMcpCheckBox.isSelected()) {
-        //         apiClient.setRagMcpUrl(ragMcpUrlField.getText().trim());
-        //     }
-        // });
-        // ragMcpUrlField.getDocument().addDocumentListener(new DocumentListener() {
-        //     @Override
-        //     public void insertUpdate(DocumentEvent e) {
-        //         updateRagMcpUrl();
-        //     }
-        //     @Override
-        //     public void removeUpdate(DocumentEvent e) {
-        //         updateRagMcpUrl();
-        //     }
-        //     @Override
-        //     public void changedUpdate(DocumentEvent e) {
-        //         updateRagMcpUrl();
-        //     }
-        //     private void updateRagMcpUrl() {
-        //         if (enableRagMcpCheckBox.isSelected() && !ragMcpUrlField.getText().trim().isEmpty()) {
-        //             apiClient.setRagMcpUrl(ragMcpUrlField.getText().trim());
-        //         }
-        //     }
-        // });
-        // apiConfigPanel.add(ragMcpUrlField, gbc);
-
-        // 知识库路径由 Workplace 自动派生，不提供手动路径输入 UI
+        panel.add(knowledgeBasePanel, gbc);
         ragMcpDocumentsPathField = new JTextField("", 30);
         ragMcpDocumentsPathField.setEnabled(true);
         ragMcpDocumentsPathField.setEditable(false);
-
-        // Chrome MCP 工具调用开关
-        gbc.gridx = 0;
-        gbc.gridy = 12;
-        gbc.gridwidth = 1;
-        gbc.fill = GridBagConstraints.NONE;
-        gbc.weightx = 0;
-        apiConfigPanel.add(new JLabel("启用 Chrome MCP 工具:"), gbc);
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
+        
+        // Chrome MCP
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("Chrome MCP:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         enableChromeMcpCheckBox = new JCheckBox("启用 Chrome MCP 工具调用", false);
         enableChromeMcpCheckBox.addActionListener(e -> {
             boolean enabled = enableChromeMcpCheckBox.isSelected();
             chromeMcpUrlField.setEnabled(enabled);
             apiClient.setEnableChromeMcp(enabled);
-            if (enabled && !chromeMcpUrlField.getText().trim().isEmpty()) {
+            if (enabled && !chromeMcpUrlField.getText().trim().isEmpty())
                 apiClient.setChromeMcpUrl(chromeMcpUrlField.getText().trim());
-            }
         });
-        apiConfigPanel.add(enableChromeMcpCheckBox, gbc);
-
-        // Chrome MCP 地址
-        gbc.gridx = 0;
-        gbc.gridy = 13;
-        gbc.fill = GridBagConstraints.NONE;
-        gbc.weightx = 0;
-        apiConfigPanel.add(new JLabel("Chrome MCP 地址:"), gbc);
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
-        chromeMcpUrlField = new JTextField(" ", 30);
-        chromeMcpUrlField.setEnabled(false); // 默认禁用，只有启用 Chrome MCP 时才可用
-        chromeMcpUrlField.addActionListener(e -> {
-            if (enableChromeMcpCheckBox.isSelected()) {
-                apiClient.setChromeMcpUrl(chromeMcpUrlField.getText().trim());
-            }
-        });
-        chromeMcpUrlField.getDocument().addDocumentListener(new DocumentListener() {
-            @Override
-            public void insertUpdate(DocumentEvent e) {
-                updateChromeMcpUrl();
-            }
-            @Override
-            public void removeUpdate(DocumentEvent e) {
-                updateChromeMcpUrl();
-            }
-            @Override
-            public void changedUpdate(DocumentEvent e) {
-                updateChromeMcpUrl();
-            }
-            private void updateChromeMcpUrl() {
-                if (enableChromeMcpCheckBox.isSelected() && !chromeMcpUrlField.getText().trim().isEmpty()) {
-                    apiClient.setChromeMcpUrl(chromeMcpUrlField.getText().trim());
-                }
-            }
-        });
-        apiConfigPanel.add(chromeMcpUrlField, gbc);
-
-        // RAG 配置分隔线
-        gbc.gridx = 0;
-        gbc.gridy = 14;
-        gbc.gridwidth = 2;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
-        JSeparator ragSeparator = new JSeparator();
-        apiConfigPanel.add(ragSeparator, gbc);
+        panel.add(enableChromeMcpCheckBox, gbc);
         
-        // ========== 前置扫描器配置 ==========
-        // 前置扫描器开关
-        gbc.gridx = 0;
-        gbc.gridy = 15;
-        gbc.gridwidth = 2;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
-        enablePreScanCheckbox = new JCheckBox("启用前置扫描器", false);
-        enablePreScanCheckbox.setToolTipText("<html><b>前置扫描器</b>：在AI分析前快速匹配已知漏洞特征<br/>" +
-            "• 支持35+种漏洞类型（SQL注入、命令注入、文件包含、XXE、SSRF等）<br/>" +
-            "• 硬编码规则库（130+条规则，570+个模式）<br/>" +
-            "• 多线程并发扫描（默认500ms超时）<br/>" +
-            "• 匹配结果会自动追加到AI提示词中<br/>" +
-            "• 配置会自动保存，无需每次手动勾选</html>");
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("  Chrome 地址:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        chromeMcpUrlField = new JTextField(" ", 30);
+        chromeMcpUrlField.setEnabled(false);
+        chromeMcpUrlField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override public void insertUpdate(DocumentEvent e) { sync(); }
+            @Override public void removeUpdate(DocumentEvent e) { sync(); }
+            @Override public void changedUpdate(DocumentEvent e) { sync(); }
+            private void sync() {
+                if (enableChromeMcpCheckBox.isSelected() && !chromeMcpUrlField.getText().trim().isEmpty())
+                    apiClient.setChromeMcpUrl(chromeMcpUrlField.getText().trim());
+            }
+        });
+        panel.add(chromeMcpUrlField, gbc);
+        
+        // 分隔线
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2;
+        gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        panel.add(new JSeparator(), gbc);
+        
+        // 前置扫描器
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2;
+        enablePreScanCheckbox = new JCheckBox("启用前置扫描器（快速规则匹配）", false);
+        enablePreScanCheckbox.setToolTipText("<html>AI分析前快速匹配已知漏洞特征（130+条规则，570+个模式）</html>");
         enablePreScanCheckbox.addActionListener(e -> {
             boolean enabled = enablePreScanCheckbox.isSelected();
             if (preScanFilterManager != null) {
-                if (enabled) {
-                    preScanFilterManager.enable();
-                    api.logging().logToOutput("[PreScan] 前置扫描器已启用");
-                } else {
-                    preScanFilterManager.disable();
-                    api.logging().logToOutput("[PreScan] 前置扫描器已禁用");
-                }
-            } else {
-                api.logging().logToError("[PreScan] 前置扫描管理器未初始化");
+                if (enabled) preScanFilterManager.enable(); else preScanFilterManager.disable();
             }
         });
-        apiConfigPanel.add(enablePreScanCheckbox, gbc);
+        panel.add(enablePreScanCheckbox, gbc);
         
-        // ========== Python 脚本执行工具 ==========
-        gbc.gridx = 0;
-        gbc.gridy = 16;
-        gbc.gridwidth = 2;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
+        // Python
+        row++;
+        gbc.gridy = row;
         enablePythonScriptCheckbox = new JCheckBox("启用 Python 脚本执行", false);
-        enablePythonScriptCheckbox.setToolTipText("<html><b>Python 脚本执行工具</b>：让 AI 可以在本地执行 Python 代码<br/>" +
-            "• 适用于编码/解码、数据处理、payload 生成等场景<br/>" +
-            "• 执行超时 30 秒，输出上限 10000 字符<br/>" +
-            "• <b>注意</b>：需要本机安装 Python 并在 PATH 中可用<br/>" +
-            "• <b>安全提示</b>：AI 生成的代码将在本地执行，请注意安全风险</html>");
+        enablePythonScriptCheckbox.setToolTipText("<html>让 AI 在本地执行 Python 代码（需本机安装 Python）</html>");
         enablePythonScriptCheckbox.addActionListener(e -> {
-            boolean enabled = enablePythonScriptCheckbox.isSelected();
-            apiClient.setEnablePythonScript(enabled);
-            api.logging().logToOutput("[PythonScript] Python 脚本执行工具已" + (enabled ? "启用" : "禁用"));
+            apiClient.setEnablePythonScript(enablePythonScriptCheckbox.isSelected());
         });
-        apiConfigPanel.add(enablePythonScriptCheckbox, gbc);
+        panel.add(enablePythonScriptCheckbox, gbc);
         
-        // ========== 默认 RAG 功能暂时禁用，改用 RAG MCP ==========
-        // // RAG 工具调用开关
-        // gbc.gridx = 0;
-        // gbc.gridy = 12;
-        // gbc.gridwidth = 1;
-        // gbc.fill = GridBagConstraints.NONE;
-        // gbc.weightx = 0;
-        // apiConfigPanel.add(new JLabel("启用 RAG:"), gbc);
-        // gbc.gridx = 1;
-        // gbc.fill = GridBagConstraints.HORIZONTAL;
-        // gbc.weightx = 1.0;
-        // enableRagCheckBox = new JCheckBox("启用 RAG（检索增强生成）", false);
-        // enableRagCheckBox.addActionListener(e -> {
-        //     boolean enabled = enableRagCheckBox.isSelected();
-        //     ragDocumentsPathField.setEnabled(enabled);
-        //     apiClient.setEnableRag(enabled);
-        //     if (enabled && !ragDocumentsPathField.getText().trim().isEmpty()) {
-        //         apiClient.setRagDocumentsPath(ragDocumentsPathField.getText().trim());
-        //     }
-        // });
-        // apiConfigPanel.add(enableRagCheckBox, gbc);
-        // 
-        // // RAG 文档路径
-        // gbc.gridx = 0;
-        // gbc.gridy = 13;
-        // gbc.fill = GridBagConstraints.NONE;
-        // gbc.weightx = 0;
-        // apiConfigPanel.add(new JLabel("RAG 文档路径:"), gbc);
-        // gbc.gridx = 1;
-        // gbc.fill = GridBagConstraints.HORIZONTAL;
-        // gbc.weightx = 1.0;
-        // ragDocumentsPathField = new JTextField("", 30);
-        // ragDocumentsPathField.setEnabled(true);
-        // ragDocumentsPathField.addActionListener(e -> {
-        //     if (enableRagCheckBox.isSelected()) {
-        //         apiClient.setRagDocumentsPath(ragDocumentsPathField.getText().trim());
-        //     }
-        // });
-        // ragDocumentsPathField.getDocument().addDocumentListener(new DocumentListener() {
-        //     @Override public void insertUpdate(DocumentEvent e) { updateRagDocumentsPath(); }
-        //     @Override public void removeUpdate(DocumentEvent e) { updateRagDocumentsPath(); }
-        //     @Override public void changedUpdate(DocumentEvent e) { updateRagDocumentsPath(); }
-        //     private void updateRagDocumentsPath() {
-        //         if (enableRagCheckBox.isSelected() && !ragDocumentsPathField.getText().trim().isEmpty()) {
-        //             apiClient.setRagDocumentsPath(ragDocumentsPathField.getText().trim());
-        //         }
-        //     }
-        // });
-        // apiConfigPanel.add(ragDocumentsPathField, gbc);
-        // ========== 默认 RAG 功能暂时禁用结束 ==========
-        
-        // Notebook 工具开关
-        gbc.gridx = 0;
-        gbc.gridy = 17;
-        gbc.gridwidth = 2;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
+        // Notebook
+        row++;
+        gbc.gridy = row;
         enableNotebookCheckbox = new JCheckBox("启用 Notebook 工具（共享渗透记录）", false);
-        enableNotebookCheckbox.setToolTipText("<html><b>Notebook 工具</b>：主动扫描 Agent、被动扫描 Agent、人工工程师共享同一工作笔记<br/>" +
-            "• 文件位于 Workplace/notebooks，按项目自动拆分文件名<br/>" +
-            "• 支持增删改查，便于持续积累上下文与协作信息</html>");
+        enableNotebookCheckbox.setToolTipText("<html>Agent 与人工工程师共享工作笔记，位于 Workplace/notebooks</html>");
         enableNotebookCheckbox.addActionListener(e -> {
-            boolean enabled = enableNotebookCheckbox.isSelected();
-            apiClient.setEnableNotebook(enabled);
-            api.logging().logToOutput("[Notebook] Notebook 工具已" + (enabled ? "启用" : "禁用"));
+            apiClient.setEnableNotebook(enableNotebookCheckbox.isSelected());
         });
-        apiConfigPanel.add(enableNotebookCheckbox, gbc);
-
-        // 设置按钮
-        gbc.gridx = 0;
-        gbc.gridy = 18;
-        gbc.gridwidth = 2;
+        panel.add(enableNotebookCheckbox, gbc);
+        
+        // 底部填充
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2;
+        gbc.weighty = 1.0; gbc.fill = GridBagConstraints.BOTH;
+        panel.add(new JLabel(), gbc);
+        
+        return panel;
+    }
+    
+    private JPanel createConfigSubTab_Prompts() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        panel.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(3, 3, 3, 3);
+        gbc.fill = GridBagConstraints.BOTH;
+        
+        // 主动模式提示词
+        gbc.gridx = 0; gbc.gridy = 0; gbc.weightx = 1.0; gbc.weighty = 0;
         gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
-        JPanel settingsPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 5));
-        saveSettingsButton = new JButton("保存设置");
-        loadSettingsButton = new JButton("加载设置");
+        JLabel activeLabel = new JLabel("主动模式系统提示词（用于手动分析 / 聊天）:");
+        activeLabel.setFont(activeLabel.getFont().deriveFont(Font.BOLD));
+        panel.add(activeLabel, gbc);
         
-        saveSettingsButton.addActionListener(e -> saveSettings());
-        loadSettingsButton.addActionListener(e -> loadSettings());
+        gbc.gridy = 1; gbc.weighty = 0.5; gbc.fill = GridBagConstraints.BOTH;
+        activeSystemPromptArea = new JTextArea(com.ai.analyzer.Client.SystemPromptBuilder.getDefaultBasePrompt());
+        activeSystemPromptArea.setLineWrap(true);
+        activeSystemPromptArea.setWrapStyleWord(true);
+        activeSystemPromptArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        JScrollPane activeScroll = new JScrollPane(activeSystemPromptArea);
+        panel.add(activeScroll, gbc);
         
-        settingsPanel.add(saveSettingsButton);
-        settingsPanel.add(loadSettingsButton);
-        apiConfigPanel.add(settingsPanel, gbc);
+        // 被动扫描提示词
+        gbc.gridy = 2; gbc.weighty = 0; gbc.fill = GridBagConstraints.HORIZONTAL;
+        JLabel passiveLabel = new JLabel("被动扫描系统提示词（用于自动被动扫描）:");
+        passiveLabel.setFont(passiveLabel.getFont().deriveFont(Font.BOLD));
+        panel.add(passiveLabel, gbc);
         
-        configPanel.add(apiConfigPanel, BorderLayout.NORTH);
+        gbc.gridy = 3; gbc.weighty = 0.5; gbc.fill = GridBagConstraints.BOTH;
+        passiveSystemPromptArea = new JTextArea(com.ai.analyzer.pscan.SystemPromptBuilder.getDefaultBasePrompt());
+        passiveSystemPromptArea.setLineWrap(true);
+        passiveSystemPromptArea.setWrapStyleWord(true);
+        passiveSystemPromptArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        JScrollPane passiveScroll = new JScrollPane(passiveSystemPromptArea);
+        panel.add(passiveScroll, gbc);
         
-        // 添加说明文本
-        JTextArea infoArea = new JTextArea();
-        infoArea.setEditable(false);
-        infoArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
-        infoArea.setBackground(new Color(245, 245, 245));
-        infoArea.setForeground(new Color(100, 100, 100));
-        infoArea.setText("配置说明：\n" +
-                        "• API URL: 通义千问 API 的端点地址\n" +
-                        "• API Key: 从阿里云 DashScope 获取的 API 密钥\n" +
-                        "• Model: 使用的模型名称（如 qwen-max, qwen-plus 等）\n" +
-                        "• Workplace 目录: 统一根目录，自动派生 skills/rag/python-workdir/notebooks 子目录\n" +
-                        "• 启用 MCP 工具: 启用后 AI 可以调用 Burp Suite 的 MCP 工具\n" +
-                        "• Burp MCP 地址: Burp MCP Server 地址（默认: http://127.0.0.1:9876/）\n" +
-                        "• 知识库路径: 固定使用 Workplace/rag，不再手动配置\n" +
-                        "• Skills 路径: 固定使用 Workplace/skills，不再手动配置\n" +
-                        "\n提示：配置修改后会自动应用到 API 客户端，无需重启插件。\n" +
-                        "功能开关（深度思考、网络搜索）位于\"请求分析\"标签页中。\n" +
-                        "注意：Notebook 工具用于人机共享渗透记录，文件位于 Workplace/notebooks。");
-        infoArea.setLineWrap(true);
-        infoArea.setWrapStyleWord(true);
-        JScrollPane infoScrollPane = new JScrollPane(infoArea);
-        infoScrollPane.setBorder(BorderFactory.createTitledBorder("配置说明"));
-        configPanel.add(infoScrollPane, BorderLayout.CENTER);
+        // 恢复默认按钮
+        gbc.gridy = 4; gbc.weighty = 0; gbc.fill = GridBagConstraints.NONE;
+        gbc.anchor = GridBagConstraints.EAST;
+        JButton resetPromptButton = new JButton("恢复默认提示词");
+        resetPromptButton.addActionListener(e -> {
+            activeSystemPromptArea.setText(com.ai.analyzer.Client.SystemPromptBuilder.getDefaultBasePrompt());
+            passiveSystemPromptArea.setText(com.ai.analyzer.pscan.SystemPromptBuilder.getDefaultBasePrompt());
+        });
+        panel.add(resetPromptButton, gbc);
         
-        return configPanel;
+        return panel;
+    }
+    
+    private JPanel createConfigSubTab_Filters() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        panel.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(3, 3, 3, 3);
+        gbc.fill = GridBagConstraints.BOTH;
+        gbc.gridx = 0; gbc.weightx = 1.0;
+        
+        // 静态资源跳过扩展名
+        gbc.gridy = 0; gbc.weighty = 0; gbc.fill = GridBagConstraints.HORIZONTAL;
+        JLabel extLabel = new JLabel("跳过的静态资源扩展名（逗号分隔，留空使用默认）:");
+        extLabel.setFont(extLabel.getFont().deriveFont(Font.BOLD));
+        panel.add(extLabel, gbc);
+        
+        gbc.gridy = 1; gbc.weighty = 0.4; gbc.fill = GridBagConstraints.BOTH;
+        passiveScanSkipExtensionsArea = new JTextArea(PassiveScanTask.getDefaultSkipExtensionsText());
+        passiveScanSkipExtensionsArea.setLineWrap(true);
+        passiveScanSkipExtensionsArea.setWrapStyleWord(true);
+        passiveScanSkipExtensionsArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        passiveScanSkipExtensionsArea.setToolTipText("逗号或空格分隔，如：.js, .css, .png, .jpg");
+        JScrollPane extScroll = new JScrollPane(passiveScanSkipExtensionsArea);
+        panel.add(extScroll, gbc);
+        
+        // 域名黑名单
+        gbc.gridy = 2; gbc.weighty = 0; gbc.fill = GridBagConstraints.HORIZONTAL;
+        JLabel domainLabel = new JLabel("被动扫描域名黑名单（每行一个，支持通配符如 *.google.com）:");
+        domainLabel.setFont(domainLabel.getFont().deriveFont(Font.BOLD));
+        panel.add(domainLabel, gbc);
+        
+        gbc.gridy = 3; gbc.weighty = 0.4; gbc.fill = GridBagConstraints.BOTH;
+        passiveScanDomainBlacklistArea = new JTextArea("");
+        passiveScanDomainBlacklistArea.setLineWrap(true);
+        passiveScanDomainBlacklistArea.setWrapStyleWord(true);
+        passiveScanDomainBlacklistArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        passiveScanDomainBlacklistArea.setToolTipText("每行一个域名模式，# 开头为注释。如：\n*.google.com\n*.gstatic.com\nfonts.googleapis.com");
+        JScrollPane domainScroll = new JScrollPane(passiveScanDomainBlacklistArea);
+        panel.add(domainScroll, gbc);
+        
+        // 恢复默认 + 立即应用
+        gbc.gridy = 4; gbc.weighty = 0; gbc.fill = GridBagConstraints.NONE;
+        gbc.anchor = GridBagConstraints.EAST;
+        JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        JButton resetFiltersButton = new JButton("恢复默认扩展名");
+        resetFiltersButton.addActionListener(e -> {
+            passiveScanSkipExtensionsArea.setText(PassiveScanTask.getDefaultSkipExtensionsText());
+        });
+        JButton applyFiltersButton = new JButton("立即应用过滤规则");
+        applyFiltersButton.addActionListener(e -> applyPassiveScanFilters());
+        btnPanel.add(resetFiltersButton);
+        btnPanel.add(applyFiltersButton);
+        panel.add(btnPanel, gbc);
+        
+        // 说明
+        gbc.gridy = 5; gbc.weighty = 0.2; gbc.fill = GridBagConstraints.BOTH;
+        gbc.anchor = GridBagConstraints.NORTHWEST;
+        JTextArea hint = new JTextArea(
+            "说明：\n" +
+            "• 扩展名列表用于过滤被动扫描中的静态资源请求（如图片、字体、脚本等）\n" +
+            "• 域名黑名单中的主机将被完全跳过扫描，支持通配符 * 和 ?\n" +
+            "• 修改后需点击「立即应用」或「保存设置」后生效\n" +
+            "• 留空扩展名列表将使用内置默认值");
+        hint.setEditable(false);
+        hint.setOpaque(false);
+        hint.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
+        hint.setForeground(java.awt.Color.GRAY);
+        panel.add(hint, gbc);
+        
+        return panel;
+    }
+    
+    private void applyPassiveScanFilters() {
+        String extText = passiveScanSkipExtensionsArea.getText().trim();
+        String defaultText = PassiveScanTask.getDefaultSkipExtensionsText();
+        PassiveScanTask.setCustomSkipExtensions(extText.equals(defaultText) ? null : extText);
+        PassiveScanTask.setDomainBlacklist(passiveScanDomainBlacklistArea.getText());
+        api.logging().logToOutput("[PassiveScan] 过滤规则已应用");
     }
     
     /**
@@ -1388,6 +1280,7 @@ public class AIAnalyzerTab extends JPanel {
         
         passiveScanTable = new JTable(passiveScanTableModel);
         passiveScanTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        passiveScanTable.setAutoCreateRowSorter(true);
         
         // 设置列宽
         passiveScanTable.getColumnModel().getColumn(0).setPreferredWidth(40);  // ID
@@ -1410,14 +1303,14 @@ public class AIAnalyzerTab extends JPanel {
         // 选择行时显示详细信息
         passiveScanTable.getSelectionModel().addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) {
-                int selectedRow = passiveScanTable.getSelectedRow();
-                if (selectedRow >= 0 && passiveScanManager != null) {
-                    Integer id = (Integer) passiveScanTableModel.getValueAt(selectedRow, 0);
+                int viewRow = passiveScanTable.getSelectedRow();
+                if (viewRow >= 0 && passiveScanManager != null) {
+                    int modelRow = passiveScanTable.convertRowIndexToModel(viewRow);
+                    Integer id = (Integer) passiveScanTableModel.getValueAt(modelRow, 0);
                     if (id != null) {
                         ScanResult result = passiveScanManager.getResultById(id);
                         if (result != null) {
-                            // 如果切换到不同的请求，清空流式buffer（但不清空 currentStreamingId，让 displayScanResult 处理）
-                            Integer selectedId = (Integer) passiveScanTableModel.getValueAt(selectedRow, 0);
+                            Integer selectedId = id;
                             if (currentStreamingId != null && !selectedId.equals(currentStreamingId)) {
                                 passiveScanStreamBuffer.setLength(0);
                             }
@@ -1567,9 +1460,10 @@ public class AIAnalyzerTab extends JPanel {
      * 删除选中的被动扫描结果
      */
     private void deleteSelectedPassiveScanResult() {
-        int selectedRow = passiveScanTable.getSelectedRow();
-        if (selectedRow >= 0) {
-            passiveScanTableModel.removeRow(selectedRow);
+        int viewRow = passiveScanTable.getSelectedRow();
+        if (viewRow >= 0) {
+            int modelRow = passiveScanTable.convertRowIndexToModel(viewRow);
+            passiveScanTableModel.removeRow(modelRow);
             clearHttpEditors();
             resultTextPane.setText("");
         }
@@ -1853,16 +1747,16 @@ public class AIAnalyzerTab extends JPanel {
         // 允许没有选择请求时也能进行分析（自由对话模式）
         RequestData requestData = null;
         ScanResult scanResult = null;
-        int selectedRow = (activeModeSelected || passiveScanTable == null) ? -1 : passiveScanTable.getSelectedRow();
-        if (selectedRow >= 0) {
-            // 优先从被动扫描结果获取
-            Integer id = (Integer) passiveScanTableModel.getValueAt(selectedRow, 0);
+        int viewRow = (activeModeSelected || passiveScanTable == null) ? -1 : passiveScanTable.getSelectedRow();
+        if (viewRow >= 0) {
+            int modelRow = passiveScanTable.convertRowIndexToModel(viewRow);
+            Integer id = (Integer) passiveScanTableModel.getValueAt(modelRow, 0);
             if (id != null && passiveScanManager != null) {
                 scanResult = passiveScanManager.getResultById(id);
             }
             // 如果是手动添加的请求，尝试从 requestList 获取
-            if (scanResult == null && selectedRow < requestList.size()) {
-                requestData = requestList.get(selectedRow);
+            if (scanResult == null && modelRow < requestList.size()) {
+                requestData = requestList.get(modelRow);
             }
         }
 
@@ -2203,11 +2097,37 @@ public class AIAnalyzerTab extends JPanel {
             settings.setEnabledSkillNames(apiClient.getSkillManager().getEnabledSkillNames());
             settings.setWorkplaceDirectoryPath(workplaceDirectoryField != null ? workplaceDirectoryField.getText().trim() : "");
 
+            // 自定义系统提示词（与默认值相同时存 null，避免冗余序列化）
+            if (activeSystemPromptArea != null) {
+                String activeText = activeSystemPromptArea.getText();
+                settings.setCustomActiveSystemPrompt(
+                    activeText.strip().equals(com.ai.analyzer.Client.SystemPromptBuilder.getDefaultBasePrompt().strip()) ? null : activeText);
+            }
+            if (passiveSystemPromptArea != null) {
+                String passiveText = passiveSystemPromptArea.getText();
+                settings.setCustomPassiveSystemPrompt(
+                    passiveText.strip().equals(com.ai.analyzer.pscan.SystemPromptBuilder.getDefaultBasePrompt().strip()) ? null : passiveText);
+            }
+            // 被动扫描过滤（与默认值相同时存空串）
+            if (passiveScanSkipExtensionsArea != null) {
+                String extText = passiveScanSkipExtensionsArea.getText();
+                settings.setPassiveScanSkipExtensions(
+                    extText.strip().equals(com.ai.analyzer.pscan.PassiveScanTask.getDefaultSkipExtensionsText().strip()) ? "" : extText);
+            }
+            if (passiveScanDomainBlacklistArea != null) settings.setPassiveScanDomainBlacklist(passiveScanDomainBlacklistArea.getText());
+            
+            // 应用系统提示词到 API 客户端
+            apiClient.setCustomSystemPrompt(settings.getCustomActiveSystemPrompt());
+            if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
+                passiveScanManager.getApiClient().setCustomSystemPrompt(settings.getCustomPassiveSystemPrompt());
+            }
+            // 应用被动扫描过滤规则
+            applyPassiveScanFilters();
+
             ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream("ai_analyzer_settings.dat"));
             oos.writeObject(settings);
             oos.close();
 
-            //JOptionPane.showMessageDialog(this, "设置已保存", "成功", JOptionPane.INFORMATION_MESSAGE);
             api.logging().logToOutput("设置已保存");
         } catch (Exception e) {
             //JOptionPane.showMessageDialog(this, "保存设置失败: " + e.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
@@ -2376,6 +2296,19 @@ public class AIAnalyzerTab extends JPanel {
             enableNotebookCheckbox.setSelected(settings.isEnableNotebook());
             apiClient.setEnableNotebook(settings.isEnableNotebook());
         }
+        
+        // 自定义系统提示词
+        if (activeSystemPromptArea != null) activeSystemPromptArea.setText(settings.getCustomActiveSystemPrompt());
+        if (passiveSystemPromptArea != null) passiveSystemPromptArea.setText(settings.getCustomPassiveSystemPrompt());
+        apiClient.setCustomSystemPrompt(settings.getCustomActiveSystemPrompt());
+        if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
+            passiveScanManager.getApiClient().setCustomSystemPrompt(settings.getCustomPassiveSystemPrompt());
+        }
+        
+        // 被动扫描过滤配置
+        if (passiveScanSkipExtensionsArea != null) passiveScanSkipExtensionsArea.setText(settings.getPassiveScanSkipExtensions());
+        if (passiveScanDomainBlacklistArea != null) passiveScanDomainBlacklistArea.setText(settings.getPassiveScanDomainBlacklist());
+        applyPassiveScanFilters();
     }
 
     private void setPromptTextForAllModes(String text) {
@@ -2421,10 +2354,11 @@ public class AIAnalyzerTab extends JPanel {
                     };
                     passiveScanTableModel.addRow(rowData);
                     
-                    // 选中新添加的行
-                    int newRow = passiveScanTableModel.getRowCount() - 1;
-                    passiveScanTable.setRowSelectionInterval(newRow, newRow);
-                    passiveScanTable.scrollRectToVisible(passiveScanTable.getCellRect(newRow, 0, true));
+                    // 选中新添加的行（model index → view index）
+                    int modelRow = passiveScanTableModel.getRowCount() - 1;
+                    int viewRow = passiveScanTable.convertRowIndexToView(modelRow);
+                    passiveScanTable.setRowSelectionInterval(viewRow, viewRow);
+                    passiveScanTable.scrollRectToVisible(passiveScanTable.getCellRect(viewRow, 0, true));
                     
                     // 显示请求详情
                     displayScanResult(scanResult);
