@@ -160,33 +160,6 @@
         <scope>test</scope>
     </dependency>
 
-<!--    &lt;!&ndash; Apache Tika 用于解析文档 &ndash;&gt;-->
-<!--    <dependency>-->
-<!--       <groupId>dev.langchain4j</groupId>-->
-<!--       <artifactId>langchain4j-document-parser-apache-tika</artifactId>-->
-<!--       <version>1.8.0-beta15</version>-->
-<!--    </dependency>-->
-
-<!--    &lt;!&ndash; 更新 Apache Commons IO 版本以解决 NoSuchMethodError 错误 &ndash;&gt;-->
-<!--    <dependency>-->
-<!--        <groupId>commons-io</groupId>-->
-<!--        <artifactId>commons-io</artifactId>-->
-<!--        <version>2.15.1</version>-->
-<!--    </dependency>-->
-
-<!--    &lt;!&ndash; Apache Commons Compress 解决版本兼容性问题 &ndash;&gt;-->
-<!--    <dependency>-->
-<!--        <groupId>org.apache.commons</groupId>-->
-<!--        <artifactId>commons-compress</artifactId>-->
-<!--        <version>1.26.0</version>-->
-<!--    </dependency>-->
-
-<!--    &lt;!&ndash; 添加 Apache Commons CSV 依赖以解决 NoSuchMethodError 错误 &ndash;&gt;-->
-<!--    <dependency>-->
-<!--        <groupId>org.apache.commons</groupId>-->
-<!--        <artifactId>commons-csv</artifactId>-->
-<!--        <version>1.10.0</version>-->
-<!--    </dependency>-->
 </dependencies>
 
 
