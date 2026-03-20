@@ -468,7 +468,7 @@ public class MarkdownRenderer {
         String literal = codeBlock.getLiteral();
         if (literal != null && !literal.isEmpty()) {
             Theme t = theme();
-            Style codeBlockStyle = doc.addStyle("codeBlock", null);
+            Style codeBlockStyle = getOrCreateStyle(doc, "codeBlock", null);
             StyleConstants.setFontFamily(codeBlockStyle, "Consolas");
             StyleConstants.setFontSize(codeBlockStyle, 12);
             StyleConstants.setBackground(codeBlockStyle, t.codeBlockBg);
@@ -489,7 +489,7 @@ public class MarkdownRenderer {
         String literal = codeBlock.getLiteral();
         if (literal != null && !literal.isEmpty()) {
             Theme t = theme();
-            Style codeBlockStyle = doc.addStyle("indentedCodeBlock", null);
+            Style codeBlockStyle = getOrCreateStyle(doc, "indentedCodeBlock", null);
             StyleConstants.setFontFamily(codeBlockStyle, "Consolas");
             StyleConstants.setFontSize(codeBlockStyle, 12);
             StyleConstants.setBackground(codeBlockStyle, t.codeBlockBg);
@@ -551,27 +551,28 @@ public class MarkdownRenderer {
         int[] colW = new int[numCols];
         for (List<String> r : headerRows) fillColWidths(r, colW);
         for (List<String> r : bodyRows) fillColWidths(r, colW);
-        for (int i = 0; i < numCols; i++) colW[i] = Math.min(colW[i] + 2, 40);
+        int maxPerCol = 60;
+        for (int i = 0; i < numCols; i++) colW[i] = Math.min(colW[i] + 2, maxPerCol);
 
-        // --- 样式 ---
+        // --- 样式（缓存复用） ---
         Theme t = theme();
         Style tableMono = getOrCreateStyle(doc, "tableMono", regular);
         StyleConstants.setFontFamily(tableMono, "Consolas");
         StyleConstants.setFontSize(tableMono, 12);
 
-        Style headerStyle = doc.addStyle("tableHeader", tableMono);
+        Style headerStyle = getOrCreateStyle(doc, "tableHeader", tableMono);
         StyleConstants.setBold(headerStyle, true);
         StyleConstants.setForeground(headerStyle, t.tableHeaderFg);
         StyleConstants.setBackground(headerStyle, t.tableHeaderBg);
 
-        Style borderStyle = doc.addStyle("tableBorder", tableMono);
+        Style borderStyle = getOrCreateStyle(doc, "tableBorder", tableMono);
         StyleConstants.setForeground(borderStyle, t.tableBorder);
 
-        Style evenStyle = doc.addStyle("tableRowEven", tableMono);
+        Style evenStyle = getOrCreateStyle(doc, "tableRowEven", tableMono);
         StyleConstants.setBackground(evenStyle, t.tableEvenBg);
         StyleConstants.setForeground(evenStyle, t.tableCellFg);
 
-        Style oddStyle = doc.addStyle("tableRowOdd", tableMono);
+        Style oddStyle = getOrCreateStyle(doc, "tableRowOdd", tableMono);
         StyleConstants.setBackground(oddStyle, t.tableOddBg);
         StyleConstants.setForeground(oddStyle, t.tableCellFg);
 
@@ -593,6 +594,10 @@ public class MarkdownRenderer {
             Style cellStyle, Style borderStyle) throws BadLocationException {
         for (int i = 0; i < numCols; i++) {
             String text = i < cells.size() ? cells.get(i) : "";
+            int maxCellW = colW[i] - 2;
+            if (maxCellW > 3 && displayWidth(text) > maxCellW) {
+                text = truncateToDisplayWidth(text, maxCellW);
+            }
             TableCell.Alignment align = i < aligns.size() ? aligns.get(i) : null;
             String padded = " " + padToWidth(text, colW[i] - 1, align);
             doc.insertString(doc.getLength(), padded, cellStyle);
@@ -601,6 +606,22 @@ public class MarkdownRenderer {
             }
         }
         doc.insertString(doc.getLength(), "\n", cellStyle);
+    }
+
+    private static String truncateToDisplayWidth(String s, int maxWidth) {
+        if (maxWidth < 4) return s;
+        StringBuilder sb = new StringBuilder();
+        int w = 0;
+        for (int i = 0; i < s.length(); ) {
+            int cp = s.codePointAt(i);
+            int charW = isWideChar(cp) ? 2 : 1;
+            if (w + charW > maxWidth - 1) break;
+            w += charW;
+            i += Character.charCount(cp);
+            sb.appendCodePoint(cp);
+        }
+        sb.append("…");
+        return sb.toString();
     }
 
     private static void renderTableSeparator(StyledDocument doc,
@@ -789,29 +810,29 @@ public class MarkdownRenderer {
         String params = parts.length > 1 ? parts[1] : "";
         
         Theme t = theme();
-        Style blockBgStyle = doc.addStyle("toolBlockBg", regular);
+        Style blockBgStyle = getOrCreateStyle(doc, "toolBlockBg", regular);
         StyleConstants.setBackground(blockBgStyle, t.toolBlockBg);
         
-        Style iconStyle = doc.addStyle("toolIcon", blockBgStyle);
+        Style iconStyle = getOrCreateStyle(doc, "toolIcon", blockBgStyle);
         StyleConstants.setForeground(iconStyle, t.toolIcon);
         StyleConstants.setFontSize(iconStyle, 13);
         StyleConstants.setBold(iconStyle, true);
         StyleConstants.setBackground(iconStyle, t.toolBlockBg);
         
-        Style nameStyle = doc.addStyle("toolName", blockBgStyle);
+        Style nameStyle = getOrCreateStyle(doc, "toolName", blockBgStyle);
         StyleConstants.setForeground(nameStyle, t.toolName);
         StyleConstants.setFontFamily(nameStyle, "Consolas");
         StyleConstants.setFontSize(nameStyle, 13);
         StyleConstants.setBold(nameStyle, true);
         StyleConstants.setBackground(nameStyle, t.toolBlockBg);
         
-        Style paramKeyStyle = doc.addStyle("toolParamKey", blockBgStyle);
+        Style paramKeyStyle = getOrCreateStyle(doc, "toolParamKey", blockBgStyle);
         StyleConstants.setForeground(paramKeyStyle, t.toolParamKey);
         StyleConstants.setFontFamily(paramKeyStyle, "Consolas");
         StyleConstants.setFontSize(paramKeyStyle, 11);
         StyleConstants.setBackground(paramKeyStyle, t.toolBlockBg);
         
-        Style paramValStyle = doc.addStyle("toolParamVal", blockBgStyle);
+        Style paramValStyle = getOrCreateStyle(doc, "toolParamVal", blockBgStyle);
         StyleConstants.setForeground(paramValStyle, t.toolParamVal);
         StyleConstants.setFontFamily(paramValStyle, "Microsoft YaHei");
         StyleConstants.setFontSize(paramValStyle, 11);
@@ -864,7 +885,7 @@ public class MarkdownRenderer {
      */
     private static void renderToolBlockSimple(StyledDocument doc, String content, Style regular) throws BadLocationException {
         Theme t = theme();
-        Style blockStyle = doc.addStyle("toolBlockSimple", regular);
+        Style blockStyle = getOrCreateStyle(doc, "toolBlockSimple", regular);
         StyleConstants.setBackground(blockStyle, t.toolBlockBg);
         StyleConstants.setForeground(blockStyle, t.toolName);
         StyleConstants.setFontFamily(blockStyle, "Consolas");

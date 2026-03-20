@@ -87,6 +87,10 @@ public class AIAnalyzerTab extends JPanel {
     private JTextArea passiveScanSkipExtensionsArea;
     private JTextArea passiveScanDomainBlacklistArea;
     
+    // 联网搜索配置
+    private JComboBox<String> searchModeComboBox;
+    private JTextField tavilyApiKeyField;
+    
     // 已替换为 passiveScanTable 和 passiveScanTableModel
     // private JTable requestListTable;
     // private DefaultTableModel requestTableModel;
@@ -340,45 +344,71 @@ public class AIAnalyzerTab extends JPanel {
             SwingUtilities.invokeLater(() -> passiveScanProgressBar.setValue(progress));
         });
         
-        // ========== 设置流式输出回调（新增） ==========
+        // ========== 设置流式输出回调（两级渲染：纯文本追加 + 定期 Markdown 刷新） ==========
+        final long[] pscanPlainTime = {0L};
+        final long PSCAN_PLAIN_MS = 150;
+        final long[] pscanMdTime = {0L};
+        final long PSCAN_MD_MS = 2000;
+        final int[] pscanPlainLen = {0};
         passiveScanManager.setOnStreamingChunk(chunk -> {
             SwingUtilities.invokeLater(() -> {
                 if (passiveScanResultPane == null) return;
-                // 检查当前选中的行是否正在流式输出
                 int viewRow = passiveScanTable.getSelectedRow();
-                if (viewRow >= 0) {
-                    int modelRow = passiveScanTable.convertRowIndexToModel(viewRow);
-                    Integer selectedId = (Integer) passiveScanTableModel.getValueAt(modelRow, 0);
-                    ScanResult currentStreaming = passiveScanManager.getCurrentStreamingScanResult();
-                    
-                    // 只有当前选中的行正在流式输出时，才显示流式输出
-                    if (currentStreaming != null && selectedId != null && selectedId.equals(currentStreaming.getId())) {
-                        // 如果是新的流式请求（ID不匹配或为null），初始化
-                        if (currentStreamingId == null || !currentStreamingId.equals(selectedId)) {
-                            passiveScanStreamBuffer.setLength(0);
-                            currentStreamingId = selectedId;
-                        }
-                        
-                        // 累积chunk到buffer
-                        passiveScanStreamBuffer.append(chunk);
-                        
-                        try {
-                            // 使用流式Markdown渲染 - 传入完整累积的内容
-                            MarkdownRenderer.appendMarkdownStreaming(
-                                passiveScanResultPane, 
-                                passiveScanStreamBuffer.toString(),  // 传入完整累积内容
-                                0  // 从头开始渲染
-                            );
-                            passiveScanResultPane.setCaretPosition(passiveScanResultPane.getStyledDocument().getLength());
-                        } catch (Exception e) {
-                            // 如果Markdown渲染失败，使用纯文本
-                            try {
-                                passiveScanResultPane.setText(passiveScanStreamBuffer.toString());
-                                passiveScanResultPane.setCaretPosition(passiveScanResultPane.getText().length());
-                            } catch (Exception ex) {
-                                api.logging().logToError("流式输出失败: " + ex.getMessage());
-                            }
-                        }
+                if (viewRow < 0) return;
+
+                int modelRow = passiveScanTable.convertRowIndexToModel(viewRow);
+                Integer selectedId = (Integer) passiveScanTableModel.getValueAt(modelRow, 0);
+                ScanResult currentStreaming = passiveScanManager.getCurrentStreamingScanResult();
+                if (currentStreaming == null || selectedId == null || !selectedId.equals(currentStreaming.getId())) return;
+
+                if (currentStreamingId == null || !currentStreamingId.equals(selectedId)) {
+                    passiveScanStreamBuffer.setLength(0);
+                    pscanPlainLen[0] = 0;
+                    pscanMdTime[0] = 0;
+                    currentStreamingId = selectedId;
+                }
+
+                passiveScanStreamBuffer.append(chunk);
+                long now = System.currentTimeMillis();
+
+                if (now - pscanMdTime[0] >= PSCAN_MD_MS) {
+                    pscanMdTime[0] = now;
+                    pscanPlainTime[0] = now;
+                    pscanPlainLen[0] = passiveScanStreamBuffer.length();
+                    String snapshot = passiveScanStreamBuffer.toString();
+                    try {
+                        MarkdownRenderer.appendMarkdownStreaming(passiveScanResultPane, snapshot, 0);
+                        passiveScanResultPane.setCaretPosition(passiveScanResultPane.getStyledDocument().getLength());
+                    } catch (Exception e) {
+                        passiveScanResultPane.setText(snapshot);
+                    }
+                    return;
+                }
+
+                if (now - pscanPlainTime[0] < PSCAN_PLAIN_MS) return;
+                pscanPlainTime[0] = now;
+
+                try {
+                    int start = pscanPlainLen[0];
+                    String newText = passiveScanStreamBuffer.substring(start);
+                    pscanPlainLen[0] = passiveScanStreamBuffer.length();
+
+                    StyledDocument doc = passiveScanResultPane.getStyledDocument();
+                    javax.swing.text.Style plain = doc.getStyle("pscan_streaming");
+                    if (plain == null) {
+                        plain = doc.addStyle("pscan_streaming", null);
+                        javax.swing.text.StyleConstants.setFontFamily(plain, "Microsoft YaHei");
+                        javax.swing.text.StyleConstants.setFontSize(plain, 13);
+                        Color fg = UIManager.getColor("TextArea.foreground");
+                        if (fg != null) javax.swing.text.StyleConstants.setForeground(plain, fg);
+                    }
+                    doc.insertString(doc.getLength(), newText, plain);
+                    passiveScanResultPane.setCaretPosition(doc.getLength());
+                } catch (Exception e) {
+                    try {
+                        passiveScanResultPane.setText(passiveScanStreamBuffer.toString());
+                    } catch (Exception ex) {
+                        api.logging().logToError("流式输出失败: " + ex.getMessage());
                     }
                 }
             });
@@ -403,6 +433,8 @@ public class AIAnalyzerTab extends JPanel {
             psClient.setApiProvider(apiClient.getApiProvider().getDisplayName());
             psClient.setEnableThinking(apiClient.isEnableThinking());
             psClient.setEnableSearch(apiClient.isEnableSearch());
+            psClient.setSearchMode(apiClient.getConfig().getSearchMode());
+            psClient.setTavilyApiKey(apiClient.getConfig().getTavilyApiKey());
             
             // MCP 配置（关键：这些配置决定了工具是否可用）
             psClient.setEnableMcp(apiClient.isEnableMcp());
@@ -517,6 +549,7 @@ public class AIAnalyzerTab extends JPanel {
         JTabbedPane subTabs = new JTabbedPane(JTabbedPane.TOP);
         subTabs.addTab("基础配置", createConfigSubTab_Basic());
         subTabs.addTab("功能开关", createConfigSubTab_Features());
+        subTabs.addTab("联网搜索", createConfigSubTab_Search());
         subTabs.addTab("系统提示词", createConfigSubTab_Prompts());
         subTabs.addTab("被动扫描过滤", createConfigSubTab_Filters());
         
@@ -543,6 +576,7 @@ public class AIAnalyzerTab extends JPanel {
         apiProviderComboBox.addActionListener(e -> {
             String sel = (String) apiProviderComboBox.getSelectedItem();
             apiClient.setApiProvider(sel);
+            boolean isTavilyMode = searchModeComboBox != null && searchModeComboBox.getSelectedIndex() == 1;
             if ("DashScope".equals(sel)) {
                 if (apiUrlField.getText().contains("openai.com") || apiUrlField.getText().contains("anthropic.com") || apiUrlField.getText().isEmpty())
                     apiUrlField.setText("https://dashscope.aliyuncs.com/api/v1");
@@ -552,15 +586,15 @@ public class AIAnalyzerTab extends JPanel {
                 if (apiUrlField.getText().contains("dashscope") || apiUrlField.getText().contains("openai.com") || apiUrlField.getText().isEmpty())
                     apiUrlField.setText("https://api.anthropic.com");
                 enableThinkingCheckBox.setEnabled(true);
-                enableSearchCheckBox.setEnabled(false);
-                enableSearchCheckBox.setSelected(false);
+                enableSearchCheckBox.setEnabled(isTavilyMode);
+                if (!isTavilyMode) enableSearchCheckBox.setSelected(false);
             } else {
                 if (apiUrlField.getText().contains("dashscope") || apiUrlField.getText().contains("anthropic.com") || apiUrlField.getText().isEmpty())
                     apiUrlField.setText("https://api.openai.com/v1");
                 enableThinkingCheckBox.setEnabled(false);
                 enableThinkingCheckBox.setSelected(false);
-                enableSearchCheckBox.setEnabled(false);
-                enableSearchCheckBox.setSelected(false);
+                enableSearchCheckBox.setEnabled(isTavilyMode);
+                if (!isTavilyMode) enableSearchCheckBox.setSelected(false);
             }
         });
         apiProviderComboBox.setToolTipText("选择 API 提供者：DashScope（通义千问）、OpenAI 兼容格式、Anthropic 兼容（Claude）");
@@ -797,6 +831,72 @@ public class AIAnalyzerTab extends JPanel {
         return panel;
     }
     
+    private JPanel createConfigSubTab_Search() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        panel.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(4, 5, 4, 5);
+        gbc.anchor = GridBagConstraints.WEST;
+
+        int row = 0;
+
+        // 搜索方式
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 1; gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        panel.add(new JLabel("搜索方式:"), gbc);
+        searchModeComboBox = new JComboBox<>(new String[]{
+                "模型内置搜索 (仅DashScope)",
+                "Tavily搜索引擎 (所有模型)",
+        });
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        panel.add(searchModeComboBox, gbc);
+
+        row++;
+
+        // Tavily API Key
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 1; gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        panel.add(new JLabel("API Key:"), gbc);
+        tavilyApiKeyField = new JTextField(40);
+        tavilyApiKeyField.setToolTipText("Tavily API Key (从 https://tavily.com 获取)");
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        panel.add(tavilyApiKeyField, gbc);
+
+        row++;
+
+        // 说明
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2; gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        JTextArea hint = new JTextArea(
+                "说明:\n" +
+                "• 模型内置搜索: 通过模型参数 enableSearch 实现，仅 DashScope (通义千问) 支持\n" +
+                "• Tavily搜索引擎: 通过 WebSearchTools 工具实现，所有模型均可使用\n" +
+                "  - Tavily 提供免费 API Key (每月1000次请求)，注册地址: https://tavily.com\n" +
+                "  - 选择此模式后，AI Agent 可主动调用搜索工具查询漏洞信息、技术文档等\n" +
+                "• 主界面的「启用网络搜索」开关控制是否启用搜索，此处配置搜索的实现方式");
+        hint.setEditable(false);
+        hint.setOpaque(false);
+        hint.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
+        hint.setForeground(UIManager.getColor("Label.disabledForeground"));
+        hint.setBorder(BorderFactory.createEmptyBorder(8, 0, 0, 0));
+        panel.add(hint, gbc);
+
+        // 根据搜索方式切换 API Key 输入框启用状态
+        searchModeComboBox.addActionListener(e -> {
+            boolean isTavily = searchModeComboBox.getSelectedIndex() == 1;
+            tavilyApiKeyField.setEnabled(isTavily);
+        });
+        tavilyApiKeyField.setEnabled(false);
+
+        // 底部填充
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2;
+        gbc.weighty = 1.0; gbc.fill = GridBagConstraints.BOTH;
+        panel.add(new JLabel(), gbc);
+
+        return panel;
+    }
+
     private JPanel createConfigSubTab_Prompts() {
         JPanel panel = new JPanel(new GridBagLayout());
         panel.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
@@ -1862,80 +1962,82 @@ public class AIAnalyzerTab extends JPanel {
                         aiMessageStartPos = 0;
                     }
                     
+                    final long[] lastPlainTime = {0L};
+                    final long PLAIN_INTERVAL_MS = 150;
+                    final long[] lastMdTime = {0L};
+                    final long MD_INTERVAL_MS = 2000;
+                    final int[] lastPlainLen = {0};
+
                     apiClient.analyzeRequestStream(
                         httpContent,
                         finalUserPrompt,
                         chunk -> {
-                            if (currentWorker.isCancelled() || !isAnalyzing) {
-                                return;
-                            }
-                            
+                            if (currentWorker.isCancelled() || !isAnalyzing) return;
+
                             fullResponse.append(chunk);
-                            
-                            try {
-                                SwingUtilities.invokeAndWait(() -> {
-                                    if (currentWorker.isCancelled() || !isAnalyzing) {
-                                        return;
-                                    }
+
+                            long now = System.currentTimeMillis();
+
+                            if (now - lastMdTime[0] >= MD_INTERVAL_MS && aiMessageStartPos >= 0) {
+                                lastMdTime[0] = now;
+                                lastPlainTime[0] = now;
+                                lastPlainLen[0] = fullResponse.length();
+                                String snapshot = fullResponse.toString();
+                                SwingUtilities.invokeLater(() -> {
+                                    if (currentWorker.isCancelled() || !isAnalyzing) return;
                                     try {
-                                        MarkdownRenderer.appendMarkdownStreaming(targetResultPane, fullResponse.toString(), aiMessageStartPos);
+                                        MarkdownRenderer.appendMarkdownStreaming(targetResultPane, snapshot, aiMessageStartPos);
                                         targetResultPane.setCaretPosition(targetResultPane.getStyledDocument().getLength());
                                     } catch (Exception e) {
                                         api.logging().logToError("流式Markdown渲染失败: " + e.getMessage());
-                                        e.printStackTrace();
                                     }
                                 });
-                            } catch (Exception e) {
-                                SwingUtilities.invokeLater(() -> {
-                                    if (currentWorker.isCancelled() || !isAnalyzing) {
-                                        return;
-                                    }
-                                    try {
-                                        MarkdownRenderer.appendMarkdownStreaming(targetResultPane, fullResponse.toString(), aiMessageStartPos);
-                                        targetResultPane.setCaretPosition(targetResultPane.getStyledDocument().getLength());
-                                    } catch (Exception ex) {
-                                        api.logging().logToError("流式Markdown渲染失败: " + ex.getMessage());
-                                    }
-                                });
+                                return;
                             }
+
+                            if (now - lastPlainTime[0] < PLAIN_INTERVAL_MS) return;
+                            lastPlainTime[0] = now;
+
+                            int start = lastPlainLen[0];
+                            String newText = fullResponse.substring(start);
+                            lastPlainLen[0] = fullResponse.length();
+
+                            SwingUtilities.invokeLater(() -> {
+                                if (currentWorker.isCancelled() || !isAnalyzing) return;
+                                try {
+                                    StyledDocument doc = targetResultPane.getStyledDocument();
+                                    javax.swing.text.Style plain = doc.getStyle("streaming_plain");
+                                    if (plain == null) {
+                                        plain = doc.addStyle("streaming_plain", null);
+                                        javax.swing.text.StyleConstants.setFontFamily(plain, "Microsoft YaHei");
+                                        javax.swing.text.StyleConstants.setFontSize(plain, 13);
+                                        Color fg = UIManager.getColor("TextArea.foreground");
+                                        if (fg != null) javax.swing.text.StyleConstants.setForeground(plain, fg);
+                                    }
+                                    doc.insertString(doc.getLength(), newText, plain);
+                                    targetResultPane.setCaretPosition(doc.getLength());
+                                } catch (Exception e) {
+                                    api.logging().logToError("流式文本追加失败: " + e.getMessage());
+                                }
+                            });
                         }
                     );
                     
                     String finalContent = fullResponse.toString();
                     if (!finalContent.isEmpty()) {
-                        try {
-                            SwingUtilities.invokeAndWait(() -> {
-                                try {
-                                    StyledDocument doc = targetResultPane.getStyledDocument();
-                                    int currentLength = doc.getLength();
-                                    if (currentLength > aiMessageStartPos) {
-                                        doc.remove(aiMessageStartPos, currentLength - aiMessageStartPos);
-                                    }
-                                    MarkdownRenderer.appendMarkdown(targetResultPane, finalContent);
-                                    targetResultPane.setCaretPosition(targetResultPane.getStyledDocument().getLength());
-                                } catch (BadLocationException e) {
-                                    api.logging().logToError("流式输出完成后完整渲染失败: " + e.getMessage());
-                                } catch (Exception e) {
-                                    api.logging().logToError("流式输出完成后完整渲染失败: " + e.getMessage());
+                        SwingUtilities.invokeLater(() -> {
+                            try {
+                                StyledDocument doc = targetResultPane.getStyledDocument();
+                                int currentLength = doc.getLength();
+                                if (currentLength > aiMessageStartPos) {
+                                    doc.remove(aiMessageStartPos, currentLength - aiMessageStartPos);
                                 }
-                            });
-                        } catch (Exception e) {
-                            SwingUtilities.invokeLater(() -> {
-                                try {
-                                    StyledDocument doc = targetResultPane.getStyledDocument();
-                                    int currentLength = doc.getLength();
-                                    if (currentLength > aiMessageStartPos) {
-                                        doc.remove(aiMessageStartPos, currentLength - aiMessageStartPos);
-                                    }
-                                    MarkdownRenderer.appendMarkdown(targetResultPane, finalContent);
-                                    targetResultPane.setCaretPosition(targetResultPane.getStyledDocument().getLength());
-                                } catch (BadLocationException ex) {
-                                    api.logging().logToError("流式输出完成后完整渲染失败: " + ex.getMessage());
-                                } catch (Exception ex) {
-                                    api.logging().logToError("流式输出完成后完整渲染失败: " + ex.getMessage());
-                                }
-                            });
-                        }
+                                MarkdownRenderer.appendMarkdown(targetResultPane, finalContent);
+                                targetResultPane.setCaretPosition(doc.getLength());
+                            } catch (Exception e) {
+                                api.logging().logToError("最终Markdown渲染失败: " + e.getMessage());
+                            }
+                        });
                     }
                 } catch (Exception e) {
                     SwingUtilities.invokeLater(() -> {
@@ -2097,6 +2199,20 @@ public class AIAnalyzerTab extends JPanel {
             settings.setEnabledSkillNames(apiClient.getSkillManager().getEnabledSkillNames());
             settings.setWorkplaceDirectoryPath(workplaceDirectoryField != null ? workplaceDirectoryField.getText().trim() : "");
 
+            // 联网搜索配置
+            if (searchModeComboBox != null) {
+                settings.setSearchMode(searchModeComboBox.getSelectedIndex() == 1 ? "tavily" : "enableSearch");
+            }
+            if (tavilyApiKeyField != null) {
+                settings.setTavilyApiKey(tavilyApiKeyField.getText().trim());
+            }
+            apiClient.setSearchMode(settings.getSearchMode());
+            apiClient.setTavilyApiKey(settings.getTavilyApiKey());
+            if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
+                passiveScanManager.getApiClient().setSearchMode(settings.getSearchMode());
+                passiveScanManager.getApiClient().setTavilyApiKey(settings.getTavilyApiKey());
+            }
+
             // 自定义系统提示词（与默认值相同时存 null，避免冗余序列化）
             if (activeSystemPromptArea != null) {
                 String activeText = activeSystemPromptArea.getText();
@@ -2201,8 +2317,27 @@ public class AIAnalyzerTab extends JPanel {
         }
         setPromptTextForAllModes(settings.getUserPrompt());
         enableThinkingCheckBox.setSelected((isDashScope || isAnthropic) && settings.isEnableThinking());
-        enableSearchCheckBox.setSelected(isDashScope && settings.isEnableSearch());
-        
+        enableSearchCheckBox.setSelected(settings.isEnableSearch());
+
+        // 联网搜索配置
+        String searchMode = settings.getSearchMode();
+        if (searchModeComboBox != null) {
+            searchModeComboBox.setSelectedIndex("tavily".equals(searchMode) ? 1 : 0);
+            boolean isTavily = "tavily".equals(searchMode);
+            if (tavilyApiKeyField != null) {
+                tavilyApiKeyField.setEnabled(isTavily);
+            }
+            // 当选择模型内置搜索但非DashScope时，禁用主界面搜索开关
+            if (!isTavily && !isDashScope) {
+                enableSearchCheckBox.setEnabled(false);
+            } else {
+                enableSearchCheckBox.setEnabled(true);
+            }
+        }
+        if (tavilyApiKeyField != null) {
+            tavilyApiKeyField.setText(settings.getTavilyApiKey());
+        }
+
         // Burp MCP 配置
         enableMcpCheckBox.setSelected(settings.isEnableMcp());
         BurpMcpUrlField.setText(settings.getMcpUrl());
@@ -2237,7 +2372,9 @@ public class AIAnalyzerTab extends JPanel {
         apiClient.setModel(settings.getModel());
         apiClient.setCustomParameters(settings.getCustomParameters());
         apiClient.setEnableThinking((isDashScope || isAnthropic) && settings.isEnableThinking());
-        apiClient.setEnableSearch(isDashScope && settings.isEnableSearch());
+        apiClient.setEnableSearch(settings.isEnableSearch());
+        apiClient.setSearchMode(settings.getSearchMode());
+        apiClient.setTavilyApiKey(settings.getTavilyApiKey());
         apiClient.setEnableMcp(settings.isEnableMcp());
         apiClient.setBurpMcpUrl(settings.getMcpUrl());
         apiClient.setEnableRagMcp(settings.isEnableRagMcp());
