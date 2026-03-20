@@ -374,131 +374,95 @@ public class ChatPanel extends JPanel {
                         }
                     });
                     
-                    // 流式渲染节流：最多每 RENDER_INTERVAL_MS 做一次全量 Markdown 渲染，
-                    // 用 invokeLater（非阻塞）取代 invokeAndWait，避免阻塞流读取线程。
-                    final long[] lastRenderTime = {0L};
-                    final long RENDER_INTERVAL_MS = 200;
+                    final long[] lastPlainTime = {0L};
+                    final long PLAIN_INTERVAL_MS = 150;
+                    final long[] lastMdTime = {0L};
+                    final long MD_INTERVAL_MS = 2000;
+                    final int[] lastPlainLen = {0};
 
                     api.logging().logToOutput("[ChatPanel] 开始调用analyzeRequestStream");
                     apiClient.setSystemNoticeConsumer(systemNotice ->
                         SwingUtilities.invokeLater(() -> appendToChat("系统", systemNotice, false))
                     );
+
+                    java.util.function.Consumer<String> chunkHandler = chunk -> {
+                        if (currentWorker.isCancelled() || !isStreaming) return;
+                        fullResponse.append(chunk);
+
+                        long now = System.currentTimeMillis();
+
+                        if (now - lastMdTime[0] >= MD_INTERVAL_MS && aiMessageStartPos >= 0) {
+                            lastMdTime[0] = now;
+                            lastPlainTime[0] = now;
+                            lastPlainLen[0] = fullResponse.length();
+                            String snapshot = fullResponse.toString();
+                            SwingUtilities.invokeLater(() -> {
+                                if (currentWorker.isCancelled() || !isStreaming) return;
+                                try {
+                                    MarkdownRenderer.appendMarkdownStreaming(chatArea, snapshot, aiMessageStartPos);
+                                    chatArea.setCaretPosition(chatArea.getStyledDocument().getLength());
+                                } catch (Exception e) {
+                                    api.logging().logToError("流式Markdown渲染失败: " + e.getMessage());
+                                }
+                            });
+                            return;
+                        }
+
+                        if (now - lastPlainTime[0] < PLAIN_INTERVAL_MS) return;
+                        lastPlainTime[0] = now;
+
+                        int start = lastPlainLen[0];
+                        String newText = fullResponse.substring(start);
+                        lastPlainLen[0] = fullResponse.length();
+
+                        SwingUtilities.invokeLater(() -> {
+                            if (currentWorker.isCancelled() || !isStreaming) return;
+                            try {
+                                StyledDocument doc = chatArea.getStyledDocument();
+                                Style plain = doc.getStyle("streaming_plain");
+                                if (plain == null) {
+                                    plain = doc.addStyle("streaming_plain", null);
+                                    StyleConstants.setFontFamily(plain, "Microsoft YaHei");
+                                    StyleConstants.setFontSize(plain, 13);
+                                    Color fg = UIManager.getColor("TextArea.foreground");
+                                    if (fg != null) StyleConstants.setForeground(plain, fg);
+                                }
+                                doc.insertString(doc.getLength(), newText, plain);
+                                chatArea.setCaretPosition(doc.getLength());
+                            } catch (Exception e) {
+                                api.logging().logToError("流式文本追加失败: " + e.getMessage());
+                            }
+                        });
+                    };
+
                     try {
                         if (shouldSendRequestPayload && currentRequest != null) {
-                            apiClient.analyzeRequestStream(
-                                currentRequest,
-                                finalMessage,
-                                chunk -> {
-                                    if (currentWorker.isCancelled() || !isStreaming) return;
-
-                                    fullResponse.append(chunk);
-
-                                    long now = System.currentTimeMillis();
-                                    if (now - lastRenderTime[0] < RENDER_INTERVAL_MS) return;
-                                    lastRenderTime[0] = now;
-
-                                    String snapshot = fullResponse.toString();
-                                    SwingUtilities.invokeLater(() -> {
-                                        if (currentWorker.isCancelled() || !isStreaming) return;
-                                        try {
-                                            if (aiMessageStartPos >= 0) {
-                                                MarkdownRenderer.appendMarkdownStreaming(chatArea, snapshot, aiMessageStartPos);
-                                                chatArea.setCaretPosition(chatArea.getStyledDocument().getLength());
-                                            } else {
-                                                StyledDocument doc = chatArea.getStyledDocument();
-                                                Style messageStyle = doc.addStyle("message", null);
-                                                StyleConstants.setForeground(messageStyle, Color.BLACK);
-                                                doc.insertString(doc.getLength(), chunk, messageStyle);
-                                                chatArea.setCaretPosition(doc.getLength());
-                                            }
-                                        } catch (Exception e) {
-                                            api.logging().logToError("流式Markdown渲染失败: " + e.getMessage());
-                                        }
-                                    });
-                                }
-                            );
+                            apiClient.analyzeRequestStream(currentRequest, finalMessage, chunkHandler);
                             lastSentRequestFingerprint = currentFingerprint;
                         } else {
-                            apiClient.analyzeRequestStream(
-                                "",
-                                finalMessage,
-                                chunk -> {
-                                    if (currentWorker.isCancelled() || !isStreaming) return;
-
-                                    fullResponse.append(chunk);
-
-                                    long now = System.currentTimeMillis();
-                                    if (now - lastRenderTime[0] < RENDER_INTERVAL_MS) return;
-                                    lastRenderTime[0] = now;
-
-                                    String snapshot = fullResponse.toString();
-                                    SwingUtilities.invokeLater(() -> {
-                                        if (currentWorker.isCancelled() || !isStreaming) return;
-                                        try {
-                                            if (aiMessageStartPos >= 0) {
-                                                MarkdownRenderer.appendMarkdownStreaming(chatArea, snapshot, aiMessageStartPos);
-                                                chatArea.setCaretPosition(chatArea.getStyledDocument().getLength());
-                                            } else {
-                                                StyledDocument doc = chatArea.getStyledDocument();
-                                                Style messageStyle = doc.addStyle("message", null);
-                                                StyleConstants.setForeground(messageStyle, Color.BLACK);
-                                                doc.insertString(doc.getLength(), chunk, messageStyle);
-                                                chatArea.setCaretPosition(doc.getLength());
-                                            }
-                                        } catch (Exception e) {
-                                            api.logging().logToError("流式Markdown渲染失败: " + e.getMessage());
-                                        }
-                                    });
-                                }
-                            );
+                            apiClient.analyzeRequestStream("", finalMessage, chunkHandler);
                         }
                     } finally {
                         apiClient.setSystemNoticeConsumer(null);
                     }
                     
-                    api.logging().logToOutput("[ChatPanel] analyzeRequestStream调用完成，fullResponse长度: " + fullResponse.length());
-                    api.logging().logToOutput("[ChatPanel] fullResponse内容: " + (fullResponse.length() > 500 ? fullResponse.substring(0, 500) + "..." : fullResponse.toString()));
-                    debugLog("AI API调用完成");
+                    debugLog("AI API调用完成，fullResponse长度: " + fullResponse.length());
                     
-                    // 流式输出完成后，使用完整的Markdown渲染替换流式渲染的内容
                     String finalContent = fullResponse.toString();
                     if (!finalContent.isEmpty() && aiMessageStartPos >= 0) {
-                        try {
-                            SwingUtilities.invokeAndWait(() -> {
-                                try {
-                                    StyledDocument doc = chatArea.getStyledDocument();
-                                    // 删除流式渲染的内容
-                                    int currentLength = doc.getLength();
-                                    if (currentLength > aiMessageStartPos) {
-                                        doc.remove(aiMessageStartPos, currentLength - aiMessageStartPos);
-                                    }
-                                    // 使用完整的Markdown渲染
-                                    MarkdownRenderer.appendMarkdown(chatArea, finalContent);
-                                    chatArea.setCaretPosition(chatArea.getStyledDocument().getLength());
-                                } catch (BadLocationException e) {
-                                    api.logging().logToError("流式输出完成后完整渲染失败: " + e.getMessage());
-                                } catch (Exception e) {
-                                    api.logging().logToError("流式输出完成后完整渲染失败: " + e.getMessage());
+                        SwingUtilities.invokeLater(() -> {
+                            try {
+                                StyledDocument doc = chatArea.getStyledDocument();
+                                int currentLength = doc.getLength();
+                                if (currentLength > aiMessageStartPos) {
+                                    doc.remove(aiMessageStartPos, currentLength - aiMessageStartPos);
                                 }
-                            });
-                        } catch (Exception e) {
-                            // 如果invokeAndWait失败，使用invokeLater作为备选
-                            SwingUtilities.invokeLater(() -> {
-                                try {
-                                    StyledDocument doc = chatArea.getStyledDocument();
-                                    int currentLength = doc.getLength();
-                                    if (currentLength > aiMessageStartPos) {
-                                        doc.remove(aiMessageStartPos, currentLength - aiMessageStartPos);
-                                    }
-                                    MarkdownRenderer.appendMarkdown(chatArea, finalContent);
-                                    chatArea.setCaretPosition(chatArea.getStyledDocument().getLength());
-                                } catch (BadLocationException ex) {
-                                    api.logging().logToError("流式输出完成后完整渲染失败: " + ex.getMessage());
-                                } catch (Exception ex) {
-                                    api.logging().logToError("流式输出完成后完整渲染失败: " + ex.getMessage());
-                                }
-                            });
-                        }
+                                MarkdownRenderer.appendMarkdown(chatArea, finalContent);
+                                chatArea.setCaretPosition(doc.getLength());
+                            } catch (Exception e) {
+                                api.logging().logToError("最终Markdown渲染失败: " + e.getMessage());
+                            }
+                        });
                     }
                 } catch (Exception e) {
                     SwingUtilities.invokeLater(() -> {
