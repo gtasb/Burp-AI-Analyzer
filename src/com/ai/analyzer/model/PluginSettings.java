@@ -7,7 +7,7 @@ import java.util.List;
 
 public class PluginSettings implements Serializable {
     
-    private static final long serialVersionUID = 7L;
+    private static final long serialVersionUID = 8L;
     private String apiUrl;
     private String apiKey;
     private String model;
@@ -44,6 +44,10 @@ public class PluginSettings implements Serializable {
     // 自定义系统提示词（初始值留空，getter 中兜底返回默认提示词）
     private String customActiveSystemPrompt = null;
     private String customPassiveSystemPrompt = null;
+    
+    // 联网搜索配置: "enableSearch" = 模型内置参数, "tavily" = Tavily搜索引擎, "off" = 关闭
+    private String searchMode = "enableSearch";
+    private String tavilyApiKey = "";
     
     // 被动扫描过滤配置
     private String passiveScanSkipExtensions = "";
@@ -406,6 +410,22 @@ public class PluginSettings implements Serializable {
     
     public void setCustomPassiveSystemPrompt(String v) {
         this.customPassiveSystemPrompt = v;
+    }
+    
+    public String getSearchMode() {
+        return searchMode != null ? searchMode : "enableSearch";
+    }
+    
+    public void setSearchMode(String v) {
+        this.searchMode = v != null ? v : "enableSearch";
+    }
+    
+    public String getTavilyApiKey() {
+        return tavilyApiKey != null ? tavilyApiKey : "";
+    }
+    
+    public void setTavilyApiKey(String v) {
+        this.tavilyApiKey = v != null ? v : "";
     }
     
     public String getPassiveScanSkipExtensions() {

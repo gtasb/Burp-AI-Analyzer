@@ -34,6 +34,10 @@ public class AgentConfig {
     private boolean enableChromeMcp = false;
     private String chromeMcpUrl = "";
     
+    // ========== 联网搜索配置 ==========
+    private String searchMode = "enableSearch"; // "enableSearch" | "tavily" | "off"
+    private String tavilyApiKey = "";
+    
     // ========== 扩展功能配置 ==========
     private boolean enableFileSystemAccess = false;
     private boolean enableSkills = false;
@@ -94,6 +98,8 @@ public class AgentConfig {
         this.ragMcpDocumentsPath = other.ragMcpDocumentsPath;
         this.enableChromeMcp = other.enableChromeMcp;
         this.chromeMcpUrl = other.chromeMcpUrl;
+        this.searchMode = other.searchMode;
+        this.tavilyApiKey = other.tavilyApiKey;
         this.enableFileSystemAccess = other.enableFileSystemAccess;
         this.enableSkills = other.enableSkills;
         this.enablePythonScript = other.enablePythonScript;
@@ -154,6 +160,21 @@ public class AgentConfig {
         return chromeMcpUrl != null && !chromeMcpUrl.trim().isEmpty();
     }
     
+    /**
+     * 是否通过模型参数启用搜索（仅DashScope有效）
+     */
+    public boolean isModelSearchEnabled() {
+        return enableSearch && "enableSearch".equals(searchMode);
+    }
+
+    /**
+     * 是否通过Tavily工具启用搜索
+     */
+    public boolean isTavilySearchEnabled() {
+        return enableSearch && "tavily".equals(searchMode)
+                && tavilyApiKey != null && !tavilyApiKey.trim().isEmpty();
+    }
+
     @Override
     public String toString() {
         return "AgentConfig{" +

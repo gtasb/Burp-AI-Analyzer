@@ -9,6 +9,7 @@ import com.ai.analyzer.Tools.CurlTools;
 import com.ai.analyzer.Tools.FileSystemAccessTools;
 import com.ai.analyzer.Tools.PythonScriptTool;
 import com.ai.analyzer.Tools.NotebookTools;
+import com.ai.analyzer.Tools.WebSearchTools;
 import com.ai.analyzer.mcpClient.AllMcpToolProvider;
 import com.ai.analyzer.mcpClient.McpToolMappingConfig;
 import com.ai.analyzer.mcpClient.ToolExecutionFormatter;
@@ -93,6 +94,10 @@ public class PassiveScanApiClient {
     private boolean enableThinking = false;
     @Getter
     private boolean enableSearch = false;
+    @Getter
+    private String searchMode = "enableSearch";
+    @Getter
+    private String tavilyApiKey = "";
     @Getter
     private boolean enableMcp = false;
     @Getter
@@ -207,6 +212,8 @@ public class PassiveScanApiClient {
             ? settings.getModel() : defaultModel;
         this.enableThinking = settings.isEnableThinking();
         this.enableSearch = settings.isEnableSearch();
+        this.searchMode = settings.getSearchMode();
+        this.tavilyApiKey = settings.getTavilyApiKey();
         this.apiProvider = ApiProvider.fromDisplayName(settings.getApiProvider());
         this.enableMcp = settings.isEnableMcp();
         this.BurpMcpUrl = settings.getMcpUrl();
@@ -302,7 +309,32 @@ public class PassiveScanApiClient {
             needsReinitialization = true;
         }
     }
-    
+
+    public void setSearchMode(String searchMode) {
+        if (searchMode == null) searchMode = "enableSearch";
+        if (!searchMode.equals(this.searchMode)) {
+            this.searchMode = searchMode;
+            needsReinitialization = true;
+        }
+    }
+
+    public void setTavilyApiKey(String tavilyApiKey) {
+        if (tavilyApiKey == null) tavilyApiKey = "";
+        if (!tavilyApiKey.equals(this.tavilyApiKey)) {
+            this.tavilyApiKey = tavilyApiKey;
+            needsReinitialization = true;
+        }
+    }
+
+    private boolean isModelSearchEnabled() {
+        return enableSearch && "enableSearch".equals(searchMode);
+    }
+
+    private boolean isTavilySearchEnabled() {
+        return enableSearch && "tavily".equals(searchMode)
+                && tavilyApiKey != null && !tavilyApiKey.trim().isEmpty();
+    }
+
     public void setEnableMcp(boolean enableMcp) {
         if (this.enableMcp != enableMcp) {
             this.enableMcp = enableMcp;
@@ -499,15 +531,16 @@ public class PassiveScanApiClient {
         }
         
         try {
+            boolean modelSearch = isModelSearchEnabled();
             if (isFirstInitialization) {
                 logInfo("创建 ChatModel: " + ChatModelFactory.describeConfig(
-                        apiProvider, apiUrl, model, enableSearch, enableThinking));
+                        apiProvider, apiUrl, model, modelSearch, enableThinking));
                 isFirstInitialization = false;
             }
             
             return ChatModelFactory.create(
                     apiProvider, apiKey, apiUrl, model,
-                    enableSearch, enableThinking, null);
+                    modelSearch, enableThinking, null);
         } catch (Exception e) {
             logError("创建ChatModel失败: " + e.getMessage());
             return null;
@@ -558,6 +591,12 @@ public class PassiveScanApiClient {
                             logInfo("已添加 BurpExtTools");
                         } */
                         
+                        if (isTavilySearchEnabled()) {
+                            WebSearchTools webSearchTools = new WebSearchTools(tavilyApiKey);
+                            assistantBuilder.tools(webSearchTools);
+                            logInfo("已添加 WebSearchTools (Tavily)");
+                        }
+
                         if (enableFileSystemAccess && getEffectiveRagDocumentsPath() != null && !getEffectiveRagDocumentsPath().isEmpty()) {
                             FileSystemAccessTools fsaTools = new FileSystemAccessTools(api);
                             fsaTools.setAllowedRootPath(getEffectiveRagDocumentsPath());
@@ -979,6 +1018,11 @@ public class PassiveScanApiClient {
                 builder.tools(burpExtTools);
             } */
             
+            if (isTavilySearchEnabled()) {
+                WebSearchTools webSearchTools = new WebSearchTools(tavilyApiKey);
+                builder.tools(webSearchTools);
+            }
+
             if (enableFileSystemAccess && getEffectiveRagDocumentsPath() != null && !getEffectiveRagDocumentsPath().isEmpty()) {
                 FileSystemAccessTools fsaTools = new FileSystemAccessTools(api);
                 fsaTools.setAllowedRootPath(getEffectiveRagDocumentsPath());

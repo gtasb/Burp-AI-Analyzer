@@ -48,6 +48,7 @@ import com.ai.analyzer.Tools.BurpExtTools;
 import com.ai.analyzer.Tools.PythonScriptTool;
 import com.ai.analyzer.Tools.NotebookTools;
 import com.ai.analyzer.Tools.FileSystemAccessTools;
+import com.ai.analyzer.Tools.WebSearchTools;
 import lombok.Getter;
 
 /**
@@ -251,7 +252,23 @@ public class AgentApiClient {
             updateChatModelAndAssistant();
         }
     }
-    
+
+    public void setSearchMode(String searchMode) {
+        if (searchMode == null) searchMode = "enableSearch";
+        if (!searchMode.equals(config.getSearchMode())) {
+            config.setSearchMode(searchMode);
+            updateChatModelAndAssistant();
+        }
+    }
+
+    public void setTavilyApiKey(String tavilyApiKey) {
+        if (tavilyApiKey == null) tavilyApiKey = "";
+        if (!tavilyApiKey.equals(config.getTavilyApiKey())) {
+            config.setTavilyApiKey(tavilyApiKey);
+            updateChatModelAndAssistant();
+        }
+    }
+
     public void setCustomParameters(String customParameters) {
         if (customParameters == null) customParameters = "";
         if (!config.getCustomParameters().equals(customParameters.trim())) {
@@ -438,7 +455,7 @@ public class AgentApiClient {
                     config.getApiKey(),
                     config.getApiUrl(),
                     config.getModel(),
-                    config.isEnableSearch(),
+                    config.isModelSearchEnabled(),
                     config.isEnableThinking(),
                     config.getCustomParameters());
             
@@ -546,6 +563,12 @@ public class AgentApiClient {
                 logInfo("已添加 NotebookTools");
             }
             
+            if (config.isTavilySearchEnabled()) {
+                WebSearchTools webSearchTools = new WebSearchTools(config.getTavilyApiKey());
+                assistantBuilder.tools(webSearchTools);
+                logInfo("已添加 WebSearchTools (Tavily)");
+            }
+
             if (config.isEnableFileSystemAccess() && config.hasRagDocumentsPath()) {
                 FileSystemAccessTools fsaTools = new FileSystemAccessTools(api);
                 fsaTools.setAllowedRootPath(config.getEffectiveRagDocumentsPath());
@@ -604,7 +627,7 @@ public class AgentApiClient {
                             "find_reflected","comparer_send",
                             "proxy_history_annotate","response_body_search",
                             "site_map","site_map_regex",
-                            "get_scanner_issues","scan_audit_start","scan_audit_start_mode","scan_audit_start_requests","scan_crawl_start","scan_task_status","scan_task_delete"
+                            "scan_audit_start","scan_audit_start_mode","scan_audit_start_requests","scan_crawl_start","scan_task_status","scan_task_delete"
                         ));
                         logInfo("Burp MCP 客户端已添加，地址: " + tryUrl);
                         break;
@@ -726,6 +749,8 @@ public class AgentApiClient {
             ? settings.getModel() : defaultModel);
         config.setEnableThinking(settings.isEnableThinking());
         config.setEnableSearch(settings.isEnableSearch());
+        config.setSearchMode(settings.getSearchMode());
+        config.setTavilyApiKey(settings.getTavilyApiKey());
         config.setWorkplaceDirectoryPath(settings.getWorkplaceDirectoryPath());
         if (settings.getRagMcpDocumentsPath() != null && !settings.getRagMcpDocumentsPath().isEmpty()) {
             config.setRagMcpDocumentsPath(settings.getRagMcpDocumentsPath());

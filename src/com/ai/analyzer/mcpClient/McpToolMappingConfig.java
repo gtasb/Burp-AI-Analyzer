@@ -261,7 +261,21 @@ public class McpToolMappingConfig {
                 "- ⚠️ 疑似漏洞/不确定 → 建议调用（需人类判断）\n" +
                 "- ❌ 确认无漏洞 → **不调用**（减少噪音）\n" +
                 "【特性】：异步执行，无需等待返回结果。\n" +
-                "参数：content(HTTP请求), targetHostname, targetPort, usesHttps, tabName(建议用漏洞类型命名)");
+                "参数：content(HTTP请求), targetHostname, targetPort, usesHttps, tabName(建议用漏洞类型命名)\n" +
+                "【🚨 CRITICAL - content 参数格式要求（必须严格遵守）】：\n" +
+                "content 必须是合法的 HTTP/1.1 请求，**禁止在请求行或任何头部值中插入换行符**。\n" +
+                "**格式规则：**\n" +
+                "1. 请求行：`METHOD /path HTTP/1.1\\r\\n`（**路径必须在一行内，不得换行**）\n" +
+                "2. 每个请求头一行：`Header-Name: value\\r\\n`（**值中不得包含 \\n 或 \\r**）\n" +
+                "3. 请求头结束后必须有空行：`\\r\\n`\n" +
+                "**常见致命错误（会导致 kettled/畸形请求）：**\n" +
+                "- ❌ 在 URL 路径中插入换行 → 导致 :path 头部含换行，请求 kettled\n" +
+                "- ❌ 多行拼接时在头部值中引入换行 → 头部被截断\n" +
+                "- ❌ 忘记请求头末尾的空行 → 格式错误\n" +
+                "**正确示例：**\n" +
+                "```\n" +
+                "GET /api/token?user=admin HTTP/1.1\\r\\nHost: example.com\\r\\nCookie: sid=abc\\r\\n\\r\\n\n" +
+                "```");
 
         descriptionMappings.put("send_to_intruder", "【辅助工具】将请求发送到 Burp Intruder 进行批量测试。\n" +
                 "【使用时机】：\n" +
