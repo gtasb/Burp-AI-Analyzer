@@ -90,6 +90,9 @@ public class AIAnalyzerTab extends JPanel {
     // 联网搜索配置
     private JComboBox<String> searchModeComboBox;
     private JTextField tavilyApiKeyField;
+    private JTextField tavilyBaseUrlField;
+    private JTextField googleApiKeyField;
+    private JTextField googleCsiField;
     
     // 已替换为 passiveScanTable 和 passiveScanTableModel
     // private JTable requestListTable;
@@ -435,6 +438,9 @@ public class AIAnalyzerTab extends JPanel {
             psClient.setEnableSearch(apiClient.isEnableSearch());
             psClient.setSearchMode(apiClient.getConfig().getSearchMode());
             psClient.setTavilyApiKey(apiClient.getConfig().getTavilyApiKey());
+            psClient.setTavilyBaseUrl(apiClient.getConfig().getTavilyBaseUrl());
+            psClient.setGoogleSearchApiKey(apiClient.getConfig().getGoogleSearchApiKey());
+            psClient.setGoogleSearchCsi(apiClient.getConfig().getGoogleSearchCsi());
             
             // MCP 配置（关键：这些配置决定了工具是否可用）
             psClient.setEnableMcp(apiClient.isEnableMcp());
@@ -576,7 +582,7 @@ public class AIAnalyzerTab extends JPanel {
         apiProviderComboBox.addActionListener(e -> {
             String sel = (String) apiProviderComboBox.getSelectedItem();
             apiClient.setApiProvider(sel);
-            boolean isTavilyMode = searchModeComboBox != null && searchModeComboBox.getSelectedIndex() == 1;
+            boolean isToolSearch = searchModeComboBox != null && searchModeComboBox.getSelectedIndex() >= 1;
             if ("DashScope".equals(sel)) {
                 if (apiUrlField.getText().contains("openai.com") || apiUrlField.getText().contains("anthropic.com") || apiUrlField.getText().isEmpty())
                     apiUrlField.setText("https://dashscope.aliyuncs.com/api/v1");
@@ -586,15 +592,15 @@ public class AIAnalyzerTab extends JPanel {
                 if (apiUrlField.getText().contains("dashscope") || apiUrlField.getText().contains("openai.com") || apiUrlField.getText().isEmpty())
                     apiUrlField.setText("https://api.anthropic.com");
                 enableThinkingCheckBox.setEnabled(true);
-                enableSearchCheckBox.setEnabled(isTavilyMode);
-                if (!isTavilyMode) enableSearchCheckBox.setSelected(false);
+                enableSearchCheckBox.setEnabled(isToolSearch);
+                if (!isToolSearch) enableSearchCheckBox.setSelected(false);
             } else {
                 if (apiUrlField.getText().contains("dashscope") || apiUrlField.getText().contains("anthropic.com") || apiUrlField.getText().isEmpty())
                     apiUrlField.setText("https://api.openai.com/v1");
                 enableThinkingCheckBox.setEnabled(false);
                 enableThinkingCheckBox.setSelected(false);
-                enableSearchCheckBox.setEnabled(isTavilyMode);
-                if (!isTavilyMode) enableSearchCheckBox.setSelected(false);
+                enableSearchCheckBox.setEnabled(isToolSearch);
+                if (!isToolSearch) enableSearchCheckBox.setSelected(false);
             }
         });
         apiProviderComboBox.setToolTipText("选择 API 提供者：DashScope（通义千问）、OpenAI 兼容格式、Anthropic 兼容（Claude）");
@@ -847,6 +853,8 @@ public class AIAnalyzerTab extends JPanel {
         searchModeComboBox = new JComboBox<>(new String[]{
                 "模型内置搜索 (仅DashScope)",
                 "Tavily搜索引擎 (所有模型)",
+                "Google Custom Search (所有模型)",
+                "DuckDuckGo (所有模型)",
         });
         gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         panel.add(searchModeComboBox, gbc);
@@ -856,11 +864,44 @@ public class AIAnalyzerTab extends JPanel {
         // Tavily API Key
         gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 1; gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        panel.add(new JLabel("API Key:"), gbc);
+        panel.add(new JLabel("Tavily API Key:"), gbc);
         tavilyApiKeyField = new JTextField(40);
         tavilyApiKeyField.setToolTipText("Tavily API Key (从 https://tavily.com 获取)");
         gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         panel.add(tavilyApiKeyField, gbc);
+
+        row++;
+
+        // Tavily Base URL
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 1; gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        panel.add(new JLabel("Tavily Base URL:"), gbc);
+        tavilyBaseUrlField = new JTextField(40);
+        tavilyBaseUrlField.setToolTipText("Tavily API 代理地址 (留空使用默认 https://api.tavily.com/)");
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        panel.add(tavilyBaseUrlField, gbc);
+
+        row++;
+
+        // Google API Key
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 1; gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        panel.add(new JLabel("Google API Key:"), gbc);
+        googleApiKeyField = new JTextField(40);
+        googleApiKeyField.setToolTipText("Google Custom Search API Key (从 Google Cloud Console 获取)");
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        panel.add(googleApiKeyField, gbc);
+
+        row++;
+
+        // Google CSI (Custom Search Engine ID)
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 1; gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        panel.add(new JLabel("Google CSE ID:"), gbc);
+        googleCsiField = new JTextField(40);
+        googleCsiField.setToolTipText("Google 可编程搜索引擎 ID (从 https://programmablesearchengine.google.com 创建)");
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        panel.add(googleCsiField, gbc);
 
         row++;
 
@@ -872,7 +913,11 @@ public class AIAnalyzerTab extends JPanel {
                 "• 模型内置搜索: 通过模型参数 enableSearch 实现，仅 DashScope (通义千问) 支持\n" +
                 "• Tavily搜索引擎: 通过 WebSearchTools 工具实现，所有模型均可使用\n" +
                 "  - Tavily 提供免费 API Key (每月1000次请求)，注册地址: https://tavily.com\n" +
-                "  - 选择此模式后，AI Agent 可主动调用搜索工具查询漏洞信息、技术文档等\n" +
+                "• Google Custom Search: 通过 Google Programmable Search Engine 实现\n" +
+                "  - 需要 Google Cloud API Key + 自定义搜索引擎 ID (CSE ID)\n" +
+                "  - 免费额度每天100次请求，创建地址: https://programmablesearchengine.google.com\n" +
+                "• DuckDuckGo: 免费搜索引擎，无需 API Key，通过 HTML 解析获取结果\n" +
+                "  - 无请求次数限制，但速度可能较慢，且可能受到反爬虫限制\n" +
                 "• 主界面的「启用网络搜索」开关控制是否启用搜索，此处配置搜索的实现方式");
         hint.setEditable(false);
         hint.setOpaque(false);
@@ -881,12 +926,20 @@ public class AIAnalyzerTab extends JPanel {
         hint.setBorder(BorderFactory.createEmptyBorder(8, 0, 0, 0));
         panel.add(hint, gbc);
 
-        // 根据搜索方式切换 API Key 输入框启用状态
-        searchModeComboBox.addActionListener(e -> {
-            boolean isTavily = searchModeComboBox.getSelectedIndex() == 1;
+        Runnable updateSearchFieldState = () -> {
+            int idx = searchModeComboBox.getSelectedIndex();
+            boolean isTavily = idx == 1;
+            boolean isGoogle = idx == 2;
             tavilyApiKeyField.setEnabled(isTavily);
-        });
+            tavilyBaseUrlField.setEnabled(isTavily);
+            googleApiKeyField.setEnabled(isGoogle);
+            googleCsiField.setEnabled(isGoogle);
+        };
+        searchModeComboBox.addActionListener(e -> updateSearchFieldState.run());
         tavilyApiKeyField.setEnabled(false);
+        tavilyBaseUrlField.setEnabled(false);
+        googleApiKeyField.setEnabled(false);
+        googleCsiField.setEnabled(false);
 
         // 底部填充
         row++;
@@ -2201,16 +2254,38 @@ public class AIAnalyzerTab extends JPanel {
 
             // 联网搜索配置
             if (searchModeComboBox != null) {
-                settings.setSearchMode(searchModeComboBox.getSelectedIndex() == 1 ? "tavily" : "enableSearch");
+                int idx = searchModeComboBox.getSelectedIndex();
+                String mode = switch (idx) {
+                    case 1 -> "tavily";
+                    case 2 -> "google";
+                    case 3 -> "duckduckgo";
+                    default -> "enableSearch";
+                };
+                settings.setSearchMode(mode);
             }
             if (tavilyApiKeyField != null) {
                 settings.setTavilyApiKey(tavilyApiKeyField.getText().trim());
             }
+            if (tavilyBaseUrlField != null) {
+                settings.setTavilyBaseUrl(tavilyBaseUrlField.getText().trim());
+            }
+            if (googleApiKeyField != null) {
+                settings.setGoogleSearchApiKey(googleApiKeyField.getText().trim());
+            }
+            if (googleCsiField != null) {
+                settings.setGoogleSearchCsi(googleCsiField.getText().trim());
+            }
             apiClient.setSearchMode(settings.getSearchMode());
             apiClient.setTavilyApiKey(settings.getTavilyApiKey());
+            apiClient.setTavilyBaseUrl(settings.getTavilyBaseUrl());
+            apiClient.setGoogleSearchApiKey(settings.getGoogleSearchApiKey());
+            apiClient.setGoogleSearchCsi(settings.getGoogleSearchCsi());
             if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
                 passiveScanManager.getApiClient().setSearchMode(settings.getSearchMode());
                 passiveScanManager.getApiClient().setTavilyApiKey(settings.getTavilyApiKey());
+                passiveScanManager.getApiClient().setTavilyBaseUrl(settings.getTavilyBaseUrl());
+                passiveScanManager.getApiClient().setGoogleSearchApiKey(settings.getGoogleSearchApiKey());
+                passiveScanManager.getApiClient().setGoogleSearchCsi(settings.getGoogleSearchCsi());
             }
 
             // 自定义系统提示词（与默认值相同时存 null，避免冗余序列化）
@@ -2322,13 +2397,21 @@ public class AIAnalyzerTab extends JPanel {
         // 联网搜索配置
         String searchMode = settings.getSearchMode();
         if (searchModeComboBox != null) {
-            searchModeComboBox.setSelectedIndex("tavily".equals(searchMode) ? 1 : 0);
+            int searchIdx = switch (searchMode) {
+                case "tavily" -> 1;
+                case "google" -> 2;
+                case "duckduckgo" -> 3;
+                default -> 0;
+            };
+            searchModeComboBox.setSelectedIndex(searchIdx);
             boolean isTavily = "tavily".equals(searchMode);
-            if (tavilyApiKeyField != null) {
-                tavilyApiKeyField.setEnabled(isTavily);
-            }
-            // 当选择模型内置搜索但非DashScope时，禁用主界面搜索开关
-            if (!isTavily && !isDashScope) {
+            boolean isGoogle = "google".equals(searchMode);
+            boolean isToolSearch = isTavily || isGoogle || "duckduckgo".equals(searchMode);
+            if (tavilyApiKeyField != null) tavilyApiKeyField.setEnabled(isTavily);
+            if (tavilyBaseUrlField != null) tavilyBaseUrlField.setEnabled(isTavily);
+            if (googleApiKeyField != null) googleApiKeyField.setEnabled(isGoogle);
+            if (googleCsiField != null) googleCsiField.setEnabled(isGoogle);
+            if (!isToolSearch && !isDashScope) {
                 enableSearchCheckBox.setEnabled(false);
             } else {
                 enableSearchCheckBox.setEnabled(true);
@@ -2336,6 +2419,15 @@ public class AIAnalyzerTab extends JPanel {
         }
         if (tavilyApiKeyField != null) {
             tavilyApiKeyField.setText(settings.getTavilyApiKey());
+        }
+        if (tavilyBaseUrlField != null) {
+            tavilyBaseUrlField.setText(settings.getTavilyBaseUrl());
+        }
+        if (googleApiKeyField != null) {
+            googleApiKeyField.setText(settings.getGoogleSearchApiKey());
+        }
+        if (googleCsiField != null) {
+            googleCsiField.setText(settings.getGoogleSearchCsi());
         }
 
         // Burp MCP 配置
@@ -2375,6 +2467,9 @@ public class AIAnalyzerTab extends JPanel {
         apiClient.setEnableSearch(settings.isEnableSearch());
         apiClient.setSearchMode(settings.getSearchMode());
         apiClient.setTavilyApiKey(settings.getTavilyApiKey());
+        apiClient.setTavilyBaseUrl(settings.getTavilyBaseUrl());
+        apiClient.setGoogleSearchApiKey(settings.getGoogleSearchApiKey());
+        apiClient.setGoogleSearchCsi(settings.getGoogleSearchCsi());
         apiClient.setEnableMcp(settings.isEnableMcp());
         apiClient.setBurpMcpUrl(settings.getMcpUrl());
         apiClient.setEnableRagMcp(settings.isEnableRagMcp());

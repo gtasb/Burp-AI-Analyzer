@@ -99,6 +99,12 @@ public class PassiveScanApiClient {
     @Getter
     private String tavilyApiKey = "";
     @Getter
+    private String tavilyBaseUrl = "";
+    @Getter
+    private String googleSearchApiKey = "";
+    @Getter
+    private String googleSearchCsi = "";
+    @Getter
     private boolean enableMcp = false;
     @Getter
     private String BurpMcpUrl = "http://127.0.0.1:9876/";
@@ -214,6 +220,9 @@ public class PassiveScanApiClient {
         this.enableSearch = settings.isEnableSearch();
         this.searchMode = settings.getSearchMode();
         this.tavilyApiKey = settings.getTavilyApiKey();
+        this.tavilyBaseUrl = settings.getTavilyBaseUrl();
+        this.googleSearchApiKey = settings.getGoogleSearchApiKey();
+        this.googleSearchCsi = settings.getGoogleSearchCsi();
         this.apiProvider = ApiProvider.fromDisplayName(settings.getApiProvider());
         this.enableMcp = settings.isEnableMcp();
         this.BurpMcpUrl = settings.getMcpUrl();
@@ -326,6 +335,30 @@ public class PassiveScanApiClient {
         }
     }
 
+    public void setTavilyBaseUrl(String tavilyBaseUrl) {
+        if (tavilyBaseUrl == null) tavilyBaseUrl = "";
+        if (!tavilyBaseUrl.equals(this.tavilyBaseUrl)) {
+            this.tavilyBaseUrl = tavilyBaseUrl;
+            needsReinitialization = true;
+        }
+    }
+
+    public void setGoogleSearchApiKey(String key) {
+        if (key == null) key = "";
+        if (!key.equals(this.googleSearchApiKey)) {
+            this.googleSearchApiKey = key;
+            needsReinitialization = true;
+        }
+    }
+
+    public void setGoogleSearchCsi(String csi) {
+        if (csi == null) csi = "";
+        if (!csi.equals(this.googleSearchCsi)) {
+            this.googleSearchCsi = csi;
+            needsReinitialization = true;
+        }
+    }
+
     private boolean isModelSearchEnabled() {
         return enableSearch && "enableSearch".equals(searchMode);
     }
@@ -333,6 +366,16 @@ public class PassiveScanApiClient {
     private boolean isTavilySearchEnabled() {
         return enableSearch && "tavily".equals(searchMode)
                 && tavilyApiKey != null && !tavilyApiKey.trim().isEmpty();
+    }
+
+    private boolean isGoogleSearchEnabled() {
+        return enableSearch && "google".equals(searchMode)
+                && googleSearchApiKey != null && !googleSearchApiKey.trim().isEmpty()
+                && googleSearchCsi != null && !googleSearchCsi.trim().isEmpty();
+    }
+
+    private boolean isDuckDuckGoSearchEnabled() {
+        return enableSearch && "duckduckgo".equals(searchMode);
     }
 
     public void setEnableMcp(boolean enableMcp) {
@@ -592,9 +635,14 @@ public class PassiveScanApiClient {
                         } */
                         
                         if (isTavilySearchEnabled()) {
-                            WebSearchTools webSearchTools = new WebSearchTools(tavilyApiKey);
-                            assistantBuilder.tools(webSearchTools);
+                            assistantBuilder.tools(WebSearchTools.tavily(tavilyApiKey, tavilyBaseUrl));
                             logInfo("已添加 WebSearchTools (Tavily)");
+                        } else if (isGoogleSearchEnabled()) {
+                            assistantBuilder.tools(WebSearchTools.google(googleSearchApiKey, googleSearchCsi));
+                            logInfo("已添加 WebSearchTools (Google Custom Search)");
+                        } else if (isDuckDuckGoSearchEnabled()) {
+                            assistantBuilder.tools(WebSearchTools.duckDuckGo());
+                            logInfo("已添加 WebSearchTools (DuckDuckGo)");
                         }
 
                         if (enableFileSystemAccess && getEffectiveRagDocumentsPath() != null && !getEffectiveRagDocumentsPath().isEmpty()) {
@@ -1019,8 +1067,11 @@ public class PassiveScanApiClient {
             } */
             
             if (isTavilySearchEnabled()) {
-                WebSearchTools webSearchTools = new WebSearchTools(tavilyApiKey);
-                builder.tools(webSearchTools);
+                builder.tools(WebSearchTools.tavily(tavilyApiKey, tavilyBaseUrl));
+            } else if (isGoogleSearchEnabled()) {
+                builder.tools(WebSearchTools.google(googleSearchApiKey, googleSearchCsi));
+            } else if (isDuckDuckGoSearchEnabled()) {
+                builder.tools(WebSearchTools.duckDuckGo());
             }
 
             if (enableFileSystemAccess && getEffectiveRagDocumentsPath() != null && !getEffectiveRagDocumentsPath().isEmpty()) {

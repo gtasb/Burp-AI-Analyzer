@@ -269,6 +269,30 @@ public class AgentApiClient {
         }
     }
 
+    public void setTavilyBaseUrl(String tavilyBaseUrl) {
+        if (tavilyBaseUrl == null) tavilyBaseUrl = "";
+        if (!tavilyBaseUrl.equals(config.getTavilyBaseUrl())) {
+            config.setTavilyBaseUrl(tavilyBaseUrl);
+            updateChatModelAndAssistant();
+        }
+    }
+
+    public void setGoogleSearchApiKey(String key) {
+        if (key == null) key = "";
+        if (!key.equals(config.getGoogleSearchApiKey())) {
+            config.setGoogleSearchApiKey(key);
+            updateChatModelAndAssistant();
+        }
+    }
+
+    public void setGoogleSearchCsi(String csi) {
+        if (csi == null) csi = "";
+        if (!csi.equals(config.getGoogleSearchCsi())) {
+            config.setGoogleSearchCsi(csi);
+            updateChatModelAndAssistant();
+        }
+    }
+
     public void setCustomParameters(String customParameters) {
         if (customParameters == null) customParameters = "";
         if (!config.getCustomParameters().equals(customParameters.trim())) {
@@ -564,9 +588,14 @@ public class AgentApiClient {
             }
             
             if (config.isTavilySearchEnabled()) {
-                WebSearchTools webSearchTools = new WebSearchTools(config.getTavilyApiKey());
-                assistantBuilder.tools(webSearchTools);
+                assistantBuilder.tools(WebSearchTools.tavily(config.getTavilyApiKey(), config.getTavilyBaseUrl()));
                 logInfo("已添加 WebSearchTools (Tavily)");
+            } else if (config.isGoogleSearchEnabled()) {
+                assistantBuilder.tools(WebSearchTools.google(config.getGoogleSearchApiKey(), config.getGoogleSearchCsi()));
+                logInfo("已添加 WebSearchTools (Google Custom Search)");
+            } else if (config.isDuckDuckGoSearchEnabled()) {
+                assistantBuilder.tools(WebSearchTools.duckDuckGo());
+                logInfo("已添加 WebSearchTools (DuckDuckGo)");
             }
 
             if (config.isEnableFileSystemAccess() && config.hasRagDocumentsPath()) {
@@ -751,6 +780,9 @@ public class AgentApiClient {
         config.setEnableSearch(settings.isEnableSearch());
         config.setSearchMode(settings.getSearchMode());
         config.setTavilyApiKey(settings.getTavilyApiKey());
+        config.setTavilyBaseUrl(settings.getTavilyBaseUrl());
+        config.setGoogleSearchApiKey(settings.getGoogleSearchApiKey());
+        config.setGoogleSearchCsi(settings.getGoogleSearchCsi());
         config.setWorkplaceDirectoryPath(settings.getWorkplaceDirectoryPath());
         if (settings.getRagMcpDocumentsPath() != null && !settings.getRagMcpDocumentsPath().isEmpty()) {
             config.setRagMcpDocumentsPath(settings.getRagMcpDocumentsPath());

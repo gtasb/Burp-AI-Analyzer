@@ -35,8 +35,11 @@ public class AgentConfig {
     private String chromeMcpUrl = "";
     
     // ========== 联网搜索配置 ==========
-    private String searchMode = "enableSearch"; // "enableSearch" | "tavily" | "off"
+    private String searchMode = "enableSearch"; // "enableSearch" | "tavily" | "google" | "duckduckgo" | "off"
     private String tavilyApiKey = "";
+    private String tavilyBaseUrl = "";
+    private String googleSearchApiKey = "";
+    private String googleSearchCsi = "";
     
     // ========== 扩展功能配置 ==========
     private boolean enableFileSystemAccess = false;
@@ -100,6 +103,9 @@ public class AgentConfig {
         this.chromeMcpUrl = other.chromeMcpUrl;
         this.searchMode = other.searchMode;
         this.tavilyApiKey = other.tavilyApiKey;
+        this.tavilyBaseUrl = other.tavilyBaseUrl;
+        this.googleSearchApiKey = other.googleSearchApiKey;
+        this.googleSearchCsi = other.googleSearchCsi;
         this.enableFileSystemAccess = other.enableFileSystemAccess;
         this.enableSkills = other.enableSkills;
         this.enablePythonScript = other.enablePythonScript;
@@ -173,6 +179,16 @@ public class AgentConfig {
     public boolean isTavilySearchEnabled() {
         return enableSearch && "tavily".equals(searchMode)
                 && tavilyApiKey != null && !tavilyApiKey.trim().isEmpty();
+    }
+
+    public boolean isGoogleSearchEnabled() {
+        return enableSearch && "google".equals(searchMode)
+                && googleSearchApiKey != null && !googleSearchApiKey.trim().isEmpty()
+                && googleSearchCsi != null && !googleSearchCsi.trim().isEmpty();
+    }
+
+    public boolean isDuckDuckGoSearchEnabled() {
+        return enableSearch && "duckduckgo".equals(searchMode);
     }
 
     @Override
