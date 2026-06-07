@@ -64,7 +64,7 @@ class PassiveScanManagerTest {
         @Test
         @DisplayName("should_have_default_thread_count_when_created")
         void should_have_default_thread_count_when_created() {
-            assertThat(manager.getThreadCount()).isEqualTo(10);
+            assertThat(manager.getThreadCount()).isEqualTo(5);
         }
 
         @Test

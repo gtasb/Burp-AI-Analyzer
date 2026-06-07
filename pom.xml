@@ -31,95 +31,101 @@
     <dependency>
         <groupId>com.google.code.gson</groupId>
         <artifactId>gson</artifactId>
-        <version>2.13.2</version>
+        <version>2.14.0</version>
     </dependency>
 
     <!-- CommonMark for Markdown parsing -->
     <dependency>
         <groupId>org.commonmark</groupId>
         <artifactId>commonmark</artifactId>
-        <version>0.27.1</version>
+        <version>0.28.0</version>
     </dependency>
     <dependency>
         <groupId>org.commonmark</groupId>
         <artifactId>commonmark-ext-gfm-tables</artifactId>
-        <version>0.27.1</version>
+        <version>0.28.0</version>
     </dependency>
 
     <!-- LangChain4j 核心依赖 -->
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j-core</artifactId>
-        <version>1.12.2</version>
+        <version>1.16.1</version>
     </dependency>
 
     <!-- LangChain4j 主要功能 -->
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j</artifactId>
-        <version>1.12.2</version>
+        <version>1.16.1</version>
     </dependency>
 
     <!-- OpenAI 实现 -->
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j-open-ai</artifactId>
-        <version>1.12.2</version>
+        <version>1.16.1</version>
     </dependency>
 
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j-http-client-jdk</artifactId>
-        <version>1.12.2</version>
+        <version>1.16.1</version>
     </dependency>
 
     <dependency>
         <groupId>com.alibaba</groupId>
         <artifactId>dashscope-sdk-java</artifactId>
-        <version>2.22.13</version>
+        <version>2.22.20</version>
     </dependency>
 
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j-community-dashscope</artifactId>
-        <version>1.12.2-beta22</version>
+        <version>1.15.0-beta25</version>
     </dependency>
 
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j-anthropic</artifactId>
-        <version>1.12.2</version>
+        <version>1.16.1</version>
     </dependency>
 
     <!-- MCP 模块 -->
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j-mcp</artifactId>
-        <version>1.12.2-beta22</version>
+        <version>1.16.1-beta26</version>
     </dependency>
 
     <!-- Skills 模块 -->
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j-skills</artifactId>
-        <version>1.12.2-beta22</version>
+        <version>1.16.1-beta26</version>
     </dependency>
 
     <!-- WebSearchTools 模块 -->   
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j-web-search-engine-tavily</artifactId>
-        <version>1.12.2-beta22</version>
+        <version>1.16.1-beta26</version>
     </dependency>
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j-web-search-engine-google-custom</artifactId>
-        <version>1.12.2-beta22</version>
+        <version>1.16.1-beta26</version>
     </dependency>
     <dependency>
         <groupId>dev.langchain4j</groupId>
         <artifactId>langchain4j-community-web-search-engine-duckduckgo</artifactId>
-        <version>1.12.2-beta22</version>
+        <version>1.15.0-beta25</version>
+    </dependency>
+
+    <dependency>
+        <groupId>dev.langchain4j</groupId>
+        <artifactId>langchain4j-community-code-execution-engine-local</artifactId>
+        <version>1.15.0-beta25</version>
     </dependency>
 
 <!--    &lt;!&ndash; Easy RAG 模块 &ndash;&gt;-->
@@ -140,14 +146,14 @@
     <dependency>
         <groupId>com.fasterxml.jackson.core</groupId>
         <artifactId>jackson-databind</artifactId>
-        <version>2.21.2</version>
+        <version>2.22.0</version>
     </dependency>
 
     <!-- Lombok 用于自动生成 getter/setter (兼容 Java 21) -->
     <dependency>
         <groupId>org.projectlombok</groupId>
         <artifactId>lombok</artifactId>
-        <version>1.18.44</version>
+        <version>1.18.46</version>
         <scope>provided</scope>
     </dependency>
 
@@ -155,7 +161,7 @@
     <dependency>
         <groupId>org.junit.jupiter</groupId>
         <artifactId>junit-jupiter</artifactId>
-        <version>6.1.0-M1</version>
+        <version>6.1.0</version>
         <scope>test</scope>
     </dependency>
     <dependency>
@@ -234,7 +240,7 @@
                         <path>
                             <groupId>org.projectlombok</groupId>
                             <artifactId>lombok</artifactId>
-                            <version>1.18.44</version>
+                            <version>1.18.46</version>
                         </path>
                     </annotationProcessorPaths>
                 </configuration>

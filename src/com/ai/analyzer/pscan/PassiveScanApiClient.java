@@ -7,8 +7,10 @@ import com.ai.analyzer.Client.AgentConfig.ApiProvider;
 import com.ai.analyzer.Tools.BurpExtTools;
 import com.ai.analyzer.Tools.CurlTools;
 import com.ai.analyzer.Tools.FileSystemAccessTools;
+import com.ai.analyzer.Tools.ArtifactCacheTools;
 import com.ai.analyzer.Tools.PythonScriptTool;
 import com.ai.analyzer.Tools.NotebookTools;
+import com.ai.analyzer.Tools.RunCmdTools;
 import com.ai.analyzer.Tools.WebSearchTools;
 import com.ai.analyzer.mcpClient.AllMcpToolProvider;
 import com.ai.analyzer.mcpClient.McpToolMappingConfig;
@@ -17,10 +19,14 @@ import com.ai.analyzer.model.PluginSettings;
 import com.ai.analyzer.multiModels.ChatModelFactory;
 import com.ai.analyzer.skills.SkillManager;
 import com.ai.analyzer.skills.SkillToolsProvider;
+import com.ai.analyzer.utils.ArtifactCache;
+import com.ai.analyzer.utils.AppLogBuffer;
 import com.ai.analyzer.utils.HttpFormatter;
 import com.ai.analyzer.rulesMatch.PreScanFilterManager;
 import com.ai.analyzer.rulesMatch.PreScanFilter;
 import com.ai.analyzer.rulesMatch.ScanMatch;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.mcp.McpToolProvider;
@@ -124,6 +130,12 @@ public class PassiveScanApiClient {
     private boolean enablePythonScript = false;
     @Getter
     private boolean enableNotebook = false;
+    @Getter
+    private boolean enableCliTool = false;
+    @Getter
+    private String cliWhitelist = "";
+    @Getter
+    private String cliToolPrompt = "";
     @Getter
     private boolean enableSkills = false;
     @Getter
@@ -233,8 +245,12 @@ public class PassiveScanApiClient {
         this.chromeMcpUrl = settings.getChromeMcpUrl();
         this.enableFileSystemAccess = settings.isEnableFileSystemAccess();
         this.enableNotebook = settings.isEnableNotebook();
+        this.enableCliTool = settings.isEnableCliTool();
+        this.cliWhitelist = settings.getCliWhitelist();
+        this.cliToolPrompt = settings.getCliToolPrompt();
         this.enableSkills = settings.isEnableSkills();
         this.workplaceDirectoryPath = settings.getWorkplaceDirectoryPath();
+        ArtifactCache.setWorkplaceDirectory(this.workplaceDirectoryPath);
         this.skillsDirectoryPath = settings.getSkillsDirectoryPath();
         if (this.workplaceDirectoryPath != null && !this.workplaceDirectoryPath.trim().isEmpty()) {
             this.ragMcpDocumentsPath = settings.resolveRagDocumentsPath();
@@ -248,8 +264,8 @@ public class PassiveScanApiClient {
     }
     
     private PluginSettings loadSettingsFromFile(File settingsFile) {
-        try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(settingsFile))) {
-            return (PluginSettings) ois.readObject();
+        try {
+            return PluginSettings.loadCompat(settingsFile);
         } catch (Exception e) {
             return null;
         }
@@ -486,6 +502,35 @@ public class PassiveScanApiClient {
         }
     }
 
+    public void setEnableCliTool(boolean enableCliTool) {
+        if (this.enableCliTool != enableCliTool) {
+            this.enableCliTool = enableCliTool;
+            synchronized (assistantLock) {
+                assistant = null;
+            }
+        }
+    }
+
+    public void setCliWhitelist(String cliWhitelist) {
+        if (cliWhitelist == null) cliWhitelist = "";
+        if (!cliWhitelist.equals(this.cliWhitelist)) {
+            this.cliWhitelist = cliWhitelist;
+            synchronized (assistantLock) {
+                assistant = null;
+            }
+        }
+    }
+
+    public void setCliToolPrompt(String cliToolPrompt) {
+        if (cliToolPrompt == null) cliToolPrompt = "";
+        if (!cliToolPrompt.equals(this.cliToolPrompt)) {
+            this.cliToolPrompt = cliToolPrompt;
+            synchronized (assistantLock) {
+                assistant = null;
+            }
+        }
+    }
+
     public void setEnableSkills(boolean enableSkills) {
         if (this.enableSkills != enableSkills) {
             this.enableSkills = enableSkills;
@@ -516,6 +561,7 @@ public class PassiveScanApiClient {
 
     public void setWorkplaceDirectoryPath(String workplaceDirectoryPath) {
         String normalized = workplaceDirectoryPath == null ? "" : workplaceDirectoryPath.trim();
+        ArtifactCache.setWorkplaceDirectory(normalized);
         if (!java.util.Objects.equals(this.workplaceDirectoryPath, normalized)) {
             this.workplaceDirectoryPath = normalized;
             if (!normalized.isEmpty()) {
@@ -624,6 +670,9 @@ public class PassiveScanApiClient {
                     
                     // @Tool 注解工具
                     if (api != null) {
+                        assistantBuilder.tools(new ArtifactCacheTools());
+                        logInfo("已添加 ArtifactCacheTools");
+
 /*                         CurlTools curlTools = new CurlTools(api);
                         assistantBuilder.tools(curlTools);
                         logInfo("已添加 CurlTools"); */
@@ -669,6 +718,12 @@ public class PassiveScanApiClient {
                             }
                             assistantBuilder.tools(notebookTools);
                             logInfo("已添加 NotebookTools");
+                        }
+
+                        if (enableCliTool && cliWhitelist != null && !cliWhitelist.trim().isEmpty()) {
+                            RunCmdTools runCmdTools = new RunCmdTools(cliWhitelist, cliToolPrompt, workplaceDirectoryPath);
+                            assistantBuilder.tools(runCmdTools);
+                            logInfo("已添加 RunCmdTools (CLI)");
                         }
                         
                         // SkillToolsProvider: execute_skill_tool + list_skill_tools（二进制执行）
@@ -849,11 +904,18 @@ public class PassiveScanApiClient {
             return "## 风险等级: 无\n请求内容为空，无法分析。";
         }
         
-        // 压缩过长内容（保留请求头，截断请求/响应体）
+        // 压缩过长内容（保留请求头，截断请求/响应体），完整内容落盘供 AI 分段读取。
+        String originalHttpContent = httpContent;
         HttpFormatter.CompressResult compressed = HttpFormatter.compressIfTooLong(httpContent);
         if (compressed.wasCompressed) {
             httpContent = compressed.content;
             logDebug("内容已压缩: " + compressed.originalLength + " → " + compressed.compressedLength + " 字符");
+            try {
+                ArtifactCache.ArtifactRef ref = ArtifactCache.saveText(originalHttpContent, "passive-http-content");
+                httpContent += "\n\n[完整 HTTP 内容已缓存，可按需分段读取]\n" + ref.toPromptText();
+            } catch (Exception e) {
+                logDebug("缓存完整 HTTP 内容失败: " + e.getMessage());
+            }
         }
         
         final int API_MAX_LENGTH = 28000; // 留充足余量给系统提示词和工具定义
@@ -916,12 +978,16 @@ public class PassiveScanApiClient {
                     })
                     .beforeToolExecution((BeforeToolExecution beforeToolExecution) -> {
                         if (cancelFlag != null && cancelFlag.get()) return;
+                        AppLogBuffer.tool("PassiveScanApiClient", String.valueOf(beforeToolExecution.request()));
+                        recordBurpMcpTraffic(beforeToolExecution);
                         String toolInfo = ToolExecutionFormatter.formatToolExecutionInfo(beforeToolExecution);
                         if (toolInfo != null && !toolInfo.isEmpty() && onChunk != null) {
                             onChunk.accept(toolInfo);
                         }
                     })
                     .onToolExecuted((ToolExecution toolExecution) -> {
+                        AppLogBuffer.tool("PassiveScanApiClient", "executed: " + toolExecution);
+                        recordBurpMcpResponse(toolExecution);
                         logDebug("工具执行完成: " + toolExecution);
                     })
                     .onCompleteResponse(futureResponse::complete)
@@ -994,6 +1060,7 @@ public class PassiveScanApiClient {
      */
     private boolean isRetryableError(String errMsg) {
         if (errMsg == null) return false;
+        String lower = errMsg.toLowerCase();
         return errMsg.contains("content field is") ||
                errMsg.contains("InputRequiredException") ||
                errMsg.contains("must not all null") ||
@@ -1003,7 +1070,13 @@ public class PassiveScanApiClient {
                errMsg.contains("MismatchedInputException") ||       // SSE 流返回格式异常（如数组代替对象）
                errMsg.contains("JsonMappingException") ||           // Jackson 映射异常
                errMsg.contains("Cannot deserialize") ||             // 通用 Jackson 反序列化失败
-               errMsg.contains("response cannot be null");          // SDK 二次回调
+               errMsg.contains("response cannot be null") ||        // SDK 二次回调
+               lower.contains("maximum context length") ||          // OpenAI 兼容
+               lower.contains("context_length_exceeded") ||         // OpenAI 兼容
+               lower.contains("reduce the length") ||               // OpenAI 兼容
+               lower.contains("too many tokens") ||                 // 通用
+               lower.contains("request too large") ||               // 通用
+               lower.contains("payload too large");                 // 通用
     }
     
     /**
@@ -1058,6 +1131,8 @@ public class PassiveScanApiClient {
         
         // @Tool 注解工具
         if (api != null) {
+            builder.tools(new ArtifactCacheTools());
+
 /*             CurlTools curlTools = new CurlTools(api);
             builder.tools(curlTools); */
             
@@ -1096,6 +1171,10 @@ public class PassiveScanApiClient {
                 }
                 builder.tools(notebookTools);
             }
+
+            if (enableCliTool && cliWhitelist != null && !cliWhitelist.trim().isEmpty()) {
+                builder.tools(new RunCmdTools(cliWhitelist, cliToolPrompt, workplaceDirectoryPath));
+            }
             
             if (enableSkills && skillManager != null && skillManager.hasEnabledTools()) {
                 if (skillToolsProvider == null) {
@@ -1107,7 +1186,102 @@ public class PassiveScanApiClient {
         
         return builder.build();
     }
-    
+
+    private void recordBurpMcpTraffic(BeforeToolExecution beforeToolExecution) {
+        if (beforeToolExecution == null || beforeToolExecution.request() == null) return;
+        try {
+            String toolName = beforeToolExecution.request().name();
+            if (toolName == null) return;
+            String normalized = toolName.toLowerCase();
+            if (!normalized.contains("send_http1_request")
+                    && !normalized.contains("send_http2_request")
+                    && !normalized.contains("create_repeater_tab")
+                    && !normalized.contains("repeater_tab_with_payload")) {
+                return;
+            }
+            String args = beforeToolExecution.request().arguments();
+            AppLogBuffer.recordMcpRequest(
+                    beforeToolExecution.request().id(),
+                    "PassiveScanApiClient",
+                    toolName,
+                    extractMcpTarget(args),
+                    extractMcpRequest(args),
+                    truncateMcpArgs(args)
+            );
+        } catch (Exception e) {
+            AppLogBuffer.debug("PassiveScanApiClient", "记录 MCP 流量失败: " + e.getMessage());
+        }
+    }
+
+    private void recordBurpMcpResponse(ToolExecution toolExecution) {
+        if (toolExecution == null || toolExecution.request() == null) return;
+        try {
+            String toolName = toolExecution.request().name();
+            if (toolName == null || !isBurpHttpMcpTool(toolName)) return;
+            AppLogBuffer.recordMcpResponse(
+                    toolExecution.request().id(),
+                    "PassiveScanApiClient",
+                    toolName,
+                    toolExecution.result(),
+                    toolExecution.hasFailed(),
+                    toolExecution.duration() != null ? toolExecution.duration().toMillis() + " ms" : ""
+            );
+        } catch (Exception e) {
+            AppLogBuffer.debug("PassiveScanApiClient", "记录 MCP 响应失败: " + e.getMessage());
+        }
+    }
+
+    private String extractMcpRequest(String args) {
+        JsonObject json = parseMcpArgs(args);
+        if (json == null) return "";
+        for (String key : List.of("content", "request", "requestContent", "rawRequest")) {
+            if (json.has(key) && !json.get(key).isJsonNull()) {
+                return json.get(key).getAsString();
+            }
+        }
+        return "";
+    }
+
+    private String extractMcpTarget(String args) {
+        JsonObject json = parseMcpArgs(args);
+        if (json == null) return "";
+        String host = getJsonString(json, "targetHostname", getJsonString(json, "host", ""));
+        String port = getJsonString(json, "targetPort", "");
+        String https = getJsonString(json, "usesHttps", "");
+        if (host.isEmpty()) return "";
+        return host + (port.isEmpty() ? "" : ":" + port) + (https.isEmpty() ? "" : " https=" + https);
+    }
+
+    private String truncateMcpArgs(String args) {
+        if (args == null) return "";
+        return args.length() > 6_000 ? args.substring(0, 6_000) + "\n...[参数过长已截断]..." : args;
+    }
+
+    private JsonObject parseMcpArgs(String args) {
+        try {
+            if (args == null || args.isBlank()) return null;
+            return JsonParser.parseString(args).getAsJsonObject();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String getJsonString(JsonObject json, String key, String fallback) {
+        try {
+            return json.has(key) && !json.get(key).isJsonNull() ? json.get(key).getAsString() : fallback;
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
+    private boolean isBurpHttpMcpTool(String toolName) {
+        String normalized = toolName.toLowerCase();
+        return normalized.contains("send_http1_request")
+                || normalized.contains("send_http2_request")
+                || normalized.contains("create_repeater_tab")
+                || normalized.contains("repeater_tab_with_payload");
+    }
+
     /**
      * 从异常链中提取错误消息（递归检查 cause）
      */
@@ -1184,12 +1358,14 @@ public class PassiveScanApiClient {
     // ========== 日志方法 ==========
     
     private void logInfo(String message) {
+        AppLogBuffer.info("PassiveScanApiClient", message);
         if (api != null) {
             api.logging().logToOutput("[PassiveScanApiClient] " + message);
         }
     }
     
     private void logError(String message) {
+        AppLogBuffer.error("PassiveScanApiClient", message);
         if (api != null) {
             api.logging().logToError("[PassiveScanApiClient] " + message);
         }
@@ -1199,6 +1375,7 @@ public class PassiveScanApiClient {
      * 调试级别日志 - 仅输出到 Output（非 Error），便于追踪请求生命周期
      */
     private void logDebug(String message) {
+        AppLogBuffer.debug("PassiveScanApiClient", message);
         if (api != null) {
             api.logging().logToOutput("[PassiveScan-DEBUG] " + message);
         }

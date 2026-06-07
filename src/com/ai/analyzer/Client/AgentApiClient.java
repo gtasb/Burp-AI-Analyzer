@@ -15,6 +15,7 @@ import com.ai.analyzer.rulesMatch.ScanMatch;
 import burp.api.montoya.http.message.HttpRequestResponse;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.io.File;
 import java.io.FileInputStream;
@@ -23,6 +24,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import com.google.gson.JsonObject;
 import com.ai.analyzer.model.PluginSettings;
 import com.ai.analyzer.multiModels.ChatModelFactory;
 
@@ -48,7 +50,11 @@ import com.ai.analyzer.Tools.BurpExtTools;
 import com.ai.analyzer.Tools.PythonScriptTool;
 import com.ai.analyzer.Tools.NotebookTools;
 import com.ai.analyzer.Tools.FileSystemAccessTools;
+import com.ai.analyzer.Tools.ArtifactCacheTools;
+import com.ai.analyzer.Tools.RunCmdTools;
 import com.ai.analyzer.Tools.WebSearchTools;
+import com.ai.analyzer.utils.ArtifactCache;
+import com.ai.analyzer.utils.AppLogBuffer;
 import lombok.Getter;
 
 /**
@@ -130,6 +136,7 @@ public class AgentApiClient {
     private volatile TokenStream currentTokenStream;
     private volatile StreamingHandle streamingHandle;
     private volatile boolean isStreamingCancelled = false;
+    private final AtomicLong streamGeneration = new AtomicLong(0);
 
     // ========== 系统提示词缓存 ==========
     private volatile String cachedSystemPrompt;
@@ -175,6 +182,10 @@ public class AgentApiClient {
             config.setApiKey(apiKey);
         }
         initializeChatModel();
+    }
+
+    public AgentConfig getConfig() {
+        return config;
     }
     
     // ========== 配置 Getter/Setter（委托给 config）==========
@@ -408,6 +419,30 @@ public class AgentApiClient {
         }
     }
 
+    public void setEnableCliTool(boolean enableCliTool) {
+        if (config.isEnableCliTool() != enableCliTool) {
+            config.setEnableCliTool(enableCliTool);
+            assistant = null;
+            logInfo("CLI 工具已" + (enableCliTool ? "启用" : "禁用"));
+        }
+    }
+
+    public void setCliWhitelist(String v) {
+        if (v == null) v = "";
+        if (!v.equals(config.getCliWhitelist())) {
+            config.setCliWhitelist(v);
+            assistant = null;
+        }
+    }
+
+    public void setCliToolPrompt(String v) {
+        if (v == null) v = "";
+        if (!v.equals(config.getCliToolPrompt())) {
+            config.setCliToolPrompt(v);
+            assistant = null;
+        }
+    }
+
     public void setCustomSystemPrompt(String prompt) {
         String normalized = prompt == null ? "" : prompt;
         if (!java.util.Objects.equals(config.getCustomSystemPrompt(), normalized)) {
@@ -418,6 +453,7 @@ public class AgentApiClient {
 
     public void setWorkplaceDirectoryPath(String workplaceDirectoryPath) {
         String normalized = workplaceDirectoryPath == null ? "" : workplaceDirectoryPath.trim();
+        ArtifactCache.setWorkplaceDirectory(normalized);
         if (!java.util.Objects.equals(config.getWorkplaceDirectoryPath(), normalized)) {
             config.setWorkplaceDirectoryPath(normalized);
             if (!normalized.isEmpty()) {
@@ -562,6 +598,9 @@ public class AgentApiClient {
         
         // @Tool 注解工具
         if (api != null) {
+            assistantBuilder.tools(new ArtifactCacheTools());
+            logInfo("已添加 ArtifactCacheTools");
+
 /*             if (config.isEnableMcp()) {
                 BurpExtTools burpExtTools = new BurpExtTools(api);
                 assistantBuilder.tools(burpExtTools);
@@ -585,6 +624,16 @@ public class AgentApiClient {
                 }
                 assistantBuilder.tools(notebookTools);
                 logInfo("已添加 NotebookTools");
+            }
+
+            if (config.isEnableCliTool() && config.getCliWhitelist() != null && !config.getCliWhitelist().trim().isEmpty()) {
+                RunCmdTools runCmdTools = new RunCmdTools(
+                        config.getCliWhitelist(),
+                        config.getCliToolPrompt(),
+                        config.getWorkplaceDirectoryPath()
+                );
+                assistantBuilder.tools(runCmdTools);
+                logInfo("已添加 RunCmdTools (CLI)");
             }
             
             if (config.isTavilySearchEnabled()) {
@@ -714,6 +763,7 @@ public class AgentApiClient {
     
     public void cancelStreaming() {
         isStreamingCancelled = true;
+        streamGeneration.incrementAndGet();
         
         if (streamingHandle != null) {
             try {
@@ -783,7 +833,11 @@ public class AgentApiClient {
         config.setTavilyBaseUrl(settings.getTavilyBaseUrl());
         config.setGoogleSearchApiKey(settings.getGoogleSearchApiKey());
         config.setGoogleSearchCsi(settings.getGoogleSearchCsi());
+        config.setEnableCliTool(settings.isEnableCliTool());
+        config.setCliWhitelist(settings.getCliWhitelist());
+        config.setCliToolPrompt(settings.getCliToolPrompt());
         config.setWorkplaceDirectoryPath(settings.getWorkplaceDirectoryPath());
+        ArtifactCache.setWorkplaceDirectory(settings.getWorkplaceDirectoryPath());
         if (settings.getRagMcpDocumentsPath() != null && !settings.getRagMcpDocumentsPath().isEmpty()) {
             config.setRagMcpDocumentsPath(settings.getRagMcpDocumentsPath());
         }
@@ -804,8 +858,8 @@ public class AgentApiClient {
     }
     
     private PluginSettings loadSettingsFromFile(File settingsFile) {
-            try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(settingsFile))) {
-                return (PluginSettings) ois.readObject();
+        try {
+            return PluginSettings.loadCompat(settingsFile);
         } catch (Exception e) {
             return null;
         }
@@ -897,18 +951,19 @@ public class AgentApiClient {
                 List<ChatMessage> messages = List.of(userMessage);
                 TokenStream tokenStream = assistant.chat(messages);
                 CompletableFuture<ChatResponse> futureResponse = new CompletableFuture<>();
+                final long streamId = streamGeneration.incrementAndGet();
                 
                 currentTokenStream = tokenStream;
                 isStreamingCancelled = false;
                 
                 tokenStream
                     .onPartialResponseWithContext((PartialResponse partialResponse, PartialResponseContext context) -> {
-                        if (isStreamingCancelled) return;
+                        if (!isCurrentStream(streamId)) return;
                         if (streamingHandle == null && context != null) {
                             streamingHandle = context.streamingHandle();
                         }
                         String text = partialResponse != null ? partialResponse.text() : null;
-                        if (text != null && !text.isEmpty() && !isStreamingCancelled) {
+                        if (text != null && !text.isEmpty() && isCurrentStream(streamId)) {
                                 if (thinkingNoticeShown[0]) {
                                     thinkingNoticeShown[0] = false;
                                 }
@@ -917,7 +972,7 @@ public class AgentApiClient {
                         }
                     })
                     .onPartialThinking((PartialThinking partialThinking) -> {
-                        if (!isStreamingCancelled) {
+                        if (isCurrentStream(streamId)) {
                             logDebug("Thinking: " + partialThinking);
                             if (!thinkingNoticeShown[0]) {
                                 emitSystemNotice("思考中...");
@@ -926,20 +981,27 @@ public class AgentApiClient {
                         }
                     })
                     .beforeToolExecution((BeforeToolExecution beforeToolExecution) -> {
-                        if (isStreamingCancelled) return;
+                        if (!isCurrentStream(streamId)) return;
+                        AppLogBuffer.tool("AgentApiClient", String.valueOf(beforeToolExecution.request()));
+                        recordBurpMcpTraffic(beforeToolExecution);
                         String toolInfoHtml = ToolExecutionFormatter.formatToolExecutionInfo(beforeToolExecution);
                         if (toolInfoHtml != null && !toolInfoHtml.isEmpty()) {
                             onChunk.accept(toolInfoHtml);
                         }
                     })
                     .onToolExecuted((ToolExecution toolExecution) -> {
+                        if (!isCurrentStream(streamId)) return;
+                        AppLogBuffer.tool("AgentApiClient", "executed: " + toolExecution);
+                        recordBurpMcpResponse(toolExecution);
                         logDebug("Tool executed: " + toolExecution);
                     })
                     .onCompleteResponse((ChatResponse response) -> {
+                        if (!isCurrentStream(streamId)) return;
                         logInfo("流式输出完成，共收到 " + contentChunkCount[0] + " 个chunk");
                         futureResponse.complete(response);
                     })
                     .onError((Throwable error) -> {
+                        if (!isCurrentStream(streamId)) return;
                         logError("TokenStream错误: " + error.getMessage());
                         futureResponse.completeExceptionally(error);
                     })
@@ -947,9 +1009,11 @@ public class AgentApiClient {
 
                 ChatResponse finalResponse = futureResponse.get(10, java.util.concurrent.TimeUnit.MINUTES);
                 
-                currentTokenStream = null;
-                streamingHandle = null;
-                isStreamingCancelled = false;
+                if (isCurrentStream(streamId)) {
+                    currentTokenStream = null;
+                    streamingHandle = null;
+                    isStreamingCancelled = false;
+                }
 
                 if (finalResponse != null && finalResponse.tokenUsage() != null) {
                     logInfo("Token使用: " + finalResponse.tokenUsage().toString());
@@ -1018,7 +1082,10 @@ public class AgentApiClient {
     private void cleanupStreamingState() {
         currentTokenStream = null;
         streamingHandle = null;
-        isStreamingCancelled = false;
+    }
+
+    private boolean isCurrentStream(long streamId) {
+        return !isStreamingCancelled && streamGeneration.get() == streamId;
     }
 
     private boolean isInputLengthExceededError(String errorText) {
@@ -1121,6 +1188,101 @@ public class AgentApiClient {
         }
     }
 
+    private void recordBurpMcpTraffic(BeforeToolExecution beforeToolExecution) {
+        if (beforeToolExecution == null || beforeToolExecution.request() == null) return;
+        try {
+            String toolName = beforeToolExecution.request().name();
+            if (toolName == null) return;
+            String normalized = toolName.toLowerCase();
+            if (!normalized.contains("send_http1_request")
+                    && !normalized.contains("send_http2_request")
+                    && !normalized.contains("create_repeater_tab")
+                    && !normalized.contains("repeater_tab_with_payload")) {
+                return;
+            }
+            String args = beforeToolExecution.request().arguments();
+            AppLogBuffer.recordMcpRequest(
+                    beforeToolExecution.request().id(),
+                    "AgentApiClient",
+                    toolName,
+                    extractMcpTarget(args),
+                    extractMcpRequest(args),
+                    truncateMcpArgs(args)
+            );
+        } catch (Exception e) {
+            AppLogBuffer.debug("AgentApiClient", "记录 MCP 流量失败: " + e.getMessage());
+        }
+    }
+
+    private void recordBurpMcpResponse(ToolExecution toolExecution) {
+        if (toolExecution == null || toolExecution.request() == null) return;
+        try {
+            String toolName = toolExecution.request().name();
+            if (toolName == null || !isBurpHttpMcpTool(toolName)) return;
+            AppLogBuffer.recordMcpResponse(
+                    toolExecution.request().id(),
+                    "AgentApiClient",
+                    toolName,
+                    toolExecution.result(),
+                    toolExecution.hasFailed(),
+                    toolExecution.duration() != null ? toolExecution.duration().toMillis() + " ms" : ""
+            );
+        } catch (Exception e) {
+            AppLogBuffer.debug("AgentApiClient", "记录 MCP 响应失败: " + e.getMessage());
+        }
+    }
+
+    private String extractMcpRequest(String args) {
+        JsonObject json = parseMcpArgs(args);
+        if (json == null) return "";
+        for (String key : List.of("content", "request", "requestContent", "rawRequest")) {
+            if (json.has(key) && !json.get(key).isJsonNull()) {
+                return json.get(key).getAsString();
+            }
+        }
+        return "";
+    }
+
+    private String extractMcpTarget(String args) {
+        JsonObject json = parseMcpArgs(args);
+        if (json == null) return "";
+        String host = getJsonString(json, "targetHostname", getJsonString(json, "host", ""));
+        String port = getJsonString(json, "targetPort", "");
+        String https = getJsonString(json, "usesHttps", "");
+        if (host.isEmpty()) return "";
+        return host + (port.isEmpty() ? "" : ":" + port) + (https.isEmpty() ? "" : " https=" + https);
+    }
+
+    private String truncateMcpArgs(String args) {
+        if (args == null) return "";
+        return args.length() > 6_000 ? args.substring(0, 6_000) + "\n...[参数过长已截断]..." : args;
+    }
+
+    private JsonObject parseMcpArgs(String args) {
+        try {
+            if (args == null || args.isBlank()) return null;
+            return com.google.gson.JsonParser.parseString(args).getAsJsonObject();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String getJsonString(JsonObject json, String key, String fallback) {
+        try {
+            return json.has(key) && !json.get(key).isJsonNull() ? json.get(key).getAsString() : fallback;
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
+    private boolean isBurpHttpMcpTool(String toolName) {
+        String normalized = toolName.toLowerCase();
+        return normalized.contains("send_http1_request")
+                || normalized.contains("send_http2_request")
+                || normalized.contains("create_repeater_tab")
+                || normalized.contains("repeater_tab_with_payload");
+    }
+
     private String buildAnalysisContent(String httpContent, String userPrompt, 
             RequestSourceDetector.RequestSourceInfo sourceInfo) {
         StringBuilder content = new StringBuilder();
@@ -1143,6 +1305,15 @@ public class AgentApiClient {
                 content.append("以下是HTTP请求内容：\n\n");
             }
             content.append(finalHttp);
+            if (compressed.wasCompressed) {
+                try {
+                    ArtifactCache.ArtifactRef ref = ArtifactCache.saveText(httpContent, "http-content");
+                    content.append("\n\n[完整 HTTP 内容已缓存，可按需分段读取]\n")
+                            .append(ref.toPromptText());
+                } catch (Exception e) {
+                    logDebug("缓存完整 HTTP 内容失败: " + e.getMessage());
+                }
+            }
         }
 
         if (userPrompt != null && !userPrompt.trim().isEmpty()) {
@@ -1187,18 +1358,21 @@ public class AgentApiClient {
     // ========== 日志方法 ==========
     
     private void logInfo(String message) {
+        AppLogBuffer.info("AgentApiClient", message);
         if (api != null) {
             api.logging().logToOutput("[AgentApiClient] " + message);
         }
     }
 
     private void logError(String message) {
+        AppLogBuffer.error("AgentApiClient", message);
         if (api != null) {
             api.logging().logToError("[AgentApiClient] " + message);
         }
     }
 
     private void logDebug(String message) {
+        AppLogBuffer.debug("AgentApiClient", message);
         if (api != null) {
             api.logging().logToOutput("[AgentApiClient] " + message);
         }

@@ -1,5 +1,6 @@
 package com.ai.analyzer.utils;
 import javax.swing.*;
+import javax.swing.table.JTableHeader;
 import javax.swing.text.*;
 import java.awt.*;
 import java.util.ArrayList;
@@ -508,14 +509,17 @@ public class MarkdownRenderer {
     /**
      * 渲染 GFM 表格：两趟处理 — 先收集数据计算列宽，再对齐输出。
      */
+    /**
+     * 将表格渲染为嵌入式 JTable 组件，支持任意长度内容和水平滚动。
+     * 与纯文本 ASCII 艺术方案相比，这种方式不受 JTextPane 换行宽度限制，内容始终完整显示。
+     */
     private static void renderTable(StyledDocument doc, TableBlock table,
             Style regular, Style bold, Style italic, Style code, Style link) throws BadLocationException {
 
         List<List<String>> headerRows = new ArrayList<>();
-        List<List<String>> bodyRows = new ArrayList<>();
-        List<TableCell.Alignment> alignments = new ArrayList<>();
+        List<List<String>> bodyRows   = new ArrayList<>();
 
-        // --- Pass 1: 收集所有单元格纯文本 + 对齐方式 ---
+        // --- Pass 1: 收集单元格纯文本 ---
         Node section = table.getFirstChild();
         while (section != null) {
             boolean isHead = section instanceof TableHead;
@@ -528,9 +532,6 @@ public class MarkdownRenderer {
                     while (cell != null) {
                         if (cell instanceof TableCell) {
                             cells.add(extractText(cell).trim());
-                            if (isHead && alignments.size() < cells.size()) {
-                                alignments.add(((TableCell) cell).getAlignment());
-                            }
                         }
                         cell = cell.getNext();
                     }
@@ -543,145 +544,163 @@ public class MarkdownRenderer {
 
         int numCols = 0;
         for (List<String> r : headerRows) numCols = Math.max(numCols, r.size());
-        for (List<String> r : bodyRows) numCols = Math.max(numCols, r.size());
+        for (List<String> r : bodyRows)   numCols = Math.max(numCols, r.size());
         if (numCols == 0) return;
-        while (alignments.size() < numCols) alignments.add(null);
 
-        // --- 计算每列显示宽度（CJK 感知） ---
-        int[] colW = new int[numCols];
-        for (List<String> r : headerRows) fillColWidths(r, colW);
-        for (List<String> r : bodyRows) fillColWidths(r, colW);
-        int maxPerCol = 60;
-        for (int i = 0; i < numCols; i++) colW[i] = Math.min(colW[i] + 2, maxPerCol);
+        // --- 构造列名（取第一个 header 行，没有则用序号）---
+        final String[] colNames = new String[numCols];
+        if (!headerRows.isEmpty()) {
+            List<String> h = headerRows.get(0);
+            for (int i = 0; i < numCols; i++) colNames[i] = i < h.size() ? h.get(i) : "";
+        } else {
+            for (int i = 0; i < numCols; i++) colNames[i] = "Col " + (i + 1);
+        }
 
-        // --- 样式（缓存复用） ---
+        // --- 构造行数据 ---
+        final Object[][] rowData = new Object[bodyRows.size()][numCols];
+        for (int r = 0; r < bodyRows.size(); r++) {
+            List<String> row = bodyRows.get(r);
+            for (int c = 0; c < numCols; c++) {
+                rowData[r][c] = c < row.size() ? row.get(c) : "";
+            }
+        }
+
         Theme t = theme();
-        Style tableMono = getOrCreateStyle(doc, "tableMono", regular);
-        StyleConstants.setFontFamily(tableMono, "Consolas");
-        StyleConstants.setFontSize(tableMono, 12);
 
-        Style headerStyle = getOrCreateStyle(doc, "tableHeader", tableMono);
-        StyleConstants.setBold(headerStyle, true);
-        StyleConstants.setForeground(headerStyle, t.tableHeaderFg);
-        StyleConstants.setBackground(headerStyle, t.tableHeaderBg);
+        // --- 创建 JTable（需在 EDT 上，调用者保证在 EDT） ---
+        javax.swing.table.DefaultTableModel model =
+                new javax.swing.table.DefaultTableModel(rowData, colNames) {
+                    @Override public boolean isCellEditable(int r, int c) { return false; }
+                };
 
-        Style borderStyle = getOrCreateStyle(doc, "tableBorder", tableMono);
-        StyleConstants.setForeground(borderStyle, t.tableBorder);
+        JTable jTable = new JTable(model);
+        Font cellFont   = new Font("Microsoft YaHei", Font.PLAIN, 12);
+        Font headerFont = new Font("Microsoft YaHei", Font.BOLD,  12);
+        jTable.setFont(cellFont);
+        jTable.setBackground(t.tableEvenBg);
+        jTable.setForeground(t.tableCellFg);
+        jTable.setGridColor(t.tableBorder);
+        jTable.setRowHeight(28);
+        jTable.setShowGrid(true);
+        jTable.setIntercellSpacing(new Dimension(1, 1));
+        jTable.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
 
-        Style evenStyle = getOrCreateStyle(doc, "tableRowEven", tableMono);
-        StyleConstants.setBackground(evenStyle, t.tableEvenBg);
-        StyleConstants.setForeground(evenStyle, t.tableCellFg);
+        // 交替行颜色渲染器
+        final Color evenBg = t.tableEvenBg;
+        final Color oddBg  = t.tableOddBg;
+        final Color cellFg = t.tableCellFg;
+        final Font rendererFont = cellFont;
+        jTable.setDefaultRenderer(Object.class, new javax.swing.table.TableCellRenderer() {
+            @Override
+            public Component getTableCellRendererComponent(
+                    JTable tbl, Object value, boolean sel, boolean focus, int row, int col) {
+                JTextArea area = new JTextArea(value != null ? value.toString() : "");
+                area.setFont(rendererFont);
+                area.setLineWrap(true);
+                area.setWrapStyleWord(true);
+                area.setOpaque(true);
+                area.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
+                area.setBackground(sel ? tbl.getSelectionBackground() : (row % 2 == 0 ? evenBg : oddBg));
+                area.setForeground(sel ? tbl.getSelectionForeground() : cellFg);
+                area.setToolTipText(value != null ? value.toString() : "");
 
-        Style oddStyle = getOrCreateStyle(doc, "tableRowOdd", tableMono);
-        StyleConstants.setBackground(oddStyle, t.tableOddBg);
-        StyleConstants.setForeground(oddStyle, t.tableCellFg);
+                int width = Math.max(40, tbl.getColumnModel().getColumn(col).getWidth() - 8);
+                area.setSize(width, Short.MAX_VALUE);
+                int preferredHeight = Math.max(28, area.getPreferredSize().height + 8);
+                if (tbl.getRowHeight(row) != preferredHeight) {
+                    tbl.setRowHeight(row, preferredHeight);
+                }
+                return area;
+            }
+        });
+
+        // 表头样式
+        JTableHeader tableHeader = jTable.getTableHeader();
+        tableHeader.setFont(headerFont);
+        tableHeader.setBackground(t.tableHeaderBg);
+        tableHeader.setForeground(t.tableHeaderFg);
+        tableHeader.setReorderingAllowed(false);
+
+        // --- 自动计算列宽（基于 FontMetrics 估算，每列最宽内容决定，上限 400px）---
+        // 使用临时 FontMetrics 估算（Consolas 12pt：ASCII ~7px/char，CJK ~14px/char）
+        final int CHAR_PX = 7;
+        final int CJK_PX  = 14;
+        final int CELL_PAD = 16;
+        final int MIN_COL_PX = 90;
+        final int MAX_COL_PX = 360;
+        final int MAX_VIEW_PX = 720;
+
+        int[] widths = new int[numCols];
+        int totalWidth = 0;
+        for (int c = 0; c < numCols; c++) {
+            int maxPx = estimateTextPx(colNames[c], CHAR_PX, CJK_PX) + CELL_PAD;
+            for (Object[] row : rowData) {
+                String txt = row[c] != null ? row[c].toString() : "";
+                int px = estimateTextPx(txt, CHAR_PX, CJK_PX) + CELL_PAD;
+                maxPx = Math.max(maxPx, px);
+            }
+            int colPx = Math.max(MIN_COL_PX, Math.min(maxPx, MAX_COL_PX));
+            widths[c] = colPx;
+            totalWidth += colPx;
+        }
+
+        if (totalWidth < MAX_VIEW_PX && numCols > 0) {
+            int extra = (MAX_VIEW_PX - totalWidth) / numCols;
+            for (int c = 0; c < numCols; c++) {
+                widths[c] += extra;
+            }
+            totalWidth = 0;
+            for (int width : widths) totalWidth += width;
+        }
+
+        for (int c = 0; c < numCols; c++) {
+            jTable.getColumnModel().getColumn(c).setPreferredWidth(widths[c]);
+        }
+
+        // --- 包装进 JScrollPane，总宽限制，窄面板内水平滚动 ---
+        int viewW = Math.min(totalWidth + 4, MAX_VIEW_PX);
+        int rowH   = jTable.getRowHeight();
+        int hdrH   = tableHeader.getPreferredSize().height > 0
+                ? tableHeader.getPreferredSize().height : 26;
+        int viewH  = Math.min(hdrH + rowH * Math.max(1, jTable.getRowCount()) + 80, 420);
+
+        JScrollPane scrollPane = new JScrollPane(jTable,
+                JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+        scrollPane.setPreferredSize(new Dimension(viewW, viewH));
+        scrollPane.setBorder(BorderFactory.createLineBorder(t.tableBorder, 1));
+        scrollPane.getViewport().setBackground(t.tableEvenBg);
+
+        // --- 作为组件嵌入 StyledDocument ---
+        String styleName = "tableComp_" + System.nanoTime();
+        Style compStyle = doc.addStyle(styleName, regular);
+        StyleConstants.setComponent(compStyle, scrollPane);
 
         if (doc.getLength() > 0) doc.insertString(doc.getLength(), "\n", regular);
-
-        // --- Pass 2: 渲染 ---
-        for (List<String> row : headerRows) {
-            renderTableRow(doc, row, colW, alignments, numCols, headerStyle, borderStyle);
-        }
-        renderTableSeparator(doc, colW, numCols, borderStyle);
-        for (int i = 0; i < bodyRows.size(); i++) {
-            Style rowStyle = (i % 2 == 0) ? evenStyle : oddStyle;
-            renderTableRow(doc, bodyRows.get(i), colW, alignments, numCols, rowStyle, borderStyle);
-        }
+        doc.insertString(doc.getLength(), " ", compStyle);  // 组件占位符
+        doc.insertString(doc.getLength(), "\n", regular);
     }
 
-    private static void renderTableRow(StyledDocument doc, List<String> cells,
-            int[] colW, List<TableCell.Alignment> aligns, int numCols,
-            Style cellStyle, Style borderStyle) throws BadLocationException {
-        for (int i = 0; i < numCols; i++) {
-            String text = i < cells.size() ? cells.get(i) : "";
-            int maxCellW = colW[i] - 2;
-            if (maxCellW > 3 && displayWidth(text) > maxCellW) {
-                text = truncateToDisplayWidth(text, maxCellW);
-            }
-            TableCell.Alignment align = i < aligns.size() ? aligns.get(i) : null;
-            String padded = " " + padToWidth(text, colW[i] - 1, align);
-            doc.insertString(doc.getLength(), padded, cellStyle);
-            if (i < numCols - 1) {
-                doc.insertString(doc.getLength(), "│", borderStyle);
-            }
-        }
-        doc.insertString(doc.getLength(), "\n", cellStyle);
-    }
-
-    private static String truncateToDisplayWidth(String s, int maxWidth) {
-        if (maxWidth < 4) return s;
-        StringBuilder sb = new StringBuilder();
-        int w = 0;
-        for (int i = 0; i < s.length(); ) {
-            int cp = s.codePointAt(i);
-            int charW = isWideChar(cp) ? 2 : 1;
-            if (w + charW > maxWidth - 1) break;
-            w += charW;
-            i += Character.charCount(cp);
-            sb.appendCodePoint(cp);
-        }
-        sb.append("…");
-        return sb.toString();
-    }
-
-    private static void renderTableSeparator(StyledDocument doc,
-            int[] colW, int numCols, Style borderStyle) throws BadLocationException {
-        for (int i = 0; i < numCols; i++) {
-            doc.insertString(doc.getLength(), "─".repeat(colW[i]), borderStyle);
-            if (i < numCols - 1) {
-                doc.insertString(doc.getLength(), "┼", borderStyle);
-            }
-        }
-        doc.insertString(doc.getLength(), "\n", borderStyle);
-    }
-
-    private static void fillColWidths(List<String> row, int[] colW) {
-        for (int i = 0; i < row.size() && i < colW.length; i++) {
-            colW[i] = Math.max(colW[i], displayWidth(row.get(i)));
-        }
-    }
-
-    /**
-     * 将文本填充到指定显示宽度（CJK 感知），支持左/中/右对齐。
-     */
-    private static String padToWidth(String s, int targetWidth, TableCell.Alignment align) {
-        int current = displayWidth(s);
-        int padding = targetWidth - current;
-        if (padding <= 0) return s;
-        if (align == TableCell.Alignment.RIGHT) {
-            return " ".repeat(padding) + s;
-        } else if (align == TableCell.Alignment.CENTER) {
-            int left = padding / 2;
-            return " ".repeat(left) + s + " ".repeat(padding - left);
-        }
-        return s + " ".repeat(padding);
-    }
-
-    /**
-     * 计算字符串的显示宽度（CJK / 全角字符占 2 列）。
-     */
-    private static int displayWidth(String s) {
-        if (s == null) return 0;
-        int w = 0;
-        for (int i = 0; i < s.length(); ) {
-            int cp = s.codePointAt(i);
-            w += isWideChar(cp) ? 2 : 1;
+    /** 估算文本渲染像素宽度（不依赖 Graphics 上下文）。 */
+    private static int estimateTextPx(String text, int asciiPx, int cjkPx) {
+        if (text == null || text.isEmpty()) return 0;
+        int px = 0;
+        for (int i = 0; i < text.length(); ) {
+            int cp = text.codePointAt(i);
+            Character.UnicodeBlock b = Character.UnicodeBlock.of(cp);
+            boolean wide = b == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS
+                    || b == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A
+                    || b == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_B
+                    || b == Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS
+                    || b == Character.UnicodeBlock.CJK_SYMBOLS_AND_PUNCTUATION
+                    || b == Character.UnicodeBlock.HALFWIDTH_AND_FULLWIDTH_FORMS
+                    || b == Character.UnicodeBlock.HIRAGANA
+                    || b == Character.UnicodeBlock.KATAKANA
+                    || b == Character.UnicodeBlock.HANGUL_SYLLABLES;
+            px += wide ? cjkPx : asciiPx;
             i += Character.charCount(cp);
         }
-        return w;
-    }
-
-    private static boolean isWideChar(int cp) {
-        Character.UnicodeBlock b = Character.UnicodeBlock.of(cp);
-        return b == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS
-                || b == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A
-                || b == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_B
-                || b == Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS
-                || b == Character.UnicodeBlock.CJK_SYMBOLS_AND_PUNCTUATION
-                || b == Character.UnicodeBlock.HALFWIDTH_AND_FULLWIDTH_FORMS
-                || b == Character.UnicodeBlock.HIRAGANA
-                || b == Character.UnicodeBlock.KATAKANA
-                || b == Character.UnicodeBlock.HANGUL_SYLLABLES;
+        return px;
     }
 
     // ======================== 内联内容渲染 ========================

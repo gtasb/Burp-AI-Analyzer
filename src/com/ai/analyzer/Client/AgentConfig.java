@@ -46,6 +46,9 @@ public class AgentConfig {
     private boolean enableSkills = false;
     private boolean enablePythonScript = false;
     private boolean enableNotebook = false;
+    private boolean enableCliTool = false;
+    private String cliWhitelist = "";
+    private String cliToolPrompt = "";
     private String workplaceDirectoryPath = "";
     private String customSystemPrompt = "";
     
@@ -110,6 +113,9 @@ public class AgentConfig {
         this.enableSkills = other.enableSkills;
         this.enablePythonScript = other.enablePythonScript;
         this.enableNotebook = other.enableNotebook;
+        this.enableCliTool = other.enableCliTool;
+        this.cliWhitelist = other.cliWhitelist;
+        this.cliToolPrompt = other.cliToolPrompt;
         this.workplaceDirectoryPath = other.workplaceDirectoryPath;
         this.customSystemPrompt = other.customSystemPrompt;
     }
@@ -190,6 +196,63 @@ public class AgentConfig {
     public boolean isDuckDuckGoSearchEnabled() {
         return enableSearch && "duckduckgo".equals(searchMode);
     }
+
+    public String getApiKey() { return apiKey; }
+    public void setApiKey(String apiKey) { this.apiKey = apiKey != null ? apiKey : ""; }
+    public String getApiUrl() { return apiUrl; }
+    public void setApiUrl(String apiUrl) { this.apiUrl = apiUrl != null ? apiUrl : ""; }
+    public String getModel() { return model; }
+    public void setModel(String model) { this.model = model != null ? model : ""; }
+    public ApiProvider getApiProvider() { return apiProvider; }
+    public void setApiProvider(ApiProvider apiProvider) { this.apiProvider = apiProvider != null ? apiProvider : ApiProvider.DASHSCOPE; }
+    public boolean isEnableThinking() { return enableThinking; }
+    public void setEnableThinking(boolean enableThinking) { this.enableThinking = enableThinking; }
+    public boolean isEnableSearch() { return enableSearch; }
+    public void setEnableSearch(boolean enableSearch) { this.enableSearch = enableSearch; }
+    public String getCustomParameters() { return customParameters; }
+    public void setCustomParameters(String customParameters) { this.customParameters = customParameters != null ? customParameters : ""; }
+    public boolean isEnableMcp() { return enableMcp; }
+    public void setEnableMcp(boolean enableMcp) { this.enableMcp = enableMcp; }
+    public String getBurpMcpUrl() { return burpMcpUrl; }
+    public void setBurpMcpUrl(String burpMcpUrl) { this.burpMcpUrl = burpMcpUrl != null ? burpMcpUrl : ""; }
+    public boolean isEnableRagMcp() { return enableRagMcp; }
+    public void setEnableRagMcp(boolean enableRagMcp) { this.enableRagMcp = enableRagMcp; }
+    public String getRagMcpUrl() { return ragMcpUrl; }
+    public void setRagMcpUrl(String ragMcpUrl) { this.ragMcpUrl = ragMcpUrl != null ? ragMcpUrl : ""; }
+    public String getRagMcpDocumentsPath() { return ragMcpDocumentsPath; }
+    public void setRagMcpDocumentsPath(String ragMcpDocumentsPath) { this.ragMcpDocumentsPath = ragMcpDocumentsPath != null ? ragMcpDocumentsPath : ""; }
+    public boolean isEnableChromeMcp() { return enableChromeMcp; }
+    public void setEnableChromeMcp(boolean enableChromeMcp) { this.enableChromeMcp = enableChromeMcp; }
+    public String getChromeMcpUrl() { return chromeMcpUrl; }
+    public void setChromeMcpUrl(String chromeMcpUrl) { this.chromeMcpUrl = chromeMcpUrl != null ? chromeMcpUrl : ""; }
+    public String getSearchMode() { return searchMode; }
+    public void setSearchMode(String searchMode) { this.searchMode = searchMode != null ? searchMode : "enableSearch"; }
+    public String getTavilyApiKey() { return tavilyApiKey; }
+    public void setTavilyApiKey(String tavilyApiKey) { this.tavilyApiKey = tavilyApiKey != null ? tavilyApiKey : ""; }
+    public String getTavilyBaseUrl() { return tavilyBaseUrl; }
+    public void setTavilyBaseUrl(String tavilyBaseUrl) { this.tavilyBaseUrl = tavilyBaseUrl != null ? tavilyBaseUrl : ""; }
+    public String getGoogleSearchApiKey() { return googleSearchApiKey; }
+    public void setGoogleSearchApiKey(String googleSearchApiKey) { this.googleSearchApiKey = googleSearchApiKey != null ? googleSearchApiKey : ""; }
+    public String getGoogleSearchCsi() { return googleSearchCsi; }
+    public void setGoogleSearchCsi(String googleSearchCsi) { this.googleSearchCsi = googleSearchCsi != null ? googleSearchCsi : ""; }
+    public boolean isEnableFileSystemAccess() { return enableFileSystemAccess; }
+    public void setEnableFileSystemAccess(boolean enableFileSystemAccess) { this.enableFileSystemAccess = enableFileSystemAccess; }
+    public boolean isEnableSkills() { return enableSkills; }
+    public void setEnableSkills(boolean enableSkills) { this.enableSkills = enableSkills; }
+    public boolean isEnablePythonScript() { return enablePythonScript; }
+    public void setEnablePythonScript(boolean enablePythonScript) { this.enablePythonScript = enablePythonScript; }
+    public boolean isEnableNotebook() { return enableNotebook; }
+    public void setEnableNotebook(boolean enableNotebook) { this.enableNotebook = enableNotebook; }
+    public boolean isEnableCliTool() { return enableCliTool; }
+    public void setEnableCliTool(boolean enableCliTool) { this.enableCliTool = enableCliTool; }
+    public String getCliWhitelist() { return cliWhitelist; }
+    public void setCliWhitelist(String cliWhitelist) { this.cliWhitelist = cliWhitelist != null ? cliWhitelist : ""; }
+    public String getCliToolPrompt() { return cliToolPrompt; }
+    public void setCliToolPrompt(String cliToolPrompt) { this.cliToolPrompt = cliToolPrompt != null ? cliToolPrompt : ""; }
+    public String getWorkplaceDirectoryPath() { return workplaceDirectoryPath; }
+    public void setWorkplaceDirectoryPath(String workplaceDirectoryPath) { this.workplaceDirectoryPath = workplaceDirectoryPath != null ? workplaceDirectoryPath : ""; }
+    public String getCustomSystemPrompt() { return customSystemPrompt; }
+    public void setCustomSystemPrompt(String customSystemPrompt) { this.customSystemPrompt = customSystemPrompt != null ? customSystemPrompt : ""; }
 
     @Override
     public String toString() {

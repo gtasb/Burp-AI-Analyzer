@@ -1,18 +1,24 @@
 package com.ai.analyzer.model;
 
-import java.io.Serializable;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectStreamClass;
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
 
 public class PluginSettings implements Serializable {
     
-    private static final long serialVersionUID = 10L;
+    // IMPORTANT: 为了向下兼容已落盘的配置文件，请勿再修改 serialVersionUID
+    private static final long serialVersionUID = 9L;
     private String apiUrl;
     private String apiKey;
     private String model;
     private String apiProvider = "DashScope"; // API 提供者：DashScope 或 OpenAI兼容
     private String customParameters = ""; // 用户自定义参数（JSON 格式）
+    private List<ApiProfile> apiProfiles = new ArrayList<>(); // 常用 API 配置档案
     
     private String userPrompt;
     private boolean enableThinking = true; // 默认启用思考过程
@@ -40,6 +46,11 @@ public class PluginSettings implements Serializable {
     private boolean enableSkills = false; // 默认禁用 Skills
     private String skillsDirectoryPath = ""; // Skills 目录路径
     private List<String> enabledSkillNames = new ArrayList<>(); // 已启用的 skill 名称列表
+
+    // CLI 工具配置
+    private boolean enableCliTool = false;
+    private String cliWhitelist = "";
+    private String cliToolPrompt = "";
     
     // 自定义系统提示词（初始值留空，getter 中兜底返回默认提示词）
     private String customActiveSystemPrompt = null;
@@ -55,6 +66,61 @@ public class PluginSettings implements Serializable {
     // 被动扫描过滤配置
     private String passiveScanSkipExtensions = "";
     private String passiveScanDomainBlacklist = "";
+
+    private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
+        in.defaultReadObject();
+
+        if (apiUrl == null) apiUrl = "https://dashscope.aliyuncs.com/api/v1";
+        if (apiKey == null) apiKey = "";
+        if (model == null) model = "qwen3-max";
+        if (apiProvider == null) apiProvider = "DashScope";
+        if (customParameters == null) customParameters = "";
+        if (apiProfiles == null) apiProfiles = new ArrayList<>();
+        if (userPrompt == null) userPrompt = "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议";
+
+        if (BurpMcpUrl == null) BurpMcpUrl = "http://127.0.0.1:9876/";
+        if (ragMcpUrl == null) ragMcpUrl = "";
+        if (ragMcpDocumentsPath == null) ragMcpDocumentsPath = "";
+        if (chromeMcpUrl == null) chromeMcpUrl = "";
+        if (ragDocumentsPath == null) ragDocumentsPath = "";
+        if (workplaceDirectoryPath == null) workplaceDirectoryPath = "";
+
+        if (skillsDirectoryPath == null) skillsDirectoryPath = "";
+        if (enabledSkillNames == null) enabledSkillNames = new ArrayList<>();
+        if (cliWhitelist == null) cliWhitelist = "";
+        if (cliToolPrompt == null) cliToolPrompt = "";
+
+        if (searchMode == null) searchMode = "enableSearch";
+        if (tavilyApiKey == null) tavilyApiKey = "";
+        if (tavilyBaseUrl == null) tavilyBaseUrl = "";
+        if (googleSearchApiKey == null) googleSearchApiKey = "";
+        if (googleSearchCsi == null) googleSearchCsi = "";
+
+        if (passiveScanSkipExtensions == null) passiveScanSkipExtensions = "";
+        if (passiveScanDomainBlacklist == null) passiveScanDomainBlacklist = "";
+    }
+
+    /**
+     * 兼容加载（解决历史版本 serialVersionUID 变更导致的 InvalidClassException）。
+     * 注意：这属于 Java 序列化的兼容兜底，仅用于迁移旧配置。
+     */
+    public static PluginSettings loadCompat(File settingsFile) throws IOException, ClassNotFoundException {
+        try (FileInputStream fis = new FileInputStream(settingsFile);
+             ObjectInputStream ois = new ObjectInputStream(fis) {
+                 @Override
+                 protected ObjectStreamClass readClassDescriptor() throws IOException, ClassNotFoundException {
+                     ObjectStreamClass desc = super.readClassDescriptor();
+                     if ("com.ai.analyzer.model.PluginSettings".equals(desc.getName())) {
+                         ObjectStreamClass local = ObjectStreamClass.lookup(PluginSettings.class);
+                         if (local != null) return local;
+                     }
+                     return desc;
+                 }
+             }) {
+            Object obj = ois.readObject();
+            return (PluginSettings) obj;
+        }
+    }
     
     public PluginSettings() {
         // 默认设置
@@ -73,6 +139,46 @@ public class PluginSettings implements Serializable {
         this.chromeMcpUrl = "";
         this.enableRag = false;
         this.ragDocumentsPath = "";
+        this.apiProfiles = new ArrayList<>();
+    }
+
+    public static class ApiProfile implements Serializable {
+        private static final long serialVersionUID = 1L;
+        private String name;
+        private String apiProvider;
+        private String apiUrl;
+        private String apiKey;
+        private String model;
+        private String customParameters;
+
+        public ApiProfile() {}
+
+        public ApiProfile(String name, String apiProvider, String apiUrl, String apiKey, String model, String customParameters) {
+            this.name = name;
+            this.apiProvider = apiProvider;
+            this.apiUrl = apiUrl;
+            this.apiKey = apiKey;
+            this.model = model;
+            this.customParameters = customParameters;
+        }
+
+        public String getName() { return name != null ? name : ""; }
+        public void setName(String name) { this.name = name; }
+        public String getApiProvider() { return apiProvider != null ? apiProvider : "DashScope"; }
+        public void setApiProvider(String apiProvider) { this.apiProvider = apiProvider; }
+        public String getApiUrl() { return apiUrl != null ? apiUrl : ""; }
+        public void setApiUrl(String apiUrl) { this.apiUrl = apiUrl; }
+        public String getApiKey() { return apiKey != null ? apiKey : ""; }
+        public void setApiKey(String apiKey) { this.apiKey = apiKey; }
+        public String getModel() { return model != null ? model : ""; }
+        public void setModel(String model) { this.model = model; }
+        public String getCustomParameters() { return customParameters != null ? customParameters : ""; }
+        public void setCustomParameters(String customParameters) { this.customParameters = customParameters; }
+
+        @Override
+        public String toString() {
+            return getName();
+        }
     }
     public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt) {
         this.apiUrl = apiUrl;
@@ -204,6 +310,14 @@ public class PluginSettings implements Serializable {
     
     public void setCustomParameters(String customParameters) {
         this.customParameters = customParameters != null ? customParameters : "";
+    }
+
+    public List<ApiProfile> getApiProfiles() {
+        return apiProfiles != null ? apiProfiles : new ArrayList<>();
+    }
+
+    public void setApiProfiles(List<ApiProfile> apiProfiles) {
+        this.apiProfiles = apiProfiles != null ? new ArrayList<>(apiProfiles) : new ArrayList<>();
     }
     
     public String getUserPrompt() {
@@ -382,6 +496,31 @@ public class PluginSettings implements Serializable {
 
     public void setEnableNotebook(boolean enableNotebook) {
         this.enableNotebook = enableNotebook;
+    }
+
+    // CLI 工具配置
+    public boolean isEnableCliTool() {
+        return enableCliTool;
+    }
+
+    public void setEnableCliTool(boolean enableCliTool) {
+        this.enableCliTool = enableCliTool;
+    }
+
+    public String getCliWhitelist() {
+        return cliWhitelist != null ? cliWhitelist : "";
+    }
+
+    public void setCliWhitelist(String v) {
+        this.cliWhitelist = v != null ? v : "";
+    }
+
+    public String getCliToolPrompt() {
+        return cliToolPrompt != null ? cliToolPrompt : "";
+    }
+
+    public void setCliToolPrompt(String v) {
+        this.cliToolPrompt = v != null ? v : "";
     }
     
     // 前置扫描器配置

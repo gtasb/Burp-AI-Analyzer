@@ -33,6 +33,7 @@ public class ChatPanel extends JPanel {
     private String lastSentRequestFingerprint;
     private boolean isStreaming = false;
     private SwingWorker<Void, String> currentWorker;
+    private volatile int streamRunId = 0;
     private boolean debugEnabled = false;
     private JTextArea debugLogArea;
     private JScrollPane debugLogScrollPane;
@@ -115,7 +116,7 @@ public class ChatPanel extends JPanel {
         // 创建debug日志区域（初始隐藏）
         debugLogArea = new JTextArea();
         debugLogArea.setEditable(false);
-        debugLogArea.setFont(new Font("Consolas", Font.PLAIN, 11));
+        debugLogArea.setFont(createLogFont());
         applyEditorTheme(debugLogArea);
         debugLogArea.setRows(5);
         debugLogScrollPane = new JScrollPane(debugLogArea);
@@ -238,6 +239,23 @@ public class ChatPanel extends JPanel {
         add(mainSplitPane, BorderLayout.CENTER);
         add(inputPanel, BorderLayout.SOUTH);
     }
+
+    private Font createLogFont() {
+        String[] candidates = {
+                "Microsoft YaHei UI",
+                "Microsoft YaHei",
+                "SimSun",
+                Font.MONOSPACED
+        };
+        String sample = "中文日志 ABC 123";
+        for (String name : candidates) {
+            Font font = new Font(name, Font.PLAIN, 11);
+            if (font.canDisplayUpTo(sample) < 0) {
+                return font;
+            }
+        }
+        return new Font(Font.SANS_SERIF, Font.PLAIN, 11);
+    }
     
     /**
      * 添加debug日志
@@ -288,6 +306,7 @@ public class ChatPanel extends JPanel {
         
         // 开始流式输出
         isStreaming = true;
+        final int runId = ++streamRunId;
         sendButton.setEnabled(false);
         stopButton.setEnabled(true);
         
@@ -359,8 +378,8 @@ public class ChatPanel extends JPanel {
                     debugLog("API Key: " + (apiClient.getApiKey().isEmpty() ? "未设置" : "已设置"));
                     debugLog("上下文:\n" + contextBuilder.toString());
                     
-                    // 先在UI中添加AI助手前缀（只添加一次）
-                    SwingUtilities.invokeLater(() -> {
+                    // 先在UI中添加AI助手前缀（只添加一次），必须同步完成，避免首批 chunk 早于 startPos。
+                    SwingUtilities.invokeAndWait(() -> {
                         try {
                             StyledDocument doc = chatArea.getStyledDocument();
                             Style senderStyle = doc.addStyle("sender", null);
@@ -374,11 +393,8 @@ public class ChatPanel extends JPanel {
                         }
                     });
                     
-                    final long[] lastPlainTime = {0L};
-                    final long PLAIN_INTERVAL_MS = 150;
-                    final long[] lastMdTime = {0L};
-                    final long MD_INTERVAL_MS = 2000;
-                    final int[] lastPlainLen = {0};
+                    final long[] lastRenderTime = {0L};
+                    final long RENDER_INTERVAL_MS = 120;
 
                     api.logging().logToOutput("[ChatPanel] 开始调用analyzeRequestStream");
                     apiClient.setSystemNoticeConsumer(systemNotice ->
@@ -386,51 +402,22 @@ public class ChatPanel extends JPanel {
                     );
 
                     java.util.function.Consumer<String> chunkHandler = chunk -> {
-                        if (currentWorker.isCancelled() || !isStreaming) return;
+                        if (isCancelled() || !isStreaming || runId != streamRunId) return;
                         fullResponse.append(chunk);
 
                         long now = System.currentTimeMillis();
 
-                        if (now - lastMdTime[0] >= MD_INTERVAL_MS && aiMessageStartPos >= 0) {
-                            lastMdTime[0] = now;
-                            lastPlainTime[0] = now;
-                            lastPlainLen[0] = fullResponse.length();
-                            String snapshot = fullResponse.toString();
-                            SwingUtilities.invokeLater(() -> {
-                                if (currentWorker.isCancelled() || !isStreaming) return;
-                                try {
-                                    MarkdownRenderer.appendMarkdownStreaming(chatArea, snapshot, aiMessageStartPos);
-                                    chatArea.setCaretPosition(chatArea.getStyledDocument().getLength());
-                                } catch (Exception e) {
-                                    api.logging().logToError("流式Markdown渲染失败: " + e.getMessage());
-                                }
-                            });
-                            return;
-                        }
-
-                        if (now - lastPlainTime[0] < PLAIN_INTERVAL_MS) return;
-                        lastPlainTime[0] = now;
-
-                        int start = lastPlainLen[0];
-                        String newText = fullResponse.substring(start);
-                        lastPlainLen[0] = fullResponse.length();
+                        if (now - lastRenderTime[0] < RENDER_INTERVAL_MS) return;
+                        lastRenderTime[0] = now;
+                        String snapshot = fullResponse.toString();
 
                         SwingUtilities.invokeLater(() -> {
-                            if (currentWorker.isCancelled() || !isStreaming) return;
+                            if (isCancelled() || !isStreaming || runId != streamRunId) return;
                             try {
-                                StyledDocument doc = chatArea.getStyledDocument();
-                                Style plain = doc.getStyle("streaming_plain");
-                                if (plain == null) {
-                                    plain = doc.addStyle("streaming_plain", null);
-                                    StyleConstants.setFontFamily(plain, "Microsoft YaHei");
-                                    StyleConstants.setFontSize(plain, 13);
-                                    Color fg = UIManager.getColor("TextArea.foreground");
-                                    if (fg != null) StyleConstants.setForeground(plain, fg);
-                                }
-                                doc.insertString(doc.getLength(), newText, plain);
-                                chatArea.setCaretPosition(doc.getLength());
+                                MarkdownRenderer.appendMarkdownStreaming(chatArea, snapshot, aiMessageStartPos);
+                                chatArea.setCaretPosition(chatArea.getStyledDocument().getLength());
                             } catch (Exception e) {
-                                api.logging().logToError("流式文本追加失败: " + e.getMessage());
+                                api.logging().logToError("流式Markdown渲染失败: " + e.getMessage());
                             }
                         });
                     };
@@ -449,8 +436,10 @@ public class ChatPanel extends JPanel {
                     debugLog("AI API调用完成，fullResponse长度: " + fullResponse.length());
                     
                     String finalContent = fullResponse.toString();
-                    if (!finalContent.isEmpty() && aiMessageStartPos >= 0) {
+                    if (!finalContent.isEmpty() && aiMessageStartPos >= 0
+                            && !isCancelled() && isStreaming && runId == streamRunId) {
                         SwingUtilities.invokeLater(() -> {
+                            if (isCancelled() || !isStreaming || runId != streamRunId) return;
                             try {
                                 StyledDocument doc = chatArea.getStyledDocument();
                                 int currentLength = doc.getLength();
@@ -465,6 +454,7 @@ public class ChatPanel extends JPanel {
                         });
                     }
                 } catch (Exception e) {
+                    if (isCancelled() || runId != streamRunId) return null;
                     SwingUtilities.invokeLater(() -> {
                         appendToChat("AI助手", "抱歉，处理请求时出现错误: " + e.getMessage(), false);
                     });
@@ -476,25 +466,34 @@ public class ChatPanel extends JPanel {
             protected void done() {
                 try {
                     get(); // 检查是否有异常
+                    if (runId != streamRunId) return;
                     api.logging().logToOutput("[ChatPanel] SwingWorker done()被调用");
                     api.logging().logToOutput("[ChatPanel] fullResponse最终长度: " + fullResponse.length());
                     api.logging().logToOutput("[ChatPanel] fullResponse最终内容: " + (fullResponse.length() > 500 ? fullResponse.substring(0, 500) + "..." : fullResponse.toString()));
                     
-                    addToSharedHistory("AI助手", fullResponse.toString(), false);
-                    debouncedSave();
+                    if (!isCancelled()) {
+                        addToSharedHistory("AI助手", fullResponse.toString(), false);
+                        debouncedSave();
+                    }
                     
                     // 流式输出已完成，在done()中已经完成了完整渲染，这里不需要再渲染
                 } catch (Exception e) {
-                    SwingUtilities.invokeLater(() -> {
-                        appendToChat("AI助手", "抱歉，处理请求时出现错误: " + e.getMessage(), false);
-                    });
+                    if (!isCancelled() && runId == streamRunId) {
+                        SwingUtilities.invokeLater(() -> {
+                            appendToChat("AI助手", "抱歉，处理请求时出现错误: " + e.getMessage(), false);
+                        });
+                    }
                 } finally {
-                    isStreaming = false;
+                    if (runId == streamRunId) {
+                        isStreaming = false;
+                    }
                     aiMessageStartPos = -1; // 重置位置
                     // 恢复按钮状态
                     SwingUtilities.invokeLater(() -> {
-                        sendButton.setEnabled(true);
-                        stopButton.setEnabled(false);
+                        if (runId == streamRunId) {
+                            sendButton.setEnabled(true);
+                            stopButton.setEnabled(false);
+                        }
                     });
                 }
             }
@@ -509,6 +508,7 @@ public class ChatPanel extends JPanel {
             if (apiClient != null) {
                 apiClient.cancelStreaming();
             }
+            streamRunId++;
             // 然后取消 SwingWorker
             currentWorker.cancel(true);
             isStreaming = false;
@@ -603,6 +603,7 @@ public class ChatPanel extends JPanel {
         // 如果正在输出，先停止
         if (currentWorker != null && !currentWorker.isDone()) {
             // apiClient.clearContext() 内部会先调用 cancelStreaming()
+            streamRunId++;
             currentWorker.cancel(true);
             isStreaming = false;
             sendButton.setEnabled(true);

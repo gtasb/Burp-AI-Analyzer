@@ -1,20 +1,23 @@
-# Java CI with Maven
-# https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-java-with-maven
-
-name: Java CI with Maven
+name: Maven CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [ "main", "master" ]
   pull_request:
     branches: [ "main", "master" ]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout
+      uses: actions/checkout@v4
 
     - name: Set up JDK 21
       uses: actions/setup-java@v4
@@ -23,11 +26,27 @@ jobs:
         distribution: 'temurin'
         cache: maven
 
-    - name: Build with Maven
-      run: mvn -B package
+    - name: Build and test
+      run: mvn -B -ntp clean package
       env:
         # 延长依赖下载超时，避免 GitHub 网络波动导致失败
         MAVEN_OPTS: -Dmaven.wagon.http.connectionTimeout=120000 -Dmaven.wagon.http.readTimeout=120000
+
+    - name: Upload test reports
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: surefire-reports
+        path: target/surefire-reports/
+        if-no-files-found: ignore
+
+    - name: Upload build artifact
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: burp-ai-analyzer
+        path: target/*.jar
+        if-no-files-found: error
 
     - name: Update dependency graph
       uses: advanced-security/maven-dependency-submission-action@571e99aab1055c2e71a1e2309b9691de18d6b7d6

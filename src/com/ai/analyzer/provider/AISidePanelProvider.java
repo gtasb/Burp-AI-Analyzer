@@ -60,8 +60,7 @@ public class AISidePanelProvider implements HttpRequestEditorProvider, HttpRespo
         try {
             File settingsFile = new File(System.getProperty("user.home"), ".burp_ai_analyzer_settings");
             if (settingsFile.exists()) {
-                try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(settingsFile))) {
-                    PluginSettings settings = (PluginSettings) ois.readObject();
+                PluginSettings settings = PluginSettings.loadCompat(settingsFile);
                     if (settings.getApiUrl() != null && !settings.getApiUrl().isEmpty()) {
                         apiUrl = settings.getApiUrl();
                     }
@@ -71,7 +70,6 @@ public class AISidePanelProvider implements HttpRequestEditorProvider, HttpRespo
                     if (settings.getModel() != null && !settings.getModel().isEmpty()) {
                         model = settings.getModel();
                     }
-                }
             }
         } catch (Exception e) {
             // 忽略加载错误，使用默认值
