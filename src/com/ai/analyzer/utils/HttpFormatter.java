@@ -1,6 +1,8 @@
 package com.ai.analyzer.utils;
 
 import burp.api.montoya.http.message.HttpRequestResponse;
+
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -10,7 +12,9 @@ import java.nio.charset.StandardCharsets;
 public class HttpFormatter {
     
     public static final int DEFAULT_MAX_LENGTH = 15000;
-    
+    /** 进入 user prompt 的 HTTP 预览上限（完整内容落盘缓存） */
+    public static final int PROMPT_PREVIEW_MAX_LENGTH = 4000;
+
     /**
      * HTTP内容压缩结果
      */
@@ -25,6 +29,47 @@ public class HttpFormatter {
             this.wasCompressed = wasCompressed;
             this.originalLength = originalLength;
             this.compressedLength = compressedLength;
+        }
+    }
+
+    /**
+     * 组装 user prompt 前的 HTTP 内容处理：未超长则原样进入提示词；
+     * 超长则将完整报文写入 workplace/.cache，提示词中仅保留预览与 fileId 引用。
+     */
+    public static class PromptPrepareResult {
+        public final String promptText;
+        public final boolean cached;
+        public final int originalLength;
+
+        public PromptPrepareResult(String promptText, boolean cached, int originalLength) {
+            this.promptText = promptText != null ? promptText : "";
+            this.cached = cached;
+            this.originalLength = originalLength;
+        }
+    }
+
+    public static PromptPrepareResult prepareForPrompt(String httpContent) {
+        return prepareForPrompt(httpContent, "http-content");
+    }
+
+    public static PromptPrepareResult prepareForPrompt(String httpContent, String cacheLabel) {
+        if (httpContent == null || httpContent.isEmpty()) {
+            return new PromptPrepareResult("", false, 0);
+        }
+        int originalLength = httpContent.length();
+        if (originalLength <= DEFAULT_MAX_LENGTH) {
+            return new PromptPrepareResult(httpContent, false, originalLength);
+        }
+        try {
+            ArtifactCache.ArtifactRef ref = ArtifactCache.saveText(httpContent, cacheLabel);
+            CompressResult preview = compressIfTooLong(httpContent, PROMPT_PREVIEW_MAX_LENGTH);
+            String inline = preview.content
+                    + "\n\n...[HTTP 报文较长（约 " + originalLength + " 字符），完整内容已缓存，未直接进入上下文]...\n\n"
+                    + ref.toPromptText();
+            return new PromptPrepareResult(inline, true, originalLength);
+        } catch (IOException e) {
+            CompressResult compressed = compressIfTooLong(httpContent);
+            return new PromptPrepareResult(compressed.content, false, originalLength);
         }
     }
     

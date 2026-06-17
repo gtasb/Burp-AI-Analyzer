@@ -2452,7 +2452,7 @@ public class AIAnalyzerTab extends JPanel {
                                     javax.swing.text.StyleConstants.setFontFamily(warnStyle, "Microsoft YaHei");
                                     javax.swing.text.StyleConstants.setFontSize(warnStyle, 12);
                                     doc.insertString(doc.getLength(), 
-                                        "HTTP内容过长（" + httpOrigLen + " 字符），已自动压缩处理\n\n", warnStyle);
+                                        "HTTP内容过长（" + httpOrigLen + " 字符），完整报文已缓存，提示词仅含预览与 fileId\n\n", warnStyle);
                                 } catch (Exception ignored) {}
                             }
                             aiMessageStartPos = targetResultPane.getStyledDocument().getLength();

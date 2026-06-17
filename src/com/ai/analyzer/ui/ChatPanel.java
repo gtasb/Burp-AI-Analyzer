@@ -326,7 +326,7 @@ public class ChatPanel extends JPanel {
                 totalLength += currentRequest.response().toByteArray().getBytes().length;
             }
             if (totalLength > com.ai.analyzer.utils.HttpFormatter.DEFAULT_MAX_LENGTH) {
-                appendToChat("系统", "HTTP内容过长（" + totalLength + " 字符），已自动压缩后发送AI分析", false);
+                appendToChat("系统", "HTTP内容过长（" + totalLength + " 字符），完整报文将缓存，提示词仅含预览与 fileId", false);
             }
         }
         

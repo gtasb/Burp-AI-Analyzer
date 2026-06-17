@@ -1292,28 +1292,21 @@ public class AgentApiClient {
         }
 
         if (httpContent != null && !httpContent.trim().isEmpty()) {
-            com.ai.analyzer.utils.HttpFormatter.CompressResult compressed = 
-                com.ai.analyzer.utils.HttpFormatter.compressIfTooLong(httpContent);
-            if (compressed.wasCompressed) {
-                logInfo("HTTP内容过长已自动压缩: " + compressed.originalLength + " → " + compressed.compressedLength + " 字符");
+            com.ai.analyzer.utils.HttpFormatter.PromptPrepareResult prepared =
+                    com.ai.analyzer.utils.HttpFormatter.prepareForPrompt(httpContent, "http-content");
+            if (prepared.cached) {
+                logInfo("HTTP内容过长已缓存: " + prepared.originalLength + " 字符，提示词仅含预览与 fileId");
             }
-            String finalHttp = compressed.content;
-            
+            String finalHttp = prepared.promptText;
+
             if (finalHttp.contains("=== HTTP请求 ===") && finalHttp.contains("=== HTTP响应 ===")) {
-                content.append("以下是完整的HTTP请求和响应信息：\n\n");
+                content.append("以下是HTTP请求和响应信息");
+                content.append(prepared.cached ? "（完整报文已缓存，可按 fileId 分段读取）：\n\n" : "：\n\n");
             } else {
-                content.append("以下是HTTP请求内容：\n\n");
+                content.append("以下是HTTP请求内容");
+                content.append(prepared.cached ? "（完整报文已缓存，可按 fileId 分段读取）：\n\n" : "：\n\n");
             }
             content.append(finalHttp);
-            if (compressed.wasCompressed) {
-                try {
-                    ArtifactCache.ArtifactRef ref = ArtifactCache.saveText(httpContent, "http-content");
-                    content.append("\n\n[完整 HTTP 内容已缓存，可按需分段读取]\n")
-                            .append(ref.toPromptText());
-                } catch (Exception e) {
-                    logDebug("缓存完整 HTTP 内容失败: " + e.getMessage());
-                }
-            }
         }
 
         if (userPrompt != null && !userPrompt.trim().isEmpty()) {

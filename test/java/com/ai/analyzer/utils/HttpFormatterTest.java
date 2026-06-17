@@ -239,4 +239,36 @@ class HttpFormatterTest {
             assertThat(HttpFormatter.isBinaryContent(headers + body.toString())).isTrue();
         }
     }
+
+    @Nested
+    @DisplayName("prepareForPrompt")
+    class PrepareForPrompt {
+
+        @Test
+        @DisplayName("should_keep_short_http_inline")
+        void should_keep_short_http_inline() {
+            String content = "=== HTTP请求 ===\nGET /api HTTP/1.1\r\nHost: example.com\r\n\r\n";
+            HttpFormatter.PromptPrepareResult result = HttpFormatter.prepareForPrompt(content);
+
+            assertThat(result.cached).isFalse();
+            assertThat(result.promptText).isEqualTo(content);
+        }
+
+        @Test
+        @DisplayName("should_cache_long_http_and_put_fileId_in_prompt")
+        void should_cache_long_http_and_put_fileId_in_prompt(
+                @org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir) throws Exception {
+            ArtifactCache.setWorkplaceDirectory(tempDir.toString());
+            String body = "A".repeat(20_000);
+            String content = "=== HTTP请求 ===\nGET /api HTTP/1.1\r\nHost: example.com\r\n\r\n" + body;
+
+            HttpFormatter.PromptPrepareResult result = HttpFormatter.prepareForPrompt(content, "test-http");
+
+            assertThat(result.cached).isTrue();
+            assertThat(result.originalLength).isEqualTo(content.length());
+            assertThat(result.promptText).contains("fileId=");
+            assertThat(result.promptText).contains("read_cached_artifact");
+            assertThat(result.promptText.length()).isLessThan(content.length() / 2);
+        }
+    }
 }

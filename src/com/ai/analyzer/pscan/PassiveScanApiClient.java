@@ -904,26 +904,13 @@ public class PassiveScanApiClient {
             return "## 风险等级: 无\n请求内容为空，无法分析。";
         }
         
-        // 压缩过长内容（保留请求头，截断请求/响应体），完整内容落盘供 AI 分段读取。
-        String originalHttpContent = httpContent;
-        HttpFormatter.CompressResult compressed = HttpFormatter.compressIfTooLong(httpContent);
-        if (compressed.wasCompressed) {
-            httpContent = compressed.content;
-            logDebug("内容已压缩: " + compressed.originalLength + " → " + compressed.compressedLength + " 字符");
-            try {
-                ArtifactCache.ArtifactRef ref = ArtifactCache.saveText(originalHttpContent, "passive-http-content");
-                httpContent += "\n\n[完整 HTTP 内容已缓存，可按需分段读取]\n" + ref.toPromptText();
-            } catch (Exception e) {
-                logDebug("缓存完整 HTTP 内容失败: " + e.getMessage());
-            }
+        HttpFormatter.PromptPrepareResult prepared =
+                HttpFormatter.prepareForPrompt(httpContent, "passive-http-content");
+        if (prepared.cached) {
+            logDebug("HTTP内容过长已缓存: " + prepared.originalLength + " 字符，提示词仅含预览与 fileId");
         }
-        
-        final int API_MAX_LENGTH = 28000; // 留充足余量给系统提示词和工具定义
-        if (httpContent.length() > API_MAX_LENGTH) {
-            httpContent = httpContent.substring(0, API_MAX_LENGTH) + 
-                "\n\n[内容已截断至 " + API_MAX_LENGTH + " 字符]";
-        }
-        
+        httpContent = prepared.promptText;
+
         String userContent = buildScanPrompt(httpContent);
         
         // ========== 前置扫描器集成 ==========
