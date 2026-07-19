@@ -90,7 +90,7 @@ public class PassiveScanApiClient {
     private final Object assistantLock = new Object();
     
     // MCP 工具提供者
-    private volatile McpToolProvider mcpToolProvider;
+    private volatile ToolProvider mcpToolProvider;
     private final Object mcpInitLock = new Object();
     
     // Burp API引用
@@ -836,22 +836,18 @@ public class PassiveScanApiClient {
         if ((enableMcp || enableRagMcp || enableChromeMcp || customEnabled) && mcpToolProvider == null) {
             try {
                 AllMcpToolProvider mcpProviderHelper = new AllMcpToolProvider();
-                List<McpClient> allMcpClients = new ArrayList<>();
-                // TODO: 暂时注释掉 allFilterTools，不再过滤工具
-                // List<String> allFilterTools = new ArrayList<>();
-                McpToolMappingConfig mappingConfig = null;
+                List<ToolProvider> mcpProviders = new ArrayList<>();
 
                 // 0. 自定义 MCP 服务器（JSON 配置，支持 SSE / streamableHttp / stdio / websocket）
                 for (CustomMcpConfig customConfig : customMcpConfigs) {
                     if (!customConfig.isEnabled() || !customConfig.isValid()) continue;
                     try {
                         McpClient customClient = mcpProviderHelper.createCustomMcpClient(customConfig);
-                        allMcpClients.add(customClient);
-                        // TODO: 暂时注释掉自定义MCP白名单工具过滤
-                        // List<String> whitelist = customConfig.getToolWhitelist();
-                        // if (whitelist != null && !whitelist.isEmpty()) {
-                        //     allFilterTools.addAll(whitelist);
-                        // }
+                        List<String> whitelist = customConfig.getToolWhitelist();
+                        String[] whitelistArray = (whitelist == null || whitelist.isEmpty())
+                                ? null
+                                : whitelist.toArray(new String[0]);
+                        mcpProviders.add(mcpProviderHelper.createToolProvider(customClient, whitelistArray));
                         logInfo("自定义 MCP 客户端已添加: " + customConfig.getName()
                                 + " (类型: " + customConfig.getType() + ")");
                     } catch (Exception e) {
@@ -867,7 +863,7 @@ public class PassiveScanApiClient {
                             : "http://127.0.0.1:9876/";
                         McpTransport burpTransport = mcpProviderHelper.createHttpTransport(burpMcpUrlValue, burpMcpAuthorization);
                         McpClient burpMcpClient = mcpProviderHelper.createMcpClient(burpTransport, "BurpMCPClient");
-                        allMcpClients.add(burpMcpClient);
+                        mcpProviders.add(mcpProviderHelper.createToolProvider(burpMcpClient));
                         
                         // TODO: 暂时注释掉 Burp MCP 工具白名单过滤，不再过滤工具
                         // allFilterTools.addAll(List.of(
@@ -902,9 +898,7 @@ public class PassiveScanApiClient {
                     try {
                         McpTransport ragTransport = mcpProviderHelper.createRagMcpTransport(getEffectiveRagDocumentsPath().trim());
                         McpClient ragMcpClient = mcpProviderHelper.createMcpClient(ragTransport, "RagMCPClient");
-                        allMcpClients.add(ragMcpClient);
-                        // TODO: 暂时注释掉 RAG MCP 工具白名单过滤
-                        // allFilterTools.addAll(List.of("index_document", "query_document"));
+                        mcpProviders.add(mcpProviderHelper.createToolProvider(ragMcpClient));
                         logInfo("RAG MCP 客户端已添加，知识库路径: " + getEffectiveRagDocumentsPath());
                     } catch (Exception e) {
                         logError("RAG MCP 客户端初始化失败: " + e.getMessage());
@@ -916,7 +910,7 @@ public class PassiveScanApiClient {
                     try {
                         McpTransport chromeTransport = mcpProviderHelper.createStreamableHttpTransport(chromeMcpUrl.trim());
                         McpClient chromeMcpClient = mcpProviderHelper.createMcpClient(chromeTransport, "ChromeMCPClient");
-                        allMcpClients.add(chromeMcpClient);
+                        mcpProviders.add(mcpProviderHelper.createToolProvider(chromeMcpClient));
                         // allFilterTools.addAll(List.of("get_windows_and_tabs", "chrome_navigate"));
                         logInfo("Chrome MCP 客户端已添加，地址: " + chromeMcpUrl);
                     } catch (Exception e) {
@@ -925,19 +919,12 @@ public class PassiveScanApiClient {
                 }
                 
                 // 等待连接稳定
-                if (!allMcpClients.isEmpty()) {
+                if (!mcpProviders.isEmpty()) {
                     Thread.sleep(1000);
-                    
-                    // TODO: 暂时注释掉 allFilterTools 过滤数组，传入 null 表示不过滤任何工具
-                    // String[] filterToolsArray = allFilterTools.isEmpty() ? null : allFilterTools.toArray(new String[0]);
-                    String[] filterToolsArray = null;
-                    // 不使用工具规范映射，直接创建工具提供者（避免额外的描述映射）
-                    mcpToolProvider = mcpProviderHelper.createToolProvider(
-                        allMcpClients, 
-                        filterToolsArray
-                    );
-                    
-                    logInfo("MCP 工具提供者初始化成功，已添加 " + allMcpClients.size() + " 个 MCP 客户端");
+                    mcpToolProvider = mcpProviders.size() == 1
+                            ? mcpProviders.get(0)
+                            : new com.ai.analyzer.mcpClient.CompositeToolProvider(mcpProviders);
+                    logInfo("MCP 工具提供者初始化成功，已添加 " + mcpProviders.size() + " 个 MCP Provider");
                 }
             } catch (Exception e) {
                 logError("MCP 工具提供者初始化失败: " + e.getMessage());

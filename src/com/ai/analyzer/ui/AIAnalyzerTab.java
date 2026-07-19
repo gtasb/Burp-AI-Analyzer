@@ -678,7 +678,7 @@ public class AIAnalyzerTab extends JPanel {
             psClient.setEnableFileSystemAccess(apiClient.isEnableFileSystemAccess());
 
             // 自定义 MCP 配置
-            psClient.setCustomMcpConfigJson(apiClient.getConfig().getCustomMcpConfigJson());
+            psClient.setCustomMcpConfigJson(settingsEnableCustomMcp() ? apiClient.getConfig().getCustomMcpConfigJson() : "");
             
             // Python 脚本执行配置
             psClient.setEnablePythonScript(apiClient.isEnablePythonScript());
@@ -2862,15 +2862,11 @@ public class AIAnalyzerTab extends JPanel {
             settings.setCliToolPrompt(cliToolPromptArea != null ? cliToolPromptArea.getText() : "");
 
             // 自定义 MCP 配置
-            if (enableCustomMcpCheckBox != null && !enableCustomMcpCheckBox.isSelected()) {
-                // 总开关关闭时：保留 UI 内容，但落盘为空串（运行时不会加载）
-                settings.setCustomMcpConfigJson("");
-            } else {
-                settings.setCustomMcpConfigJson(customMcpConfigArea != null ? customMcpConfigArea.getText() : "");
-            }
-            apiClient.setCustomMcpConfigJson(settings.getCustomMcpConfigJson());
+            settings.setEnableCustomMcp(enableCustomMcpCheckBox != null && enableCustomMcpCheckBox.isSelected());
+            settings.setCustomMcpConfigJson(customMcpConfigArea != null ? customMcpConfigArea.getText() : "");
+            apiClient.setCustomMcpConfigJson(settings.isEnableCustomMcp() ? settings.getCustomMcpConfigJson() : "");
             if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
-                passiveScanManager.getApiClient().setCustomMcpConfigJson(settings.getCustomMcpConfigJson());
+                passiveScanManager.getApiClient().setCustomMcpConfigJson(settings.isEnableCustomMcp() ? settings.getCustomMcpConfigJson() : "");
             }
             
             // 设置 Skills 选项
@@ -3098,10 +3094,10 @@ public class AIAnalyzerTab extends JPanel {
             }
         }
         if (enableCustomMcpCheckBox != null) {
-            // 兼容旧配置：只要有非空的自定义 MCP 配置，默认开启总开关；并显式设置编辑区可用性
-            enableCustomMcpCheckBox.setSelected(hasSavedCustomMcp);
+            boolean customMcpEnabled = settings.isEnableCustomMcp() || hasSavedCustomMcp;
+            enableCustomMcpCheckBox.setSelected(customMcpEnabled && hasSavedCustomMcp);
             if (customMcpConfigArea != null) {
-                customMcpConfigArea.setEnabled(hasSavedCustomMcp);
+                customMcpConfigArea.setEnabled(enableCustomMcpCheckBox.isSelected());
             }
             validateCustomMcpConfig();
         }
@@ -3137,7 +3133,7 @@ public class AIAnalyzerTab extends JPanel {
         apiClient.setRagMcpDocumentsPath(settings.getRagMcpDocumentsPath());
         apiClient.setEnableChromeMcp(settings.isEnableChromeMcp());
         apiClient.setChromeMcpUrl(settings.getChromeMcpUrl());
-        apiClient.setCustomMcpConfigJson(settings.getCustomMcpConfigJson());
+        apiClient.setCustomMcpConfigJson(settings.isEnableCustomMcp() ? settings.getCustomMcpConfigJson() : "");
         apiClient.setEnableFileSystemAccess(settings.isEnableFileSystemAccess());
         // apiClient.setEnableRag(settings.isEnableRag()); // 默认 RAG 暂时禁用
         // apiClient.setRagDocumentsPath(settings.getRagDocumentsPath()); // 默认 RAG 暂时禁用
@@ -3229,6 +3225,10 @@ public class AIAnalyzerTab extends JPanel {
         String prompt = text != null ? text : "";
         if (passiveModePromptArea != null) passiveModePromptArea.setText(prompt);
         // 主动模式输入框不设置默认文本（聊天式交互，每次提交后清空）
+    }
+
+    private boolean settingsEnableCustomMcp() {
+        return enableCustomMcpCheckBox != null && enableCustomMcpCheckBox.isSelected();
     }
     
     /**

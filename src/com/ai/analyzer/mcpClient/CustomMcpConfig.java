@@ -65,6 +65,8 @@ public class CustomMcpConfig {
     private List<String> command = new ArrayList<>();
     private Map<String, String> env = Collections.emptyMap();
     private List<String> toolWhitelist = new ArrayList<>();
+    private String rawType = TransportType.STREAMABLE_HTTP.getValue();
+    private boolean typeRecognized = true;
 
     public CustomMcpConfig() {
     }
@@ -93,6 +95,22 @@ public class CustomMcpConfig {
         this.type = type != null ? type : TransportType.STREAMABLE_HTTP;
     }
 
+    public String getRawType() {
+        return rawType != null ? rawType : "";
+    }
+
+    public void setRawType(String rawType) {
+        this.rawType = rawType;
+    }
+
+    public boolean isTypeRecognized() {
+        return typeRecognized;
+    }
+
+    public void setTypeRecognized(boolean typeRecognized) {
+        this.typeRecognized = typeRecognized;
+    }
+
     public String getUrl() {
         return url != null ? url : "";
     }
@@ -114,7 +132,17 @@ public class CustomMcpConfig {
     }
 
     public void setCommand(List<String> command) {
-        this.command = command != null ? command : new ArrayList<>();
+        if (command == null) {
+            this.command = new ArrayList<>();
+            return;
+        }
+        List<String> normalized = new ArrayList<>();
+        for (String item : command) {
+            if (item == null) continue;
+            String trimmed = item.trim();
+            if (!trimmed.isEmpty()) normalized.add(trimmed);
+        }
+        this.command = normalized;
     }
 
     public Map<String, String> getEnv() {
@@ -130,11 +158,22 @@ public class CustomMcpConfig {
     }
 
     public void setToolWhitelist(List<String> toolWhitelist) {
-        this.toolWhitelist = toolWhitelist != null ? toolWhitelist : new ArrayList<>();
+        if (toolWhitelist == null) {
+            this.toolWhitelist = new ArrayList<>();
+            return;
+        }
+        List<String> normalized = new ArrayList<>();
+        for (String item : toolWhitelist) {
+            if (item == null) continue;
+            String trimmed = item.trim();
+            if (!trimmed.isEmpty()) normalized.add(trimmed);
+        }
+        this.toolWhitelist = normalized;
     }
 
     public boolean isValid() {
         if (!enabled || getName().trim().isEmpty()) return false;
+        if (!typeRecognized) return false;
         return switch (getType()) {
             case SSE, STREAMABLE_HTTP, WEBSOCKET -> !getUrl().trim().isEmpty();
             case STDIO -> !getCommand().isEmpty();

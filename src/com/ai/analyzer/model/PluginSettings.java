@@ -74,6 +74,7 @@ public class PluginSettings implements Serializable {
 
     // 自定义 MCP 服务器配置（JSON 字符串，简版数组格式）
     private String customMcpConfigJson = "";
+    private boolean enableCustomMcp = false;
 
     private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
         in.defaultReadObject();
@@ -108,6 +109,9 @@ public class PluginSettings implements Serializable {
         if (passiveScanSkipExtensions == null) passiveScanSkipExtensions = "";
         if (passiveScanDomainBlacklist == null) passiveScanDomainBlacklist = "";
         if (customMcpConfigJson == null) customMcpConfigJson = "";
+        if (!enableCustomMcp && customMcpConfigJson != null && !customMcpConfigJson.trim().isEmpty()) {
+            enableCustomMcp = true;
+        }
     }
 
     /**
@@ -643,6 +647,14 @@ public class PluginSettings implements Serializable {
 
     public void setCustomMcpConfigJson(String v) {
         this.customMcpConfigJson = v != null ? v : "";
+    }
+
+    public boolean isEnableCustomMcp() {
+        return enableCustomMcp;
+    }
+
+    public void setEnableCustomMcp(boolean enableCustomMcp) {
+        this.enableCustomMcp = enableCustomMcp;
     }
 
     public List<CustomMcpConfig> getCustomMcpConfigs() {

@@ -77,7 +77,7 @@ public class AgentApiClient {
     private MontoyaApi api;
     private StreamingChatModel chatModel;
     private Assistant assistant;
-    private McpToolProvider mcpToolProvider;
+    private ToolProvider mcpToolProvider;
     private MessageWindowChatMemory chatMemory;
     private SkillManager skillManager;
     private SkillToolsProvider skillToolsProvider;
@@ -711,22 +711,18 @@ public class AgentApiClient {
         
                 try {
                     AllMcpToolProvider mcpProviderHelper = new AllMcpToolProvider();
-                    List<McpClient> allMcpClients = new ArrayList<>();
-                    // TODO: 暂时注释掉 allFilterTools，不再过滤工具
-                    // List<String> allFilterTools = new ArrayList<>();
-                    McpToolMappingConfig mappingConfig = null;
+                    List<ToolProvider> mcpProviders = new ArrayList<>();
 
                     // 自定义 MCP 服务器（JSON 配置，支持 SSE / streamableHttp / stdio / websocket）
                     for (var customConfig : config.getCustomMcpConfigs()) {
                         if (!customConfig.isEnabled() || !customConfig.isValid()) continue;
                         try {
                             McpClient customClient = mcpProviderHelper.createCustomMcpClient(customConfig);
-                            allMcpClients.add(customClient);
-                            // TODO: 暂时注释掉自定义MCP白名单工具过滤
-                            // List<String> whitelist = customConfig.getToolWhitelist();
-                            // if (whitelist != null && !whitelist.isEmpty()) {
-                            //     allFilterTools.addAll(whitelist);
-                            // }
+                            List<String> whitelist = customConfig.getToolWhitelist();
+                            String[] whitelistArray = (whitelist == null || whitelist.isEmpty())
+                                    ? null
+                                    : whitelist.toArray(new String[0]);
+                            mcpProviders.add(mcpProviderHelper.createToolProvider(customClient, whitelistArray));
                             logInfo("自定义 MCP 客户端已添加: " + customConfig.getName()
                                     + " (类型: " + customConfig.getType() + ")");
                         } catch (Exception e) {
@@ -742,26 +738,7 @@ public class AgentApiClient {
                     try {
                         McpTransport burpTransport = mcpProviderHelper.createHttpTransport(tryUrl, config.getEffectiveBurpMcpAuthorization());
                         McpClient burpMcpClient = mcpProviderHelper.createMcpClient(burpTransport, "BurpMCPClient");
-                        allMcpClients.add(burpMcpClient);
-                        // TODO: 暂时注释掉 Burp MCP 工具白名单过滤，不再过滤工具
-                        // allFilterTools.addAll(List.of(
-                        //     "send_http1_request", "send_http2_request", 
-                        //     "get_proxy_http_history", "get_proxy_http_history_regex",
-                        //     "get_proxy_websocket_history", "get_proxy_websocket_history_regex", 
-                        //     "get_scanner_issues", "set_task_execution_engine_state",
-                        //     "get_active_editor_contents", "set_active_editor_contents",
-                        //     "create_repeater_tab","repeater_tab_with_payload",
-                        //     "params_extract","diff_params",
-                        //     "url_encode","url_decode",
-                        //     "base64_encode","base64_decode",
-                        //     "jwt_decode","decode_as",
-                        //     "generate_random_string",
-                        //     "request_parse","response_parse",
-                        //     "find_reflected","comparer_send",
-                        //     "proxy_history_annotate","response_body_search",
-                        //     "site_map","site_map_regex",
-                        //     "scan_audit_start","scan_audit_start_mode","scan_audit_start_requests","scan_crawl_start","scan_task_status","scan_task_delete"
-                        // ));
+                        mcpProviders.add(mcpProviderHelper.createToolProvider(burpMcpClient));
                         logInfo("Burp MCP 客户端已添加，地址: " + tryUrl);
                         break;
                     } catch (Exception e) {
@@ -779,9 +756,7 @@ public class AgentApiClient {
                         try {
                     McpTransport ragTransport = mcpProviderHelper.createRagMcpTransport(config.getEffectiveRagDocumentsPath().trim());
                             McpClient ragMcpClient = mcpProviderHelper.createMcpClient(ragTransport, "RagMCPClient");
-                            allMcpClients.add(ragMcpClient);
-                    // TODO: 暂时注释掉 RAG MCP 工具白名单过滤
-                    // allFilterTools.addAll(List.of("index_document", "query_document"));
+                            mcpProviders.add(mcpProviderHelper.createToolProvider(ragMcpClient));
                     logInfo("RAG MCP 客户端已添加，知识库路径: " + config.getEffectiveRagDocumentsPath());
                         } catch (Exception e) {
                     logInfo("RAG MCP 客户端初始化失败: " + e.getMessage());
@@ -793,23 +768,19 @@ public class AgentApiClient {
                         try {
                     McpTransport chromeTransport = mcpProviderHelper.createStreamableHttpTransport(config.getChromeMcpUrl().trim());
                             McpClient chromeMcpClient = mcpProviderHelper.createMcpClient(chromeTransport, "ChromeMCPClient");
-                            allMcpClients.add(chromeMcpClient);
+                            mcpProviders.add(mcpProviderHelper.createToolProvider(chromeMcpClient));
                     logInfo("Chrome MCP 客户端已添加，地址: " + config.getChromeMcpUrl());
                         } catch (Exception e) {
                     logInfo("Chrome MCP 客户端初始化失败: " + e.getMessage());
                         }
                     }
                     
-                    if (!allMcpClients.isEmpty()) {
+                    if (!mcpProviders.isEmpty()) {
                     Thread.sleep(1000);
-                        // TODO: 暂时注释掉 allFilterTools 过滤数组，传入 null 表示不过滤任何工具
-                        // String[] filterToolsArray = allFilterTools.isEmpty() ? null : allFilterTools.toArray(new String[0]);
-                        String[] filterToolsArray = null;
-                        // 不使用工具规范映射，直接创建工具提供者（避免额外的描述映射）
-                        mcpToolProvider = mcpProviderHelper.createToolProvider(
-                    allMcpClients, filterToolsArray
-                        );
-                logInfo("MCP 工具提供者初始化成功，已添加 " + allMcpClients.size() + " 个 MCP 客户端");
+                        mcpToolProvider = mcpProviders.size() == 1
+                                ? mcpProviders.get(0)
+                                : new com.ai.analyzer.mcpClient.CompositeToolProvider(mcpProviders);
+                logInfo("MCP 工具提供者初始化成功，已添加 " + mcpProviders.size() + " 个 MCP Provider");
                     }
                 } catch (Exception e) {
             logInfo("MCP 工具提供者初始化失败: " + e.getMessage());
@@ -915,6 +886,7 @@ public class AgentApiClient {
         config.setChromeMcpUrl(settings.getChromeMcpUrl());
         config.setBurpMcpUrl(settings.getMcpUrl());
         config.setRagMcpUrl(settings.getRagMcpUrl());
+        config.setCustomMcpConfigJson(settings.getCustomMcpConfigJson());
     }
     
     private PluginSettings loadSettingsFromFile(File settingsFile) {

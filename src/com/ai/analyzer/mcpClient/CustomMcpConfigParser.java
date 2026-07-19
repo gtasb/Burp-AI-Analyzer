@@ -56,7 +56,14 @@ public final class CustomMcpConfigParser {
             config.setEnabled(getBoolean(obj, "enabled", true));
         }
         if (obj.has("type")) {
-            config.setType(CustomMcpConfig.TransportType.from(getString(obj, "type")));
+            String rawType = getString(obj, "type");
+            config.setRawType(rawType);
+            CustomMcpConfig.TransportType parsedType = CustomMcpConfig.TransportType.from(rawType);
+            boolean recognized = rawType == null || rawType.trim().isEmpty()
+                    || parsedType.getValue().equalsIgnoreCase(rawType.trim())
+                    || parsedType.name().equalsIgnoreCase(rawType.trim());
+            config.setTypeRecognized(recognized);
+            config.setType(parsedType);
         }
         if (obj.has("url")) {
             config.setUrl(getString(obj, "url"));

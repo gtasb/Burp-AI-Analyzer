@@ -123,6 +123,12 @@ public final class McpConfigValidator {
             }
             enabledCount++;
 
+            if (!config.isTypeRecognized()) {
+                errors.add(prefix + " ('" + name + "')：不支持的 type 值：" + config.getRawType().trim()
+                        + "（仅支持 sse / streamableHttp / stdio / websocket）");
+                continue;
+            }
+
             if (config.isValid()) {
                 validCount++;
             } else {

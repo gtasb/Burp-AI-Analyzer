@@ -198,6 +198,13 @@ public class AllMcpToolProvider {
      * @return McpTransport 实例
      */
     public McpTransport createWebSocketTransport(String url) {
+        return createWebSocketTransport(url, null);
+    }
+
+    public McpTransport createWebSocketTransport(String url, String authorization) {
+        if (authorization != null && !authorization.trim().isEmpty()) {
+            throw new IllegalArgumentException("当前版本的 WebSocket MCP transport 暂不支持 Authorization header，请改用 streamableHttp/sse，或将鉴权放到 URL/反向代理层");
+        }
         return new WebSocketMcpTransport.Builder()
                 .url(url)
                 .timeout(java.time.Duration.ofSeconds(30))
@@ -219,7 +226,7 @@ public class AllMcpToolProvider {
         McpTransport transport = switch (config.getType()) {
             case SSE -> createHttpTransport(config.getUrl().trim(), config.getAuthorization());
             case STREAMABLE_HTTP -> createStreamableHttpTransport(config.getUrl().trim(), config.getAuthorization());
-            case WEBSOCKET -> createWebSocketTransport(config.getUrl().trim());
+            case WEBSOCKET -> createWebSocketTransport(config.getUrl().trim(), config.getAuthorization());
             case STDIO -> createStdioTransportWithEnv(config.getCommand(), config.getEnv());
         };
 
