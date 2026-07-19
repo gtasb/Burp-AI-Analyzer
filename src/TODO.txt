@@ -1,0 +1,125 @@
+0. 更新所有依赖到最新版
+
+1. 因为llm的上下文是有限的，比方说我现在设计的agent，通过mcp（或其他工具）一次性返回给它的数据过多，需要把获取到的数据先放到缓存txt里
+（原先在组装http流量进入提示词时也会遇到类似问题即请求或响应过长，应该通过这种方法解决）
+
+如果你用的是 LangChain4j + MCP，最直接的办法其实不是在 Agent 层处理，而是在 MCP Tool 返回之前就落盘。
+
+例如 MCP 返回了一个很大的 JSON：
+
+String result = mcpClient.callTool(...);
+
+不要直接：
+
+return result;
+
+而是：
+
+String fileId = UUID.randomUUID().toString();
+
+Path path = Path.of(
+    "cache",
+    fileId + ".txt"
+);
+
+Files.createDirectories(path.getParent());
+
+Files.writeString(
+    path,
+    result,
+    StandardCharsets.UTF_8
+);
+
+return """
+数据已缓存
+
+fileId=%s
+size=%d bytes
+""".formatted(
+    fileId,
+    result.length()
+);
+
+这样进入 LLM 上下文的只有几十个 token。
+
+更符合 Agent 设计的做法
+
+定义一个对象：
+
+public record ArtifactRef(
+    String fileId,
+    String filename,
+    long size
+) {}
+
+Tool：
+
+@Tool
+ArtifactRef getHugeData() {
+
+    String result = callMcp();
+
+    String id = UUID.randomUUID().toString();
+
+    Path file = Path.of(
+        "cache",
+        id + ".txt"
+    );
+
+    Files.writeString(file, result);
+
+    return new ArtifactRef(
+        id,
+        file.toString(),
+        Files.size(file)
+    );
+}
+
+返回给模型：
+
+{
+  "fileId":"7d1a...",
+  "filename":"cache/7d1a.txt",
+  "size":245673
+}
+再提供一个读取工具
+@Tool
+String readFile(
+        String fileId,
+        int startLine,
+        int lineCount
+) {
+    Path file = Path.of(
+        "cache",
+        fileId + ".txt"
+    );
+
+    List<String> lines =
+        Files.readAllLines(file);
+
+    return lines.stream()
+            .skip(startLine)
+            .limit(lineCount)
+            .collect(Collectors.joining("\n"));
+}
+
+Agent 流程变成：
+
+获取数据库
+ ↓
+保存txt
+ ↓
+返回fileId
+ ↓
+分析需要什么
+ ↓
+readFile(fileId, ...)
+ ↓
+继续分析
+
+2. logger功能，在TabUI中新增Tab，记录AI操作burp mcp发送的所有流量，再增加一个debug tab，可以在其中看到各种debug日志等
+
+3. 实现一个web fetch工具，以解决WebSearch工具搜索完之后的网页内容没去读取导致关键信息无用
+
+4. 使用https://docs.langchain4j.dev/integrations/code-execution-engines/local替代原先的RunCmdTools
+

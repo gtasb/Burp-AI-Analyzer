@@ -1,0 +1,1682 @@
+{
+  "meta": {
+    "version": "2.0.0",
+    "updated": "2025-01-31",
+    "description": "z0scan漏洞匹配规则库（完整版），用于AI Fuzz工具 - 包含响应匹配规则、参数特征、服务指纹等",
+    "total_rules": 1000,
+    "author": "z0scan Team",
+    "categories_count": 35,
+    "features": [
+      "响应匹配规则（正则表达式、关键字、字节特征）",
+      "参数名称特征（SSRF、LFI、SQLi等易受攻击参数）",
+      "服务指纹识别（Redis、MongoDB、Jenkins等）",
+      "错误消息分类（15+框架）",
+      "PII检测（银行卡、身份证、手机号、邮箱）",
+      "模板引擎检测（12种引擎）",
+      "时间延迟检测（ReDoS、时间盲注）",
+      "DNS回调验证（SSRF、SQL盲注、Fastjson）"
+    ],
+    "supported_databases": [
+      "MySQL", "MSSQL", "PostgreSQL", "Oracle", "SQLite", "DB2",
+      "SyBase", "Access", "Informix", "InterBase", "FrontBase",
+      "HSQLDB", "H2", "MonetDB", "Apache Derby", "Vertica"
+    ],
+    "supported_templates": [
+      "Jinja2", "Mako", "Tornado", "Smarty", "Twig",
+      "FreeMarker", "Velocity", "ERB", "Slim", "Pug",
+      "Nunjucks", "EJS", "AngularJS"
+    ],
+    "supported_services": [
+      "Redis", "MongoDB", "Elasticsearch", "Jenkins", "Docker",
+      "Zookeeper", "Memcache", "Solr", "Rsync", "FTP",
+      "LDAP", "MySQL", "PostgreSQL", "MSSQL", "SMB", "ActiveMQ"
+    ]
+  },
+  "categories": {
+    "sqli": {
+      "name": "SQL注入",
+      "severity": "high",
+      "databases": {
+        "mysql": {
+          "patterns": [
+            "valid MySQL",
+            "mysql_",
+            "on MySQL result index",
+            "You have an error in your SQL syntax",
+            "MySQL server version for the right syntax to use",
+            "\\[MySQL\\]\\[ODBC",
+            "Column count doesn't match",
+            "the used select statements have different number of columns",
+            "Table '[^']+' doesn't exist",
+            "DBD::mysql::st execute failed",
+            "mysqli.query",
+            "SQL syntax.*?MySQL",
+            "Warning.*?\\Wmysqli?_",
+            "MySQLSyntaxErrorException",
+            "check the manual that (corresponds to|fits) your",
+            "Unknown column '[^ ]+' in 'field list'",
+            "MySqlClient\\.",
+            "com\\.mysql\\.jdbc",
+            "Zend_Db_(Adapter|Statement)_Mysqli_Exception",
+            "Pdo[./_\\\\](Mysql)",
+            "MySqlException",
+            "SQLSTATE\\[\\d+\\]: Syntax error or access violation"
+          ]
+        },
+        "mssql": {
+          "patterns": [
+            "System\\.Data\\.OleDb\\.OleDbException",
+            "\\[SQL Server\\]",
+            "\\[SQLServer JDBC Driver\\]",
+            "\\[Microsoft\\]\\[ODBC SQL Server Driver\\]",
+            "\\[SqlException",
+            "System\\.Data\\.SqlClient\\.",
+            "mssql_query\\(\\)",
+            "Microsoft OLE DB Provider for",
+            "Incorrect syntax near",
+            "Sintaxis incorrecta cerca de",
+            "ADODB\\.Field \\(0x800A0BCD\\)",
+            "Procedure '[^']+' requires parameter '[^']+'",
+            "ADODB\\.Recordset'",
+            "Driver.*? SQL[\\-\\_\\ ]*Server",
+            "OLE DB.*? SQL Server",
+            "SQL Server[^<\"]+Driver",
+            "SQLServerException",
+            "Unclosed quotation mark after the character string"
+          ]
+        },
+        "postgresql": {
+          "patterns": [
+            "PostgreSQL query failed",
+            "pg_query\\(\\) \\[:",
+            "pg_exec\\(\\) \\[:",
+            "valid PostgreSQL result",
+            "Npgsql",
+            "Warning.*?\\Wpg_",
+            "org.postgresql.util.PSQLException",
+            "PostgreSQL.*?ERROR",
+            "PG::SyntaxError:",
+            "ERROR:\\s\\ssyntax error at or near",
+            "ERROR: parser: parse error at or near",
+            "org\\.postgresql\\.jdbc",
+            "Pdo[./_\\\\]Pgsql",
+            "PSQLException"
+          ]
+        },
+        "oracle": {
+          "patterns": [
+            "(PLS|ORA)-[0-9]{4}",
+            "Oracle error",
+            "Oracle.*?Driver",
+            "Oracle.*?Database",
+            "Warning.*?\\W(oci|ora)_",
+            "quoted string not properly terminated",
+            "SQL command not properly ended",
+            "oracle\\.jdbc",
+            "OracleException"
+          ]
+        },
+        "sqlite": {
+          "patterns": [
+            "SQLite/JDBCDriver",
+            "SQLITE_ERROR",
+            "SQLite\\.Exception",
+            "Warning.*?sqlite_",
+            "\\[SQLITE_ERROR\\]",
+            "SQLite error \\d+:",
+            "sqlite3.OperationalError:",
+            "SQLite3::SQLException",
+            "org\\.sqlite\\.JDBC",
+            "SQLiteException"
+          ]
+        },
+        "db2": {
+          "patterns": [
+            "DB2 SQL error:",
+            "internal error \\[IBM\\]\\[CLI Driver\\]\\[DB2/6000\\]",
+            "SQLSTATE=\\d+",
+            "\\[CLI Driver\\]",
+            "CLI Driver.*?DB2",
+            "\\bdb2_\\w+\\(",
+            "SQLCODE[=:\\d, -]+SQLSTATE",
+            "com\\.ibm\\.db2\\.jcc",
+            "DB2Exception"
+          ]
+        },
+        "generic": {
+          "patterns": [
+            "Division by zero",
+            "Unable to connect to database",
+            "DB Error",
+            "query failed",
+            "Database.*?error",
+            "SQL command.*?not properly ended",
+            "Malformed query",
+            "DatabaseException",
+            "Driver.*?SQL",
+            "Invalid column name",
+            "Column.*?not found",
+            "Table.*?not found",
+            "SQL statement was not properly terminated",
+            "Unclosed quotation mark",
+            "java\\.sql\\.SQL",
+            "QuerySyntaxException",
+            "列 [\\\"']?[\\w]+[\\\"']? 不存在",
+            "附近的语法不正确|附近有语法错误|后的引号不完整|未闭合"
+          ]
+        },
+        "sybase": {
+          "patterns": [
+            "Sybase message:",
+            "Sybase Driver",
+            "\\[SYBASE\\]",
+            "Warning.*?\\Wsybase_",
+            "SybSQLException",
+            "Sybase\\.Data\\.AseClient",
+            "com\\.sybase\\.jdbc"
+          ]
+        },
+        "access": {
+          "patterns": [
+            "Syntax error in query expression",
+            "Data type mismatch in criteria expression",
+            "Microsoft JET Database Engine",
+            "Access Database Engine",
+            "Microsoft Access (\\d+ )?Driver",
+            "ODBC Microsoft Access",
+            "Syntax error \\(missing operator\\) in query expression"
+          ]
+        },
+        "informix": {
+          "patterns": [
+            "com\\.informix\\.jdbc",
+            "Dynamic Page Generation Error:",
+            "An illegal character has been found in the statement",
+            "\\[Informix\\]",
+            "Warning.*?\\Wifx_",
+            "Exception.*?Informix",
+            "Informix ODBC Driver",
+            "weblogic\\.jdbc\\.informix",
+            "IfxException"
+          ]
+        },
+        "interbase": {
+          "patterns": [
+            "<b>Warning</b>:  ibase_",
+            "Dynamic SQL Error",
+            "Unexpected end of command in statement"
+          ]
+        },
+        "frontbase": {
+          "patterns": [
+            "Exception (condition )?\\d+\\. Transaction rollback",
+            "com\\.frontbase\\.jdbc",
+            "Syntax error 1\\. Missing",
+            "(Semantic|Syntax) error [1-4]\\d{2}\\."
+          ]
+        },
+        "hsqldb": {
+          "patterns": [
+            "Unexpected end of command in statement \\[",
+            "Unexpected token.*?in statement \\[",
+            "org\\.hsqldb\\.jdbc"
+          ]
+        },
+        "h2": {
+          "patterns": [
+            "org\\.h2\\.jdbc",
+            "\\[42000-192\\]"
+          ]
+        },
+        "monetdb": {
+          "patterns": [
+            "![0-9]{5}![^\\n]+(failed|unexpected|error|syntax|expected|violation|exception)",
+            "\\[MonetDB\\]\\[ODBC Driver",
+            "nl\\.cwi\\.monetdb\\.jdbc"
+          ]
+        },
+        "apache_derby": {
+          "patterns": [
+            "Syntax error: Encountered",
+            "org\\.apache\\.derby",
+            "ERROR 42X01"
+          ]
+        },
+        "vertica": {
+          "patterns": [
+            ", Sqlstate: (3F|42).{3}, (Routine|Hint|Position):",
+            "/vertica/Parser/scan",
+            "com\\.vertica\\.jdbc"
+          ]
+        }
+      }
+    },
+    "xss": {
+      "name": "跨站脚本攻击",
+      "severity": "medium",
+      "detection_methods": {
+        "reflection": {
+          "description": "检测输入是否在响应中反射",
+          "check": "输入的随机标记是否出现在响应中"
+        },
+        "html_context": {
+          "description": "分析输入在HTML中的位置",
+          "contexts": [
+            "html_tag",
+            "html_attribute",
+            "script_tag",
+            "html_comment",
+            "style_tag"
+          ]
+        },
+        "special_chars": {
+          "description": "检查特殊字符是否被转义",
+          "chars": ["<", ">", "\"", "'", "&"]
+        }
+      }
+    },
+    "command_injection": {
+      "name": "命令注入",
+      "severity": "high",
+      "patterns": {
+        "linux": {
+          "basic": [
+            "uid=\\d+\\([\\w]+\\)\\s+gid=\\d+\\([\\w]+\\)",
+            "root:.*?:0:0:",
+            "Linux version \\d+\\.\\d+",
+            "GNU bash, version"
+          ],
+          "environment": [
+            "Path=[\\s\\S]*?PWD=",
+            "Path=[\\s\\S]*?PATHEXT=",
+            "Path=[\\s\\S]*?SHELL=",
+            "Path\\x3d[\\s\\S]*?PWD\\x3d",
+            "Path\\x3d[\\s\\S]*?PATHEXT\\x3d",
+            "Path\\x3d[\\s\\S]*?SHELL\\x3d"
+          ],
+          "server_info": [
+            "SERVER_SIGNATURE=[\\s\\S]*?SERVER_SOFTWARE=",
+            "SERVER_SIGNATURE\\x3d[\\s\\S]*?SERVER_SOFTWARE\\x3d"
+          ],
+          "network": [
+            "Non-authoritative\\sanswer:\\s+Name:\\s*",
+            "Server:\\s*.*?\\nAddress:\\s*"
+          ]
+        },
+        "windows": {
+          "basic": [
+            "Windows IP Configuration",
+            "Volume in drive [A-Z]",
+            "Directory of [A-Z]:",
+            "Microsoft Windows \\[Version"
+          ],
+          "set_command": [
+            "Path=.*?PATHEXT=",
+            "PROCESSOR_IDENTIFIER=",
+            "SystemRoot=",
+            "COMSPEC="
+          ]
+        },
+        "generic": {
+          "calculation_result": "检测数学运算结果（如7*7=49）",
+          "md5_result": "检测MD5计算结果",
+          "description": "通过检测命令执行结果判断漏洞"
+        }
+      }
+    },
+    "file_inclusion": {
+      "name": "文件包含",
+      "severity": "high",
+      "parameter_indicators": {
+        "description": "文件包含易受攻击的参数名特征",
+        "high_risk_params": [
+          "file", "path", "name", "filename", "filepath", "pathname",
+          "metainf", "webinf", "page", "pagename",
+          "topic", "attach", "attachment", "download",
+          "include", "require", "load", "template", "tpl",
+          "module", "component", "widget", "action", "view"
+        ],
+        "regex_patterns": [
+          "^(file|path|name)[a-z0-9]*$",
+          "^(metainf|webinf|page)$",
+          "^(topic|attach|download)[a-z0-9]*$"
+        ]
+      },
+      "patterns": {
+        "linux": [
+          "root:[x\\*]:0:0:",
+          "root:x:0:0:root:/root:",
+          "daemon:",
+          "bin/bash",
+          "/usr/bin",
+          "/etc/passwd"
+        ],
+        "windows": [
+          "; for 16-bit app support",
+          "\\[extensions\\]",
+          "\\[fonts\\]",
+          "\\[boot loader\\]",
+          "C:\\\\Windows",
+          "C:\\\\WINDOWS\\\\system32"
+        ]
+      },
+      "common_files": {
+        "linux": [
+          "/etc/passwd",
+          "/etc/shadow",
+          "/etc/hosts",
+          "/proc/self/environ",
+          "/proc/self/cmdline",
+          "/var/log/apache2/access.log",
+          "/var/log/nginx/access.log"
+        ],
+        "windows": [
+          "C:\\\\Windows\\\\win.ini",
+          "C:\\\\Windows\\\\system.ini",
+          "C:\\\\boot.ini",
+          "C:\\\\Windows\\\\system32\\\\drivers\\\\etc\\\\hosts"
+        ]
+      }
+    },
+    "xxe": {
+      "name": "XML外部实体注入",
+      "severity": "high",
+      "patterns": {
+        "linux": [
+          "root:[x\\*]:0:0:",
+          "root:x:0:0:root:/root:"
+        ],
+        "windows": [
+          "; for 16-bit app support"
+        ]
+      }
+    },
+    "ldap_injection": {
+      "name": "LDAP注入",
+      "severity": "medium",
+      "patterns": [
+        "supplied argument is not a valid ldap",
+        "javax.naming.NameNotFoundException",
+        "javax.naming.directory.InvalidSearchFilterException",
+        "Invalid DN syntax",
+        "LDAPException|com.sun.jndi.ldap",
+        "Search: Bad search filter",
+        "Protocol error occurred",
+        "Size limit has exceeded",
+        "The alias is invalid",
+        "Module Products.LDAPMultiPlugins",
+        "Object does not exist",
+        "The syntax is invalid",
+        "A constraint violation occurred",
+        "An inappropriate matching occurred",
+        "Unknown error occurred",
+        "The search filter is incorrect",
+        "Local error occurred",
+        "The search filter is invalid",
+        "The search filter cannot be recognized",
+        "IPWorksASP.LDAP"
+      ]
+    },
+    "xpath_injection": {
+      "name": "XPath注入",
+      "severity": "medium",
+      "patterns": {
+        "exact": [
+          "MS.Internal.Xml.",
+          "org.apache.xpath.XPath",
+          "Expression must evaluate to a node-set",
+          "System.Xml.XPath.XPathException",
+          "javax.xml.xpath.XPathException",
+          "XPath evaluation exception",
+          "Invalid XPath expression",
+          "Failed to evaluate XPath expression",
+          "Empty Path Expression",
+          "Invalid predicate",
+          "Invalid expression",
+          "msxml4.dll",
+          "msxml3.dll"
+        ],
+        "regex": [
+          "XPath(?:EvalError|Syntax\\s+Error|Compile\\s+Error)\\b",
+          "XPath(?:Exception|Error|EvalException):\\s*['\"](?P<detail>.+?)['\"]",
+          "XPath\\s+[Ee]rror\\s*:\\s*(?P<detail>.+?)(?:\\n|$)",
+          "XPathEvalError:\\s*(?P<detail>.+?)(?:\\n|$)",
+          "Line\\s+\\d+:\\s*(?:Invalid|Illegal)\\s+XPath\\s+expression"
+        ]
+      }
+    },
+    "pii_detection": {
+      "name": "个人身份信息检测",
+      "severity": "high",
+      "patterns": {
+        "bankcard": {
+          "pattern": "\\D(6\\d{14,18})\\D",
+          "description": "银行卡号（16-19位，以6开头）"
+        },
+        "idcard": {
+          "pattern": "\\D([123456789]\\d{5}((19)|(20))\\d{2}((0[123456789])|(1[012]))((0[123456789])|([12][0-9])|(3[01]))\\d{3}[Xx0-9])\\D",
+          "description": "中国身份证号（18位）"
+        },
+        "phone": {
+          "pattern": "\\D(1[3578]\\d{9})\\D",
+          "description": "中国手机号（11位）"
+        },
+        "email": {
+          "pattern": "(([a-zA-Z0-9]+[_|\\-|\\.]?)*[a-zA-Z0-9]+\\@([a-zA-Z0-9]+[_|\\-|\\.]?)*[a-zA-Z0-9]+(\\.[a-zA-Z]{2,3})+)",
+          "description": "电子邮箱地址"
+        }
+      }
+    },
+    "sensitive_info": {
+      "name": "敏感信息泄露",
+      "severity": "low",
+      "patterns": {
+        "api_keys": {
+          "access_key": "access_key.*?[\"'](.*?)[\"']",
+          "access_key_id": "accesskeyid.*?[\"'](.*?)[\"']",
+          "google_api": "AIza[0-9A-Za-z-_]{35}",
+          "aws_access_key": "A[SK]IA[0-9A-Z]{16}",
+          "authorization_api": "api[key|_key|\\s+]+[a-zA-Z0-9_\\-]{5,100}"
+        },
+        "tokens": {
+          "jwt": "ey[A-Za-z0-9-_=]+\\.[A-Za-z0-9-_=]+\\.?[A-Za-z0-9-_.+/=]*$",
+          "bearer": "bearer [a-z0-9_.=:_\\+\\/-]{5,100}",
+          "slack_token": "\"api_token\":\"(xox[a-zA-Z]-[a-zA-Z0-9-]+)\""
+        },
+        "credentials": {
+          "possible_creds": "(password\\s*[`=:\\\"]+\\s*[^\\s]+|password is\\s*[`=:\\\"]*\\s*[^\\s]+|pwd\\s*[`=:\\\"]*\\s*[^\\s]+|passwd\\s*[`=:\\\"]+\\s*[^\\s]+)"
+        },
+        "private_keys": {
+          "rsa": "-----BEGIN RSA PRIVATE KEY-----",
+          "dsa": "-----BEGIN DSA PRIVATE KEY-----",
+          "ec": "-----BEGIN EC PRIVATE KEY-----",
+          "pgp": "-----BEGIN PGP PRIVATE KEY BLOCK-----",
+          "ssh": "([-]+BEGIN [^\\s]+ PRIVATE KEY[-]+[\\s]*[^-]*[-]+END [^\\s]+ PRIVATE KEY[-]+)"
+        },
+        "database": {
+          "jdbc": "jdbc:(mysql|h2|oracle|sqlserver|jtds:sqlserver):",
+          "jdbc_connection": "(jdbc:[a-z:]+://[a-z0-9\\.\\-_:;=/@?,&]+)"
+        },
+        "cloud": {
+          "aws_url": "[\\w\\-.]*s3[\\w\\-.]*\\.?amazonaws\\.com\\/?[\\w\\-.]*",
+          "google_cloud": "(storage\\.cloud\\.google\\.com\\/[\\w\\-.]+)",
+          "cloudfront": "[\\w]+\\.cloudfront\\.net"
+        },
+        "app_specific": {
+          "wechat_appid": "(?i)(?:app(?:[\\-_]?)(?:id|secret)).?[=:].*?(wx[a-fA-F0-9]{16,18})",
+          "github": "[a-zA-Z0-9_-]*:[a-zA-Z0-9_\\-]+@github\\.com*"
+        }
+      }
+    },
+    "cors": {
+      "name": "CORS配置错误",
+      "severity": "medium",
+      "detection": {
+        "header1": "Access-Control-Allow-Origin",
+        "value1": ["*", "null"],
+        "header2": "Access-Control-Allow-Credentials",
+        "value2": "true",
+        "logic": "如果header1为*且header2为true，则存在CORS漏洞"
+      }
+    },
+    "clickjacking": {
+      "name": "点击劫持",
+      "severity": "low",
+      "protection_headers": {
+        "x-frame-options": ["deny", "sameorigin", "allow-from"],
+        "content-security-policy": ["frame-ancestors\\s*['\"]?\\s*(none|self)"]
+      },
+      "detection": "如果响应头中不包含防护规则，判定存在风险"
+    },
+    "deserialization": {
+      "name": "反序列化",
+      "severity": "high",
+      "patterns": {
+        "java": {
+          "magic_bytes": "\\xac\\xed\\x00\\x05",
+          "base64": "rO0"
+        },
+        "php": {
+          "patterns": ["O:\\d+:\"", "a:\\d+:{", "s:\\d+:\""]
+        },
+        "python": {
+          "magic_bytes": ["\\x80\\x03", "\\x80\\x04"],
+          "patterns": ["c__builtin__"]
+        }
+      }
+    },
+    "jndi_injection": {
+      "name": "JNDI注入",
+      "severity": "high",
+      "patterns": [
+        "javax.naming.NamingException",
+        "JNDI",
+        "javax.naming"
+      ]
+    },
+    "json_error": {
+      "name": "JSON处理错误",
+      "severity": "medium",
+      "patterns": [
+        "jackson",
+        "fastjson",
+        "autotype"
+      ]
+    },
+    "webdav": {
+      "name": "WebDAV服务",
+      "severity": "low",
+      "headers": ["translate", "if", "lock-token"]
+    },
+    "jsonp": {
+      "name": "JSONP信息泄露",
+      "severity": "medium",
+      "callback_params": [
+        "_callback", "_cb", "callback", "cb", "jsonp",
+        "jsonpcallback", "jsonpcb", "jsonp_cb", "json",
+        "jsoncallback", "jcb", "call", "callBack"
+      ],
+      "sensitive_keywords": [
+        "username", "memberid", "nickname", "loginid",
+        "mobilephone", "userid", "passportid", "profile",
+        "loginname", "email", "realname", "birthday", "sex", "ip"
+      ]
+    },
+    "redirect": {
+      "name": "开放重定向",
+      "severity": "medium",
+      "patterns": {
+        "header": "Location",
+        "meta": "<meta[^>]*?url[\\s]*?=[\\s'\"]*?([^>]*?)['\"]?>",
+        "js": "(location|window\\.location|document\\.location|window)(\\.open|\\.navigate|\\.href|\\.replace|\\.assign)\\(['\"]?(.*?)['\"]?\\)"
+      }
+    },
+    "unauthorized_access": {
+      "name": "未授权访问",
+      "severity": "high",
+      "detection": {
+        "method": "删除认证信息后对比响应相似度",
+        "threshold": 0.90,
+        "auth_headers": ["Cookie", "Authorization", "Token", "Auth"]
+      }
+    },
+    "backup_files": {
+      "name": "备份文件泄露",
+      "severity": "medium",
+      "signatures": {
+        "zip": "\\x50\\x4b\\x03\\x04",
+        "rar": "\\x52\\x61\\x72\\x21",
+        "mysql_dump": "\\x2d\\x2d\\x20\\x4d",
+        "phpmyadmin": "\\x2d\\x2d\\x20\\x70\\x68",
+        "navicat": "\\x2f\\x2a\\x0a\\x20\\x4e"
+      },
+      "content_types": ["application/octet-stream"]
+    },
+    "source_code": {
+      "name": "源代码泄露",
+      "severity": "high",
+      "patterns": {
+        "asp": "(\\<%[\\s\\S]*Response\\.Write[\\s\\S]*%\\>)",
+        "php": "(\\<\\?php[\\x20-\\x80\\x0d\\x0a\\x09]+)",
+        "perl": "(^#\\!\\\\\\\/[\\s\\S]*\\\\\\/perl)",
+        "python": "(^#\\!\\/[\\s\\S]*?\\/python)",
+        "dotnet": "using\\sSystem[\\s\\S]*?class\\s[\\s\\S]*?\\s?{[\\s\\S]*}"
+      }
+    },
+    "viewstate": {
+      "name": "ViewState未加密",
+      "severity": "medium",
+      "patterns": [
+        "<input[^>]+__VIEWSTATE[\"' ][^>]*value=[\"']([^\"']+)",
+        "<input[^>]+value=[\"']([^\"']+)[\"' ][^>]+__VIEWSTATE",
+        "__VIEWSTATE=([A-Za-z0-9+/=]+)"
+      ],
+      "detection": "如果ViewState可以被解码，说明未启用MAC验证"
+    },
+    "sensitive_files": {
+      "name": "敏感文件泄露",
+      "severity": "medium",
+      "files": {
+        "phpinfo.php": {
+          "pattern": "PHP Extension|<title>phpinfo\\(\\)|php_version",
+          "desc": "phpinfo泄露"
+        },
+        ".svn/entries": {
+          "pattern": "\\s+dir\\s*\\d+\\s*",
+          "desc": "SVN泄露"
+        },
+        ".svn/all-wcprops": {
+          "pattern": "svn:wc:ra_dav:version-url",
+          "desc": "SVN泄露"
+        },
+        ".git/config": {
+          "pattern": "repositoryformatversion[\\s\\S]*",
+          "desc": "Git配置泄露"
+        },
+        ".bzr/README": {
+          "pattern": "This is a Bazaar[\\s\\S]",
+          "desc": "Bazaar版本控制泄露"
+        },
+        "CVS/Root": {
+          "pattern": ":pserver:[\\s\\S]*?:[\\s\\S]*",
+          "desc": "CVS泄露"
+        },
+        ".hg/requires": {
+          "pattern": "^revlogv1.*",
+          "desc": "Mercurial版本控制泄露"
+        },
+        ".DS_Store": {
+          "pattern": "\\x42\\x75\\x64\\x31",
+          "desc": "DS_Store泄露"
+        },
+        ".idea/workspace.xml": {
+          "pattern": "<project version=\"\\w+\">",
+          "desc": "JetBrains IDE配置泄露"
+        },
+        "swagger-ui.html": {
+          "pattern": "<title>Swagger UI</title>",
+          "desc": "Swagger API文档泄露"
+        },
+        ".htaccess": {
+          "pattern": "(RewriteEngine|RewriteCond|RewriteRule|AuthType|AuthName|AuthUserFile|ErrorDocument|deny from|AddType|AddHandler|IndexIgnore|ContentDigest|AddOutputFilterByType|php_flag|php_value)\\s",
+          "desc": "Apache配置泄露"
+        },
+        "sftp-config.json": {
+          "pattern": "(\"type\":[\\s\\S]*?\"host\":[\\s\\S]*?\"user\":[\\s\\S]*?\"password\":[\\s\\S]*\")",
+          "desc": "SFTP配置泄露"
+        },
+        "recentservers.xml": {
+          "pattern": "filezilla",
+          "desc": "FileZilla配置泄露"
+        },
+        "WEB-INF/web.xml": {
+          "pattern": "<web-app",
+          "desc": "Java Web配置泄露"
+        },
+        "conf/tomcat-users.xml": {
+          "pattern": "^<\\?xml version.*?Licensed to the Apache Software Foundation",
+          "desc": "Tomcat用户配置泄露"
+        },
+        "conf/server.xml": {
+          "pattern": "^<\\?xml version.*?Licensed to the Apache Software Foundation",
+          "desc": "Tomcat服务器配置泄露"
+        },
+        "settings.py": {
+          "pattern": "\\sTEMPLATES\\s?=\\s?\\[",
+          "desc": "Django配置泄露"
+        }
+      }
+    },
+    "crlf_injection": {
+      "name": "CRLF注入",
+      "severity": "medium",
+      "description": "HTTP响应拆分攻击",
+      "detection": {
+        "method": "注入换行符后检查响应头或响应体",
+        "payloads": [
+          "\\r\\n\\t",
+          "%0a%0a",
+          "%0d%0a",
+          "%250a",
+          "čĊ",
+          "%3f%23%0d%0a%09",
+          "%25%30%61",
+          "%3f",
+          "嘊嘍",
+          "%u000d%u000a",
+          "%25250a"
+        ],
+        "check_locations": ["headers", "body"],
+        "pattern": "(?<!\\w){header_name}\\s*:\\s*{header_value}"
+      }
+    },
+    "redos": {
+      "name": "正则表达式拒绝服务",
+      "severity": "medium",
+      "description": "通过恶意输入导致正则表达式回溯爆炸",
+      "detection": {
+        "method": "时间延迟检测",
+        "threshold": "响应时间 > 基准时间 * 8",
+        "base_time": 0.1,
+        "payloads": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa........."
+        ]
+      }
+    },
+    "captcha_bypass": {
+      "name": "验证码绕过",
+      "severity": "low",
+      "patterns": {
+        "frontend_generation": {
+          "description": "前端生成验证码",
+          "pattern": "(var|let|const)\\s+(code|vcode|verifyCode|captcha)\\s*?;?\\s*?(//.*?验证码)?[\\s\\S]{0,50}?function\\s+?(create|generate|make|init)(Code|VCode|VerifyCode|Captcha)[\\s\\S]{0,200}?=\\s*?[\"'`]?[\\s\\S]{0,50}?codeLength\\s*?="
+        },
+        "error_messages": [
+          "验证码错误",
+          "验证码不正确",
+          "captcha\\s*error",
+          "invalid\\s*code",
+          "验证码已过期",
+          "请重新输入验证码",
+          "code\\s*error",
+          "验证码无效"
+        ],
+        "bypass_methods": {
+          "reuse": "重复使用同一验证码",
+          "empty": "提交空验证码",
+          "remove_param": "删除验证码参数"
+        }
+      }
+    },
+    "ssti": {
+      "name": "服务端模板注入",
+      "severity": "high",
+      "templates": {
+        "jinja2": {
+          "engine": "Python Jinja2",
+          "test_payloads": [
+            "{{7*7}}",
+            "{{config}}",
+            "{{config.items()}}",
+            "{{''.__class__.__mro__[2].__subclasses__()}}"
+          ],
+          "expected_results": ["49", "Config", "dict_items"]
+        },
+        "mako": {
+          "engine": "Python Mako",
+          "test_payloads": [
+            "${7*7}",
+            "${self}",
+            "${''.join(['a','b'])}"
+          ],
+          "expected_results": ["49", "ab"]
+        },
+        "tornado": {
+          "engine": "Python Tornado",
+          "test_payloads": [
+            "{{7*7}}",
+            "{{handler.settings}}"
+          ],
+          "expected_results": ["49"]
+        },
+        "smarty": {
+          "engine": "PHP Smarty",
+          "test_payloads": [
+            "{7*7}",
+            "{php}echo 7*7;{/php}",
+            "{$smarty.version}"
+          ],
+          "expected_results": ["49"]
+        },
+        "twig": {
+          "engine": "PHP Twig",
+          "test_payloads": [
+            "{{7*7}}",
+            "{{_self}}",
+            "{{dump(app)}}"
+          ],
+          "expected_results": ["49"]
+        },
+        "freemarker": {
+          "engine": "Java FreeMarker",
+          "test_payloads": [
+            "${7*7}",
+            "${7*'7'}",
+            "<#assign ex='freemarker.template.utility.Execute'?new()>${ex('id')}"
+          ],
+          "expected_results": ["49", "7777777"]
+        },
+        "velocity": {
+          "engine": "Java Velocity",
+          "test_payloads": [
+            "#set($x=7*7)$x",
+            "$class.inspect('java.lang.Runtime').type.getRuntime().exec('id')"
+          ],
+          "expected_results": ["49"]
+        },
+        "erb": {
+          "engine": "Ruby ERB",
+          "test_payloads": [
+            "<%= 7*7 %>",
+            "<%= system('id') %>"
+          ],
+          "expected_results": ["49"]
+        },
+        "slim": {
+          "engine": "Ruby Slim",
+          "test_payloads": [
+            "= 7*7",
+            "= system('id')"
+          ],
+          "expected_results": ["49"]
+        },
+        "pug": {
+          "engine": "Node.js Pug",
+          "test_payloads": [
+            "#{7*7}",
+            "#{global.process.mainModule.require('child_process').execSync('id')}"
+          ],
+          "expected_results": ["49"]
+        },
+        "nunjucks": {
+          "engine": "Node.js Nunjucks",
+          "test_payloads": [
+            "{{7*7}}",
+            "{{range.constructor(\"return global.process.mainModule.require('child_process').execSync('id')\")()}}"
+          ],
+          "expected_results": ["49"]
+        },
+        "ejs": {
+          "engine": "Node.js EJS",
+          "test_payloads": [
+            "<%=7*7%>",
+            "<%=global.process.mainModule.require('child_process').execSync('id')%>"
+          ],
+          "expected_results": ["49"]
+        },
+        "angularjs": {
+          "engine": "AngularJS (Client-side)",
+          "versions": {
+            "1.0.0-1.1.5": "{{constructor.constructor('alert(1)')()}}",
+            "1.2.0-1.2.1": "{{a='constructor';b={};a.sub.call.call(b[a].getOwnPropertyDescriptor(b[a].getPrototypeOf(a.sub),a).value,0,'alert(1)')()}}",
+            "1.2.2-1.2.5": "{{a=\"a\"[\"constructor\"].prototype;a.charAt=a.trim;$eval('a\",alert(alert=1),\"')}}",
+            "1.2.19-1.2.23": "{{c=toString.constructor;p=c.prototype;p.toString=p.call;[\"alert(1)\",\"a\"].sort(c)}}",
+            "1.3.0-1.5.8": "{{a=toString().constructor.prototype;a.charAt=a.trim;$eval('a,alert(1),a')}}",
+            "1.6.0-1.6.5": "{{[].pop.constructor('alert(1)')()}}"
+          },
+          "detection": [
+            "ng-app属性",
+            "angular.js引用",
+            "X-Powered-By: AngularJS"
+          ]
+        }
+      }
+    },
+    "fastjson": {
+      "name": "Fastjson反序列化",
+      "severity": "high",
+      "description": "Fastjson反序列化漏洞（需DNS回调验证）",
+      "payloads": [
+        "{\"RANDOM\": {\"@type\": \"java.net.Inet4Address\", \"val\": \"DOMAIN\"}}",
+        "Set[{\"@type\":\"java.net.URL\",\"val\":\"http://DOMAIN\"}",
+        "{{\"@type\":\"java.net.URL\",\"val\":\"http://DOMAIN\"}:0",
+        "{\"@type\":\"java.net.InetSocketAddress\"{\"address\":,\"val\":\"DOMAIN\"}}"
+      ],
+      "detection": {
+        "method": "DNS回调",
+        "verification": "检查DNSLOG是否收到回调"
+      }
+    },
+    "php_path_leak": {
+      "name": "PHP路径泄露",
+      "severity": "low",
+      "patterns": {
+        "array_error": {
+          "trigger": "将参数改为数组（添加[]）",
+          "pattern": "Warning.*?array given in (.*?) on line",
+          "example": "param -> param[]"
+        },
+        "realpath_error": {
+          "pattern": "realpath\\(\\): open_basedir restriction in effect\\. File\\((.*?)\\) is not within the allowed path\\(s\\)",
+          "desc": "获取物理路径"
+        }
+      }
+    },
+    "error_messages": {
+      "name": "通用错误信息",
+      "severity": "info",
+      "categories": {
+        "stack_trace": {
+          "patterns": [
+            "Stack trace:",
+            "at .*?\\(.*?:\\d+\\)",
+            "Traceback \\(most recent call last\\):",
+            "Exception in thread",
+            "Caused by:"
+          ]
+        },
+        "debug_info": {
+          "patterns": [
+            "DEBUG:",
+            "VERBOSE:",
+            "TRACE:",
+            "Stack Trace",
+            "Call Stack"
+          ]
+        },
+        "framework_errors": {
+          "asp_net": [
+            "\"Message\":\"Invalid web service call",
+            "Exception of type",
+            "--- End of inner exception stack trace ---",
+            "Microsoft OLE DB Provider",
+            "Error ([\\d-]+) \\([\\dA-Fa-f]+\\)",
+            "at ([a-zA-Z0-9_]*\\.)*([a-zA-Z0-9_]+)\\([a-zA-Z0-9, \\[\\]\\&\\;]*\\)",
+            "([A-Za-z]+[.])+[A-Za-z]*Exception: ",
+            "in [A-Za-z]:\\([A-Za-z0-9_]+\\)+[A-Za-z0-9_\\-]+(\\.aspx)?\\.cs:line [\\d]+",
+            "Syntax error in string in query expression"
+          ],
+          "java": [
+            "\\.java:[0-9]+",
+            "\\.java\\((Inlined )?Compiled Code\\)",
+            "\\.invoke\\(Unknown Source\\)",
+            "nested exception is"
+          ],
+          "javascript": [
+            "\\.js:[0-9]+:[0-9]+"
+          ],
+          "jboss": [
+            "JBWEB[0-9]{6}:"
+          ],
+          "ldap_info": [
+            "((dn|dc|cn|ou|uid|o|c)=[\\w\\d]*,\\s?){2,}"
+          ],
+          "perl": [
+            "at (\\/[A-Za-z0-9\\.]+)*\\.pm line [0-9]+"
+          ],
+          "php": [
+            "\\.php on line [0-9]+",
+            "\\.php</b> on line <b>[0-9]+",
+            "Fatal error:",
+            "\\.php:[0-9]+"
+          ],
+          "python": [
+            "Traceback \\(most recent call last\\):",
+            "File \"[A-Za-z0-9\\-_\\./]*\", line [0-9]+, in"
+          ],
+          "ruby": [
+            "\\.rb:[0-9]+:in"
+          ],
+          "scala": [
+            "\\.scala:[0-9]+"
+          ],
+          "waitress": [
+            "\\(generated by waitress\\)"
+          ],
+          "webseal": [
+            "132120c8|38ad52fa|38cf013d|38cf0259|38cf025a|38cf025b|38cf025c|38cf025d|38cf025e|38cf025f|38cf0421|38cf0424|38cf0425|38cf0427|38cf0428|38cf0432|38cf0434|38cf0437|38cf0439|38cf0442|38cf07aa|38cf08cc|38cf04d7|38cf04c6|websealerror"
+          ],
+          "path_disclosure": [
+            "<title>Invalid\\sfile\\sname\\sfor\\smonitoring:\\s'([^']*)'\\.\\.File\\snames\\sfor\\smonitoring\\smust\\shave\\sabsolute\\spaths\\,\\sand\\sno\\swildcards\\.</title>"
+          ],
+          "struts2": [
+            "You are seeing this page because development mode is enabled.  Development mode, or devMode, enables extra"
+          ],
+          "django": [
+            "You're seeing this error because you have <code>DEBUG = True</code> in",
+            "TemplateSyntaxError",
+            "Django Version"
+          ],
+          "rails": [
+            "<title>Action Controller: Exception caught</title>"
+          ],
+          "thinkphp": [
+            "<p class=\"face\">:\\(</p>"
+          ],
+          "xdebug": [
+            "class='xdebug-error xe-fatal-error'"
+          ],
+          "laravel": [
+            "Whoops, looks like something went wrong",
+            "Illuminate\\\\",
+            "Laravel"
+          ],
+          "spring": [
+            "Whitelabel Error Page",
+            "org.springframework",
+            "DispatcherServlet"
+          ],
+          "flask": [
+            "Werkzeug Debugger",
+            "flask.app",
+            "jinja2.exceptions"
+          ],
+          "express": [
+            "Express",
+            "at Layer.handle",
+            "node_modules/express"
+          ]
+        },
+        "parameter_hints": {
+          "required_parameter": "Required\\s\\w+\\sparameter\\s'([^']+?)'\\sis\\snot\\spresent"
+        }
+      }
+    },
+    "http_smuggling": {
+      "name": "HTTP请求走私",
+      "severity": "high",
+      "detection": {
+        "cl_te": "Content-Length与Transfer-Encoding不一致",
+        "te_te": "多个Transfer-Encoding头",
+        "te_cl": "Transfer-Encoding与Content-Length顺序"
+      },
+      "patterns": {
+        "response_smuggling": [
+          "HTTP/1.1.*?\\r\\n.*?HTTP/1.1",
+          "两次HTTP响应状态行"
+        ],
+        "request_smuggling": [
+          "请求被拆分为两个",
+          "后端解析差异"
+        ]
+      }
+    },
+    "xxe_extended": {
+      "name": "XXE扩展检测",
+      "severity": "high",
+      "patterns": {
+        "xxe_errors": [
+          "XML parsing error",
+          "Undeclared entity",
+          "Failed to load external entity",
+          "XML External Entity",
+          "XML error",
+          "Invalid XML",
+          "EntityRef: expecting ';'",
+          "XML_ERR_EXT_ENTITY_HANDLING"
+        ],
+        "entity_expansion": [
+          "entity expansion limit",
+          "entity reference loop",
+          "recursive entity reference"
+        ]
+      }
+    },
+    "ssrf_extended": {
+      "name": "SSRF扩展特征",
+      "severity": "high",
+      "parameter_indicators": {
+        "description": "SSRF易受攻击的参数名特征",
+        "high_risk_params": [
+          "url", "uri", "jump", "to", "link", "domain", "addr", "source", "go", "redir", "src",
+          "api", "service", "endpoint", "callback", "return", "returnurl", "return_url",
+          "imageurl", "imageuri", "imagesrc", "imgurl", "imguri", "imgsrc",
+          "host", "ip", "target", "site", "website", "web", "dest", "destination",
+          "webhook", "proxy", "fetch", "resource", "feed", "location", "remote",
+          "forward", "next", "continue", "continue_url", "next_url", "request",
+          "open", "wap", "3g", "g", "share", "u", "display",
+          "oauth_callback", "ref_url", "text", "content", "download",
+          "windows", "data", "reference", "html"
+        ],
+        "regex_patterns": [
+          "^(url|uri|jump|to|link|domain|addr|source|go|redir|src)[a-z0-9]*$",
+          "^(api|service|endpoint|callback|return)[a-z0-9]*$",
+          "^image(url|uri|src)$",
+          "^img(url|uri|src)$"
+        ]
+      },
+      "value_indicators": {
+        "description": "SSRF易受攻击的参数值特征",
+        "patterns": {
+          "url_scheme": [
+            "^http://",
+            "^https://",
+            "^ftp://",
+            "^file://",
+            "^gopher://",
+            "^dict://",
+            "^sftp://",
+            "^tftp://",
+            "^ldap://",
+            "^ssh://"
+          ],
+          "internal_ip": [
+            "127\\.",
+            "192\\.168",
+            "10\\.",
+            "172\\.(1[6-9]|2\\d|3[01])",
+            "169\\.254",
+            "0\\.0\\.0\\.0",
+            "localhost"
+          ],
+          "cloud_metadata": [
+            "169.254.169.254",
+            "metadata.google.internal",
+            "169.254.169.254/latest/meta-data/"
+          ]
+        }
+      },
+      "blind_detection": {
+        "method": "DNS回调或HTTP回调",
+        "indicators": [
+          "收到DNS查询",
+          "收到HTTP请求",
+          "响应时间差异"
+        ]
+      },
+      "error_patterns": {
+        "connection_errors": [
+          "Connection refused",
+          "Connection timed out",
+          "Unable to connect",
+          "Failed to connect",
+          "Network is unreachable",
+          "No route to host",
+          "getaddrinfo failed",
+          "Could not resolve host",
+          "connect ECONNREFUSED",
+          "connect ETIMEDOUT"
+        ],
+        "protocol_errors": [
+          "Protocol not supported",
+          "Unsupported protocol",
+          "Unknown protocol"
+        ],
+        "dns_errors": [
+          "Name or service not known",
+          "nodename nor servname provided",
+          "Temporary failure in name resolution"
+        ]
+      },
+      "response_indicators": {
+        "internal_services": {
+          "redis": "redis_version",
+          "mongodb": "MongoDB",
+          "elasticsearch": "cluster_name",
+          "jenkins": "X-Jenkins",
+          "docker": "Server: Docker",
+          "consul": "X-Consul-",
+          "etcd": "etcd-version"
+        },
+        "cloud_metadata": {
+          "aws": ["ami-id", "instance-id", "public-hostname"],
+          "azure": ["compute", "network", "subscriptionId"],
+          "gcp": ["project-id", "instance-id", "zone"]
+        }
+      }
+    },
+    "directory_listing": {
+      "name": "目录列表",
+      "severity": "low",
+      "patterns": {
+        "apache": [
+          "Index of /",
+          "<title>Index of",
+          "Parent Directory",
+          "Apache.*?Server at"
+        ],
+        "nginx": [
+          "<title>Index of",
+          "nginx/[0-9.]+"
+        ],
+        "iis": [
+          "\\[To Parent Directory\\]",
+          "Microsoft-IIS"
+        ],
+        "generic": [
+          "<pre>",
+          "<a href=\"",
+          "Last modified",
+          "Size</th>"
+        ]
+      }
+    },
+    "weak_password": {
+      "name": "弱密码特征",
+      "severity": "high",
+      "login_keywords": ["login", "signin", "username", "password", "user", "pass"],
+      "captcha_keywords": ["captcha", "验证码", "code", "vcode"],
+      "error_patterns": [
+        "用户名或密码错误",
+        "incorrect username or password",
+        "invalid credentials",
+        "authentication failed",
+        "登录失败"
+      ],
+      "success_patterns": [
+        "登录成功",
+        "login success",
+        "welcome",
+        "dashboard",
+        "redirect"
+      ]
+    },
+    "host_header_injection": {
+      "name": "Host头注入",
+      "severity": "medium",
+      "detection": {
+        "method": "检查Host头是否被反射到响应中",
+        "locations": [
+          "响应体中的链接",
+          "Location头",
+          "Set-Cookie头",
+          "CORS头"
+        ]
+      },
+      "patterns": {
+        "reflected_in_response": "注入的Host值出现在响应中",
+        "password_reset": "密码重置邮件中的链接",
+        "cache_poisoning": "缓存投毒"
+      }
+    },
+    "phpinfo_disclosure": {
+      "name": "PHPInfo信息泄露",
+      "severity": "medium",
+      "description": "PHPInfo页面泄露敏感配置信息",
+      "patterns": {
+        "dangerous_settings": {
+          "allow_url_fopen": {
+            "pattern": "<td class=\"e\">allow_url_fopen</td><td class=\"v\">On</td>",
+            "risk": "允许使用fopen打开URL"
+          },
+          "allow_url_include": {
+            "pattern": "<td class=\"e\">allow_url_include</td><td class=\"v\">On</td>",
+            "risk": "允许远程文件包含"
+          },
+          "asp_tags": {
+            "pattern": "<td class=\"e\">asp_tags</td><td class=\"v\">On</td>",
+            "risk": "启用ASP风格标签"
+          },
+          "register_globals": {
+            "pattern": "<td class=\"e\">register_globals</td><td class=\"v\">On</td>",
+            "risk": "自动注册全局变量"
+          },
+          "enable_dl": {
+            "pattern": "<td class=\"e\">enable_dl</td><td class=\"v\">On</td>",
+            "risk": "可通过扩展库绕过disable_functions"
+          },
+          "display_errors": {
+            "pattern": "<td class=\"e\">display_errors</td><td class=\"v\">On</td>",
+            "risk": "显示错误信息"
+          },
+          "short_open_tag": {
+            "pattern": "short_open_tag</td><td class=\"v\">On</td>",
+            "risk": "允许使用短标签<? ?>"
+          }
+        },
+        "info_extraction": {
+          "system": "<td class=\"e\">System </td><td class=\"v\">(.*?)</td>",
+          "script_path": "SCRIPT_FILENAME\"]</td><td class=\"v\">(.*?)</td>",
+          "server_ip": "SERVER_ADDR\"]</td><td class=\"v\">(.*?)</td>",
+          "disable_functions": "disable_functions</td><td class=\"v\">(.*?)</td>",
+          "open_basedir": "open_basedir</td><td class=\"v\">(.*?)</td>",
+          "path": "PATH\"]</td><td class=\"v\">(.*?)</td>"
+        }
+      }
+    },
+    "editor_backup": {
+      "name": "编辑器备份文件",
+      "severity": "medium",
+      "description": "Vim/Emacs等编辑器生成的备份文件",
+      "file_patterns": {
+        "vim_swap": ".{filename}.swp",
+        "emacs_backup": "{filename}~",
+        "vim_backup": "{filename}.bak"
+      },
+      "detection": {
+        "method": "相似度对比",
+        "threshold": 0.8,
+        "logic": "如果备份文件与随机文件相似度<0.8，判定为真实备份"
+      }
+    },
+    "code_injection_extended": {
+      "name": "代码注入扩展",
+      "severity": "high",
+      "detection_methods": {
+        "calculation": {
+          "description": "通过数学运算验证",
+          "examples": [
+            "expr NUM1 + NUM2",
+            "set /A NUM1+NUM2",
+            "${NUM1+NUM2}",
+            "#{NUM1*NUM2}",
+            "{{NUM1*NUM2}}"
+          ]
+        },
+        "hash_function": {
+          "description": "通过哈希函数验证",
+          "examples": [
+            "md5(NUM)",
+            "sha1(NUM)",
+            "hash('sha256', NUM)"
+          ]
+        },
+        "string_operation": {
+          "description": "通过字符串操作验证",
+          "examples": [
+            "str.join(['a','b'])",
+            "''.concat('a','b')"
+          ]
+        }
+      }
+    },
+    "parameter_safety_check": {
+      "name": "参数安全检查",
+      "description": "用于判断参数是否可能存在漏洞",
+      "sql_injection": {
+        "safe_keys": [
+          "^(theme|color|font|lang|ui|sidebar)\\b",
+          "\\b(token|session|auth|oauth|sso)\\b",
+          "\\b(file|path|dir|upload|download|mime|ext)\\b",
+          "\\b(js|css|img|icon|favicon|asset|cdn|static)\\b",
+          "\\b(useragent|referrer|contenttype)\\b",
+          "\\b(time|date|zone|locale|format|timestamp)\\b",
+          "\\b(apikey|recaptcha|secret|nonce)\\b",
+          "\\b(debug|log|trace|verbose|test|mock)\\b"
+        ],
+        "safe_values": [
+          "^[a-f0-9]{32,64}$",
+          "^[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}$",
+          "^(true|false|null|undefined)$"
+        ],
+        "logic": "如果参数名和值都不匹配安全规则，则可能存在SQL注入"
+      }
+    },
+    "content_type_detection": {
+      "name": "内容类型检测",
+      "description": "根据Content-Type判断数据格式",
+      "types": {
+        "json": [
+          "application/json",
+          "text/json"
+        ],
+        "xml": [
+          "application/xml",
+          "text/xml",
+          "application/soap+xml"
+        ],
+        "multipart": [
+          "multipart/form-data"
+        ],
+        "urlencoded": [
+          "application/x-www-form-urlencoded"
+        ]
+      }
+    }
+  },
+  "usage": {
+    "description": "使用说明",
+    "examples": {
+      "python_basic": "import re\nimport json\n\n# 加载规则\nwith open('漏洞匹配规则库.json', 'r', encoding='utf-8') as f:\n    rules = json.load(f)\n\n# 检测SQL注入\ndef check_sqli_mysql(response):\n    patterns = rules['categories']['sqli']['databases']['mysql']['patterns']\n    for pattern in patterns:\n        if re.search(pattern, response, re.I):\n            return True\n    return False",
+      "python_advanced": "# 批量检测\ndef detect_vulnerabilities(response):\n    results = []\n    \n    # 检测所有SQL注入\n    for db_type, db_data in rules['categories']['sqli']['databases'].items():\n        for pattern in db_data['patterns']:\n            if re.search(pattern, response, re.IGNORECASE):\n                results.append({\n                    'type': 'sqli',\n                    'database': db_type,\n                    'pattern': pattern,\n                    'severity': 'high'\n                })\n    \n    # 检测敏感信息\n    for category, patterns in rules['categories']['sensitive_info']['patterns'].items():\n        if isinstance(patterns, dict):\n            for name, pattern in patterns.items():\n                matches = re.findall(pattern, response, re.I)\n                if matches:\n                    results.append({\n                        'type': 'sensitive_info',\n                        'category': category,\n                        'name': name,\n                        'matches': matches,\n                        'severity': 'medium'\n                    })\n    \n    return results",
+      "python_timing": "import time\n\n# ReDoS检测\ndef check_redos(url, param, payload, threshold=0.8):\n    start = time.time()\n    response = requests.get(url, params={param: payload})\n    duration = time.time() - start\n    \n    if duration > threshold:\n        return True, duration\n    return False, duration",
+      "python_headers": "# CORS检测\ndef check_cors(headers):\n    headers_lower = {k.lower(): v for k, v in headers.items()}\n    \n    if 'access-control-allow-origin' in headers_lower:\n        origin = headers_lower['access-control-allow-origin']\n        credentials = headers_lower.get('access-control-allow-credentials', '')\n        \n        if origin == '*' and credentials.lower() == 'true':\n            return True, 'CORS misconfiguration: wildcard origin with credentials'\n    \n    return False, None",
+      "python_file_detection": "# 备份文件检测\ndef check_backup_file(content):\n    signatures = rules['categories']['backup_files']['signatures']\n    \n    for file_type, signature in signatures.items():\n        # 转换十六进制字符串为字节\n        sig_bytes = bytes.fromhex(signature.replace('\\\\x', ''))\n        if content[:len(sig_bytes)] == sig_bytes:\n            return True, file_type\n    \n    return False, None"
+    },
+    "best_practices": {
+      "performance": [
+        "使用编译后的正则表达式（re.compile）提高性能",
+        "对长文本使用流式处理",
+        "实现规则缓存机制",
+        "并行检测多个规则"
+      ],
+      "accuracy": [
+        "结合多个规则降低误报",
+        "使用上下文分析",
+        "实现置信度评分",
+        "记录匹配位置"
+      ],
+      "coverage": [
+        "遍历所有漏洞类别",
+        "检测响应头和响应体",
+        "分析错误消息",
+        "检查文件特征"
+      ]
+    },
+    "integration_tips": {
+      "ai_fuzz": [
+        "将规则库作为反馈机制",
+        "根据匹配结果调整payload生成策略",
+        "记录成功的payload-规则对",
+        "实现自动学习机制"
+      ],
+      "scanner": [
+        "按严重程度排序扫描",
+        "实现快速失败机制",
+        "支持规则热更新",
+        "提供详细的匹配报告"
+      ]
+    }
+  },
+  "extended_patterns": {
+    "file_upload": {
+      "name": "文件上传",
+      "severity": "high",
+      "success_indicators": [
+        "upload success",
+        "上传成功",
+        "file saved",
+        "文件保存成功"
+      ],
+      "methods": {
+        "webdav_put": "使用HTTP PUT方法上传",
+        "form_upload": "表单multipart上传",
+        "oss_takeover": "对象存储接管"
+      }
+    },
+    "dns_zone_transfer": {
+      "name": "DNS区域传送",
+      "severity": "medium",
+      "patterns": [
+        "Transfer failed",
+        "AXFR",
+        "SOA record"
+      ]
+    },
+    "cache_poisoning": {
+      "name": "缓存投毒",
+      "severity": "high",
+      "headers": [
+        "X-Cache",
+        "X-Cache-Hits",
+        "CF-Cache-Status",
+        "Age"
+      ]
+    },
+    "template_detection": {
+      "name": "模板引擎检测",
+      "frameworks": {
+        "jinja2": ["{{", "}}", "{%", "%}"],
+        "smarty": ["{", "}", "{if", "{/if}"],
+        "twig": ["{{", "}}", "{%", "%}"],
+        "freemarker": ["${", "}", "<#", "</#>"],
+        "velocity": ["#set", "#if", "#foreach"],
+        "thymeleaf": ["th:", "${}", "*{}"]
+      }
+    },
+    "service_fingerprints": {
+      "name": "服务指纹识别",
+      "description": "用于识别各种服务的特征响应",
+      "services": {
+        "redis": {
+          "port": 6379,
+          "patterns": [
+            "redis_version",
+            "-ERR unknown command",
+            "-ERR wrong number of arguments",
+            "-DENIED Redis is running",
+            "PONG"
+          ],
+          "commands": ["INFO", "PING", "CONFIG GET"]
+        },
+        "mongodb": {
+          "port": 27017,
+          "patterns": [
+            "MongoDB",
+            "Mongodb",
+            "ismaster",
+            "buildinfo"
+          ],
+          "detection": "成功列出数据库"
+        },
+        "elasticsearch": {
+          "ports": [9200, 9300],
+          "patterns": [
+            "\"cluster_name\"",
+            "\"version\"",
+            "\"number\"",
+            "\"build_hash\"",
+            "\"tagline\" : \"You Know, for Search\""
+          ],
+          "endpoints": ["/_cluster/health", "/_cat/indices"]
+        },
+        "jenkins": {
+          "port": 8080,
+          "patterns": [
+            "Jenkins.instance.pluginManager.plugins",
+            "Jenkins",
+            "X-Jenkins"
+          ],
+          "endpoints": ["/script", "/ajaxBuildQueue"]
+        },
+        "docker": {
+          "port": 2375,
+          "patterns": [
+            "\"Containers\"",
+            "\"Images\"",
+            "\"ServerVersion\"",
+            "\"ApiVersion\""
+          ],
+          "endpoints": ["/info", "/version"]
+        },
+        "zookeeper": {
+          "port": 2181,
+          "patterns": [
+            "zookeeper",
+            "Environment:",
+            "conf"
+          ],
+          "commands": ["stat", "dump", "ruok"]
+        },
+        "memcache": {
+          "port": 11211,
+          "patterns": [
+            "STAT pid",
+            "STAT version",
+            "END"
+          ],
+          "commands": ["stats", "version"]
+        },
+        "solr": {
+          "ports": [8983],
+          "patterns": [
+            "\"responseHeader\"",
+            "\"status\":0",
+            "\"QTime\"",
+            "Apache Solr"
+          ],
+          "endpoints": ["/solr/admin/cores"]
+        },
+        "rsync": {
+          "port": 873,
+          "patterns": [
+            "@RSYNCD:",
+            "RSYNCD"
+          ]
+        },
+        "ftp": {
+          "port": 21,
+          "patterns": [
+            "220",
+            "FTP",
+            "Anonymous login",
+            "230 Login successful"
+          ]
+        },
+        "ldap": {
+          "ports": [389, 636],
+          "patterns": [
+            "LDAP",
+            "rootDSE",
+            "supportedLDAPVersion"
+          ]
+        },
+        "mysql": {
+          "port": 3306,
+          "patterns": [
+            "mysql_native_password",
+            "Access denied for user",
+            "Host.*is not allowed to connect"
+          ]
+        },
+        "postgresql": {
+          "port": 5432,
+          "patterns": [
+            "PostgreSQL",
+            "FATAL:  password authentication failed",
+            "FATAL:  no pg_hba.conf entry"
+          ]
+        },
+        "mssql": {
+          "port": 1433,
+          "patterns": [
+            "Microsoft SQL Server",
+            "Login failed",
+            "MSSQL"
+          ]
+        },
+        "smb": {
+          "ports": [139, 445],
+          "patterns": [
+            "SMB",
+            "CIFS",
+            "Samba"
+          ]
+        },
+        "activemq": {
+          "port": 8161,
+          "patterns": [
+            "Apache ActiveMQ",
+            "Welcome to the Apache ActiveMQ"
+          ],
+          "endpoints": ["/admin/"]
+        }
+      }
+    },
+    "vulnerability_chains": {
+      "name": "漏洞利用链",
+      "description": "多个漏洞组合利用的特征",
+      "chains": {
+        "ssrf_to_rce": {
+          "steps": ["SSRF", "Redis未授权", "写WebShell"],
+          "indicators": ["Redis响应", "文件写入成功"]
+        },
+        "file_upload_to_rce": {
+          "steps": ["文件上传", "访问上传文件", "代码执行"],
+          "indicators": ["上传成功", "文件路径", "执行结果"]
+        },
+        "sqli_to_getshell": {
+          "steps": ["SQL注入", "写文件", "WebShell"],
+          "indicators": ["SQL错误", "文件写入", "命令执行"]
+        }
+      }
+    }
+  },
+  "changelog": {
+    "2.0.0": {
+      "date": "2025-01-31",
+      "changes": [
+        "新增10种数据库的SQL注入规则（SyBase、Access、Informix等）",
+        "补充CRLF注入完整检测规则",
+        "新增ReDoS时间延迟检测规则",
+        "新增验证码绕过检测规则",
+        "新增SSTI完整模板引擎规则（12种引擎）",
+        "新增AngularJS CSTI版本化payload",
+        "新增Fastjson盲注DNS回调规则",
+        "新增PHP路径泄露检测规则",
+        "新增HTTP请求走私检测规则",
+        "新增目录列表检测规则",
+        "新增弱密码检测特征",
+        "新增Host头注入检测",
+        "补充敏感文件列表（20+文件）",
+        "新增错误消息分类规则（15+框架）",
+        "新增框架特定错误规则",
+        "新增PII检测规则（银行卡、身份证、手机号、邮箱）",
+        "新增PHPInfo危险配置检测",
+        "新增编辑器备份文件检测",
+        "新增命令注入环境变量检测",
+        "新增代码注入多种验证方法",
+        "新增文件上传、DNS区域传送、缓存投毒规则",
+        "总规则数从500+增至800+"
+      ]
+    },
+    "1.0.0": {
+      "date": "2025-01-31",
+      "changes": [
+        "初始版本",
+        "基础漏洞类型覆盖",
+        "500+条匹配规则"
+      ]
+    }
+  }
+}

@@ -1,0 +1,813 @@
+package com.ai.analyzer.ui;
+
+import burp.api.montoya.MontoyaApi;
+import com.ai.analyzer.Client.AgentApiClient;
+import com.ai.analyzer.utils.MarkdownRenderer;
+// import com.example.ai.analyzer.Tools.ToolDefinitions;
+// import com.example.ai.analyzer.Tools.ToolExecutor;
+
+import javax.swing.*;
+import javax.swing.text.*;
+import java.awt.*;
+import java.awt.event.KeyEvent;
+import java.awt.event.KeyListener;
+import java.io.*;
+import java.security.MessageDigest;
+import java.util.Base64;
+import java.util.ArrayList;
+import java.util.List;
+import burp.api.montoya.http.message.HttpRequestResponse;
+
+public class ChatPanel extends JPanel {
+    private final MontoyaApi api;
+    private final AgentApiClient apiClient;
+    private AIAnalyzerTab analyzerTab; // 保存analyzerTab引用，用于获取API配置
+    private JTextPane chatArea;
+    private JTextArea inputField;
+    private JButton sendButton;
+    private JButton clearContextButton;
+    private JButton stopButton;
+    private HttpRequestResponse currentRequest;
+    private String lastSentRequestFingerprint;
+    private boolean isStreaming = false;
+    private SwingWorker<Void, String> currentWorker;
+    private volatile int streamRunId = 0;
+    private boolean debugEnabled = false;
+    private JTextArea debugLogArea;
+    private JScrollPane debugLogScrollPane;
+    private int lastSyncedHistorySize = 0;
+    private javax.swing.Timer saveDebouncerTimer;
+    private final Runnable sharedHistoryListener;
+
+    public ChatPanel(MontoyaApi api, AgentApiClient apiClient) {
+        this.api = api;
+        this.apiClient = apiClient;
+        
+        initializeUI();
+        
+        if (apiClient.getSharedChatUiHistorySize() == 0) {
+            loadChatHistory();
+        } else {
+            syncChatAreaFromSharedHistory();
+        }
+
+        sharedHistoryListener = () ->
+            SwingUtilities.invokeLater(this::syncChatAreaFromSharedHistory);
+        apiClient.addChatUiListener(sharedHistoryListener);
+    }
+    
+    /**
+     * 设置analyzerTab引用，用于动态更新API配置
+     */
+    public void setAnalyzerTab(AIAnalyzerTab analyzerTab) {
+        this.analyzerTab = analyzerTab;
+        // ChatPanel 不再维护“启用网络搜索”GUI，统一从 analyzerTab 配置读取
+    }
+    
+    /**
+     * 更新API配置（从analyzerTab获取最新的配置）
+     */
+    private void updateApiConfig() {
+        if (analyzerTab != null) {
+            apiClient.setApiUrl(analyzerTab.getApiUrl());
+            apiClient.setApiKey(analyzerTab.getApiKey());
+            apiClient.setModel(analyzerTab.getModel());
+            apiClient.setEnableThinking(false);
+            apiClient.setEnableSearch(analyzerTab.isEnableSearch());
+        } else {
+            // 如果没有analyzerTab，保留当前apiClient中的搜索配置
+            apiClient.setEnableThinking(false);
+        }
+    }
+
+    private void initializeUI() {
+        setLayout(new BorderLayout());
+        setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+        // 创建主分割面板（聊天区域和debug日志区域）
+        JSplitPane mainSplitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
+        mainSplitPane.setDividerLocation(400);
+
+        // 创建聊天区域（强制文本换行，禁止水平滚动）
+        chatArea = new JTextPane() {
+            @Override
+            public boolean getScrollableTracksViewportWidth() {
+                return true;
+            }
+        };
+        chatArea.setEditable(false);
+        chatArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        applyEditorTheme(chatArea);
+        JScrollPane chatScrollPane = new JScrollPane(chatArea);
+        chatScrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
+        chatScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        
+        // 创建debug日志区域（初始隐藏）
+        debugLogArea = new JTextArea();
+        debugLogArea.setEditable(false);
+        debugLogArea.setFont(createLogFont());
+        applyEditorTheme(debugLogArea);
+        debugLogArea.setRows(5);
+        debugLogScrollPane = new JScrollPane(debugLogArea);
+        debugLogScrollPane.setBorder(BorderFactory.createTitledBorder("Debug日志"));
+        debugLogScrollPane.setPreferredSize(new Dimension(0, 150));
+        debugLogScrollPane.setVisible(false);
+        
+        mainSplitPane.setTopComponent(chatScrollPane);
+        mainSplitPane.setBottomComponent(debugLogScrollPane);
+
+        // 创建输入区域
+        JPanel inputPanel = new JPanel(new BorderLayout(5, 5));
+        
+        // 顶部按钮面板
+        JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 5));
+        
+        sendButton = new JButton("发送");
+        sendButton.addActionListener(e -> sendMessage());
+        sendButton.setPreferredSize(new Dimension(60, 25));
+        sendButton.setMargin(new Insets(2, 8, 2, 8));
+        
+        clearContextButton = new JButton("清空");
+        clearContextButton.addActionListener(e -> clearContext());
+        clearContextButton.setPreferredSize(new Dimension(60, 25));
+        clearContextButton.setMargin(new Insets(2, 8, 2, 8));
+        
+        stopButton = new JButton("停止");
+        stopButton.addActionListener(e -> stopStreaming());
+        stopButton.setEnabled(false); // 初始状态禁用
+        stopButton.setPreferredSize(new Dimension(60, 25));
+        stopButton.setMargin(new Insets(2, 8, 2, 8));
+        
+        topPanel.add(sendButton);
+        topPanel.add(clearContextButton);
+        topPanel.add(stopButton);
+        
+        // 顶部仅保留操作按钮，搜索能力改为由配置页统一管理
+        JPanel topContainer = new JPanel(new BorderLayout());
+        topContainer.add(topPanel, BorderLayout.EAST);
+        
+        inputPanel.add(topContainer, BorderLayout.NORTH);
+
+        // 输入框（多行自动换行，Enter发送，Shift+Enter换行）
+        inputField = new JTextArea(2, 0);
+        inputField.setLineWrap(true);
+        inputField.setWrapStyleWord(true);
+        inputField.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        applyEditorTheme(inputField);
+        inputField.addKeyListener(new KeyListener() {
+            @Override
+            public void keyTyped(KeyEvent e) {}
+
+            @Override
+            public void keyPressed(KeyEvent e) {
+                if (e.getKeyCode() == KeyEvent.VK_ENTER && !e.isShiftDown()) {
+                    e.consume();
+                    sendMessage();
+                }
+            }
+
+            @Override
+            public void keyReleased(KeyEvent e) {}
+        });
+        
+        JScrollPane inputScrollPane = new JScrollPane(inputField);
+        inputScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        inputScrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+        
+        final JScrollPane finalInputScrollPane = inputScrollPane;
+        final JPanel finalInputPanel = inputPanel;
+        inputField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            private void adjustHeight() {
+                SwingUtilities.invokeLater(() -> {
+                    int lineCount = inputField.getLineCount();
+                    int rows = Math.min(Math.max(lineCount, 2), 8);
+                    int lineHeight = inputField.getFontMetrics(inputField.getFont()).getHeight();
+                    int newHeight = rows * lineHeight + 8;
+                    finalInputScrollPane.setPreferredSize(new Dimension(0, newHeight));
+                    finalInputPanel.revalidate();
+                });
+            }
+            @Override
+            public void insertUpdate(javax.swing.event.DocumentEvent e) { adjustHeight(); }
+            @Override
+            public void removeUpdate(javax.swing.event.DocumentEvent e) { adjustHeight(); }
+            @Override
+            public void changedUpdate(javax.swing.event.DocumentEvent e) { adjustHeight(); }
+        });
+        
+        inputPanel.add(inputScrollPane, BorderLayout.CENTER);
+
+        add(mainSplitPane, BorderLayout.CENTER);
+        add(inputPanel, BorderLayout.SOUTH);
+    }
+
+    private Font createLogFont() {
+        String[] candidates = {
+                "Microsoft YaHei UI",
+                "Microsoft YaHei",
+                "SimSun",
+                Font.MONOSPACED
+        };
+        String sample = "中文日志 ABC 123";
+        for (String name : candidates) {
+            Font font = new Font(name, Font.PLAIN, 11);
+            if (font.canDisplayUpTo(sample) < 0) {
+                return font;
+            }
+        }
+        return new Font(Font.SANS_SERIF, Font.PLAIN, 11);
+    }
+    
+    /**
+     * 添加debug日志
+     */
+    private void debugLog(String message) {
+        if (debugEnabled) {
+            String timestamp = java.time.LocalDateTime.now().format(
+                java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss.SSS"));
+            String logMessage = "[" + timestamp + "] " + message + "\n";
+            
+            SwingUtilities.invokeLater(() -> {
+                debugLogArea.append(logMessage);
+                debugLogArea.setCaretPosition(debugLogArea.getDocument().getLength());
+            });
+        }
+        // 同时输出到Burp日志
+        api.logging().logToOutput("[AI助手-Debug] " + message);
+    }
+    
+    /**
+     * 切换debug日志显示
+     */
+    private void toggleDebugLog() {
+        debugEnabled = !debugEnabled;
+        debugLogScrollPane.setVisible(debugEnabled);
+        if (debugEnabled) {
+            debugLog("Debug日志已启用");
+        } else {
+            api.logging().logToOutput("[AI助手] Debug日志已禁用");
+        }
+        revalidate();
+        repaint();
+    }
+
+    private void sendMessage() {
+        if (isStreaming) return;
+        
+        String message = inputField.getText().trim();
+        
+        // 如果没有用户输入，使用默认分析提示
+        String finalMessage = message.isEmpty() ? "请分析当前请求的安全风险" : message;
+        
+        if (!message.isEmpty()) {
+            appendToChatAndShare("你", message, true);
+        }
+        
+        inputField.setText("");
+        
+        // 开始流式输出
+        isStreaming = true;
+        final int runId = ++streamRunId;
+        sendButton.setEnabled(false);
+        stopButton.setEnabled(true);
+        
+        // 检查HTTP内容是否过长，提前通知用户（仅在本轮会发送请求详情时提示）
+        String currentFingerprint = buildRequestFingerprint(currentRequest);
+        boolean shouldSendRequestPayload = currentRequest != null
+                && (currentFingerprint == null || !currentFingerprint.equals(lastSentRequestFingerprint));
+        if (currentRequest != null && !shouldSendRequestPayload) {
+            //appendToChat("系统", "当前请求响应与上次一致，本轮仅发送新增问题。", false);
+        }
+        if (shouldSendRequestPayload) {
+            int totalLength = 0;
+            if (currentRequest.request() != null) {
+                totalLength += currentRequest.request().toByteArray().getBytes().length;
+            }
+            if (currentRequest.response() != null) {
+                totalLength += currentRequest.response().toByteArray().getBytes().length;
+            }
+            if (totalLength > com.ai.analyzer.utils.HttpFormatter.DEFAULT_MAX_LENGTH) {
+                appendToChat("系统", "HTTP内容过长（" + totalLength + " 字符），完整报文将缓存，提示词仅含预览与 fileId", false);
+            }
+        }
+        
+        currentWorker = new SwingWorker<Void, String>() {
+            private StringBuilder fullResponse = new StringBuilder();
+            private int aiMessageStartPos = -1; // 记录AI消息开始位置
+
+            @Override
+            protected Void doInBackground() throws Exception {
+                try {
+                    // 构建上下文
+                    StringBuilder contextBuilder = new StringBuilder();
+                    //contextBuilder.append("重要提示：请先仔细分析提供的HTTP请求和响应，给出详细的安全分析报告。只有在确实需要时（如获取更多信息、构造测试payload等）才调用工具。不要随意调用编码/解码工具。\n\n");
+                    
+                    // 添加当前请求信息（如果有）
+                    if (currentRequest != null) {
+                        contextBuilder.append("当前请求信息：\n");
+                        // 使用UTF-8编码正确解析中文字符
+                        byte[] requestBytes = currentRequest.request().toByteArray().getBytes();
+                        String requestStr = new String(requestBytes, java.nio.charset.StandardCharsets.UTF_8);
+                        contextBuilder.append("请求：\n").append(requestStr).append("\n\n");
+                        
+                        if (currentRequest.response() != null) {
+                            byte[] responseBytes = currentRequest.response().toByteArray().getBytes();
+                            String responseStr = new String(responseBytes, java.nio.charset.StandardCharsets.UTF_8);
+                            contextBuilder.append("响应：\n").append(responseStr).append("\n\n");
+                        } else {
+                            contextBuilder.append("注意：当前只有请求信息，没有响应信息。\n\n");
+                        }
+                    } else {
+                        // 没有请求时，提供上下文引导
+                        contextBuilder.append("【当前模式：自由对话】\n");
+                        contextBuilder.append("当前没有关联的HTTP请求。你可以：\n");
+                        contextBuilder.append("1. 使用 get_proxy_http_history 获取最近的代理历史，分析其中的请求\n");
+                        contextBuilder.append("2. 使用 get_proxy_http_history_regex 按关键词搜索特定请求\n");
+                        contextBuilder.append("3. 直接咨询安全测试相关问题\n");
+                        contextBuilder.append("4. 请求我帮你构造特定的测试 payload\n\n");
+                    }
+                    
+                    // 注意：聊天历史由 LangChain4j 的 chatMemory 自动管理，不需要手动添加到上下文
+                    contextBuilder.append("用户问题：").append(finalMessage);
+
+                    // 在调用API前更新配置
+                    updateApiConfig();
+                    
+                    debugLog("开始调用AI API");
+                    debugLog("用户消息: " + finalMessage);
+                    debugLog("API URL: " + apiClient.getApiUrl());
+                    debugLog("API Key: " + (apiClient.getApiKey().isEmpty() ? "未设置" : "已设置"));
+                    debugLog("上下文:\n" + contextBuilder.toString());
+                    
+                    // 先在UI中添加AI助手前缀（只添加一次），必须同步完成，避免首批 chunk 早于 startPos。
+                    SwingUtilities.invokeAndWait(() -> {
+                        try {
+                            StyledDocument doc = chatArea.getStyledDocument();
+                            Style senderStyle = doc.addStyle("sender", null);
+                            StyleConstants.setBold(senderStyle, true);
+                            StyleConstants.setForeground(senderStyle, Color.GREEN);
+                            
+                            doc.insertString(doc.getLength(), "AI助手: \n", senderStyle);
+                            aiMessageStartPos = doc.getLength(); // 记录AI消息内容开始位置
+                        } catch (Exception e) {
+                            api.logging().logToError("添加AI助手前缀失败: " + e.getMessage());
+                        }
+                    });
+                    
+                    final long[] lastRenderTime = {0L};
+                    final long RENDER_INTERVAL_MS = 120;
+
+                    api.logging().logToOutput("[ChatPanel] 开始调用analyzeRequestStream");
+                    apiClient.setSystemNoticeConsumer(systemNotice ->
+                        SwingUtilities.invokeLater(() -> appendToChat("系统", systemNotice, false))
+                    );
+
+                    java.util.function.Consumer<String> chunkHandler = chunk -> {
+                        if (isCancelled() || !isStreaming || runId != streamRunId) return;
+                        fullResponse.append(chunk);
+
+                        long now = System.currentTimeMillis();
+
+                        if (now - lastRenderTime[0] < RENDER_INTERVAL_MS) return;
+                        lastRenderTime[0] = now;
+                        String snapshot = fullResponse.toString();
+
+                        SwingUtilities.invokeLater(() -> {
+                            if (isCancelled() || !isStreaming || runId != streamRunId) return;
+                            try {
+                                MarkdownRenderer.appendMarkdownStreaming(chatArea, snapshot, aiMessageStartPos);
+                                chatArea.setCaretPosition(chatArea.getStyledDocument().getLength());
+                            } catch (Exception e) {
+                                api.logging().logToError("流式Markdown渲染失败: " + e.getMessage());
+                            }
+                        });
+                    };
+
+                    try {
+                        if (shouldSendRequestPayload && currentRequest != null) {
+                            apiClient.analyzeRequestStream(currentRequest, finalMessage, chunkHandler);
+                            lastSentRequestFingerprint = currentFingerprint;
+                        } else {
+                            apiClient.analyzeRequestStream("", finalMessage, chunkHandler);
+                        }
+                    } finally {
+                        apiClient.setSystemNoticeConsumer(null);
+                    }
+                    
+                    debugLog("AI API调用完成，fullResponse长度: " + fullResponse.length());
+                    
+                    String finalContent = fullResponse.toString();
+                    if (!finalContent.isEmpty() && aiMessageStartPos >= 0
+                            && !isCancelled() && isStreaming && runId == streamRunId) {
+                        SwingUtilities.invokeLater(() -> {
+                            if (isCancelled() || !isStreaming || runId != streamRunId) return;
+                            try {
+                                StyledDocument doc = chatArea.getStyledDocument();
+                                int currentLength = doc.getLength();
+                                if (currentLength > aiMessageStartPos) {
+                                    doc.remove(aiMessageStartPos, currentLength - aiMessageStartPos);
+                                }
+                                MarkdownRenderer.appendMarkdown(chatArea, finalContent);
+                                chatArea.setCaretPosition(doc.getLength());
+                            } catch (Exception e) {
+                                api.logging().logToError("最终Markdown渲染失败: " + e.getMessage());
+                            }
+                        });
+                    }
+                } catch (Exception e) {
+                    if (isCancelled() || runId != streamRunId) return null;
+                    SwingUtilities.invokeLater(() -> {
+                        appendToChat("AI助手", "抱歉，处理请求时出现错误: " + e.getMessage(), false);
+                    });
+                }
+                return null;
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    get(); // 检查是否有异常
+                    if (runId != streamRunId) return;
+                    api.logging().logToOutput("[ChatPanel] SwingWorker done()被调用");
+                    api.logging().logToOutput("[ChatPanel] fullResponse最终长度: " + fullResponse.length());
+                    api.logging().logToOutput("[ChatPanel] fullResponse最终内容: " + (fullResponse.length() > 500 ? fullResponse.substring(0, 500) + "..." : fullResponse.toString()));
+                    
+                    if (!isCancelled()) {
+                        addToSharedHistory("AI助手", fullResponse.toString(), false);
+                        debouncedSave();
+                    }
+                    
+                    // 流式输出已完成，在done()中已经完成了完整渲染，这里不需要再渲染
+                } catch (Exception e) {
+                    if (!isCancelled() && runId == streamRunId) {
+                        SwingUtilities.invokeLater(() -> {
+                            appendToChat("AI助手", "抱歉，处理请求时出现错误: " + e.getMessage(), false);
+                        });
+                    }
+                } finally {
+                    if (runId == streamRunId) {
+                        isStreaming = false;
+                    }
+                    aiMessageStartPos = -1; // 重置位置
+                    // 恢复按钮状态
+                    SwingUtilities.invokeLater(() -> {
+                        if (runId == streamRunId) {
+                            sendButton.setEnabled(true);
+                            stopButton.setEnabled(false);
+                        }
+                    });
+                }
+            }
+        };
+
+        currentWorker.execute();
+    }
+
+    private void stopStreaming() {
+        if (currentWorker != null && !currentWorker.isDone()) {
+            // 先取消流式输出连接
+            if (apiClient != null) {
+                apiClient.cancelStreaming();
+            }
+            streamRunId++;
+            // 然后取消 SwingWorker
+            currentWorker.cancel(true);
+            isStreaming = false;
+            sendButton.setEnabled(true);
+            stopButton.setEnabled(false);
+            appendToChatAndShare("AI助手", "[输出已中断]", false);
+        }
+    }
+
+    private void appendToChat(String sender, String message, boolean isUser) {
+        try {
+            StyledDocument doc = chatArea.getStyledDocument();
+            
+            Style senderStyle = doc.addStyle("sender", null);
+            StyleConstants.setBold(senderStyle, true);
+            StyleConstants.setForeground(senderStyle, isUser ? Color.BLUE : Color.GREEN);
+            
+            Style messageStyle = doc.addStyle("message", null);
+            Color textColor = UIManager.getColor("TextArea.foreground");
+            StyleConstants.setForeground(messageStyle, textColor != null ? textColor : Color.BLACK);
+            
+            doc.insertString(doc.getLength(), sender + ": ", senderStyle);
+            doc.insertString(doc.getLength(), message, messageStyle);
+            doc.insertString(doc.getLength(), "\n\n", messageStyle);
+            
+            chatArea.setCaretPosition(doc.getLength());
+        } catch (Exception e) {
+            api.logging().logToError("添加聊天消息失败: " + e.getMessage());
+        }
+    }
+
+    private void appendToChatAndShare(String sender, String message, boolean isUser) {
+        appendToChat(sender, message, isUser);
+        addToSharedHistory(sender, message, isUser);
+        debouncedSave();
+    }
+
+    private void addToSharedHistory(String sender, String content, boolean isUser) {
+        apiClient.addChatUiEntry(sender, content, isUser);
+        lastSyncedHistorySize = apiClient.getSharedChatUiHistorySize();
+    }
+
+    private void debouncedSave() {
+        if (saveDebouncerTimer != null) {
+            saveDebouncerTimer.restart();
+        } else {
+            saveDebouncerTimer = new javax.swing.Timer(2000, e -> {
+                saveDebouncerTimer.stop();
+                saveChatHistory();
+            });
+            saveDebouncerTimer.setRepeats(false);
+            saveDebouncerTimer.start();
+        }
+    }
+
+    private void syncChatAreaFromSharedHistory() {
+        int currentSize = apiClient.getSharedChatUiHistorySize();
+        if (currentSize == 0 && lastSyncedHistorySize > 0) {
+            chatArea.setText("");
+            lastSyncedHistorySize = 0;
+            return;
+        }
+        if (currentSize <= lastSyncedHistorySize) return;
+        for (int i = lastSyncedHistorySize; i < currentSize; i++) {
+            Object[] entry = apiClient.getSharedChatUiHistoryEntry(i);
+            String sender = (String) entry[0];
+            String content = (String) entry[1];
+            boolean isUser = (Boolean) entry[2];
+            if ("AI助手".equals(sender) && content.length() > 100) {
+                appendMarkdownToChat(sender, content);
+            } else {
+                appendToChat(sender, content, isUser);
+            }
+        }
+        lastSyncedHistorySize = currentSize;
+    }
+
+    private void applyEditorTheme(JTextComponent component) {
+        if (component == null) return;
+        Color bg = UIManager.getColor("TextArea.background");
+        Color fg = UIManager.getColor("TextArea.foreground");
+        Color caret = UIManager.getColor("TextArea.caretForeground");
+        if (bg == null) bg = UIManager.getColor("Panel.background");
+        if (fg == null) fg = UIManager.getColor("Panel.foreground");
+        if (caret == null) caret = fg;
+        if (bg != null) component.setBackground(bg);
+        if (fg != null) component.setForeground(fg);
+        if (caret != null) component.setCaretColor(caret);
+    }
+
+    private void clearContext() {
+        // 如果正在输出，先停止
+        if (currentWorker != null && !currentWorker.isDone()) {
+            // apiClient.clearContext() 内部会先调用 cancelStreaming()
+            streamRunId++;
+            currentWorker.cancel(true);
+            isStreaming = false;
+            sendButton.setEnabled(true);
+            stopButton.setEnabled(false);
+        }
+        
+        apiClient.clearSharedChatUiHistory();
+        lastSyncedHistorySize = 0;
+        chatArea.setText("");
+        deleteChatHistoryFile();
+        if (saveDebouncerTimer != null) saveDebouncerTimer.stop();
+        apiClient.clearContext();
+        lastSentRequestFingerprint = null;
+        api.logging().logToOutput("聊天上下文已清空");
+    }
+
+    public void setCurrentRequest(HttpRequestResponse request) {
+        this.currentRequest = request;
+        if (request == null) {
+            lastSentRequestFingerprint = null;
+        }
+        if (request != null) {
+            appendToChatAndShare("系统", "已更新当前请求信息", false);
+        }
+    }
+
+    public HttpRequestResponse getCurrentRequest() {
+        return currentRequest;
+    }
+
+    private String buildRequestFingerprint(HttpRequestResponse request) {
+        if (request == null) return null;
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            if (request.request() != null) {
+                digest.update(request.request().toByteArray().getBytes());
+            }
+            if (request.response() != null) {
+                digest.update(request.response().toByteArray().getBytes());
+            }
+            return Base64.getEncoder().encodeToString(digest.digest());
+        } catch (Exception e) {
+            api.logging().logToError("计算请求指纹失败: " + e.getMessage());
+            return null;
+        }
+    }
+
+    public void notifyRequestUpdated(HttpRequestResponse request) {
+        setCurrentRequest(request);
+    }
+    
+    /**
+     * 处理工具调用
+     */
+    /* Tools call 相关代码已注释
+    private void handleToolCall(AgentApiClient.ToolCall toolCall) {
+        api.logging().logToOutput("[ChatPanel] ========== 收到工具调用 ==========");
+        api.logging().logToOutput("[ChatPanel] 工具调用ID: " + toolCall.getId());
+        api.logging().logToOutput("[ChatPanel] 工具名称: " + toolCall.getName());
+        api.logging().logToOutput("[ChatPanel] 工具参数原始值: " + toolCall.getArguments());
+        api.logging().logToOutput("[ChatPanel] 工具参数是否为null: " + (toolCall.getArguments() == null));
+        api.logging().logToOutput("[ChatPanel] 工具参数是否为空字符串: " + (toolCall.getArguments() != null && toolCall.getArguments().trim().isEmpty()));
+        api.logging().logToOutput("[ChatPanel] 工具参数长度: " + (toolCall.getArguments() != null ? toolCall.getArguments().length() : 0));
+        
+        appendToChat("系统", "正在调用工具: " + toolCall.getName(), false);
+        debugLog("工具调用: " + toolCall.getName());
+        debugLog("工具参数: " + (toolCall.getArguments() != null && !toolCall.getArguments().isEmpty() 
+            ? toolCall.getArguments() 
+            : "(空)"));
+        
+        // 如果参数为空，直接返回错误
+        if (toolCall.getArguments() == null || toolCall.getArguments().trim().isEmpty()) {
+            api.logging().logToOutput("[ChatPanel] 错误: 工具调用参数为空，无法执行");
+            SwingUtilities.invokeLater(() -> {
+                appendToChat("工具执行结果", "错误: 工具调用缺少参数。AI需要提供完整的工具参数才能执行。", false);
+            });
+            return;
+        }
+        
+        api.logging().logToOutput("[ChatPanel] 开始执行工具，传递参数到ToolExecutor");
+        // 执行工具（在后台线程中执行，避免阻塞UI）
+        new Thread(() -> {
+            long startTime = System.currentTimeMillis();
+            api.logging().logToOutput("[ChatPanel] 工具执行线程已启动");
+            String result = toolExecutor.executeTool(toolCall.getName(), toolCall.getArguments());
+            long duration = System.currentTimeMillis() - startTime;
+            
+            api.logging().logToOutput("[ChatPanel] 工具执行完成，耗时: " + duration + "ms");
+            api.logging().logToOutput("[ChatPanel] 工具执行结果: " + (result.length() > 500 ? result.substring(0, 500) + "..." : result));
+            
+            debugLog("工具执行完成，耗时: " + duration + "ms");
+            debugLog("工具结果: " + (result.length() > 500 ? result.substring(0, 500) + "..." : result));
+            
+            // 显示工具执行结果
+            SwingUtilities.invokeLater(() -> {
+                appendToChat("工具执行结果", result, false);
+                // 将工具结果保存，等待流式输出完成后处理
+                pendingToolCalls.add(toolCall);
+            });
+        }).start();
+    }
+    */
+    
+    /* Tools call 相关代码已注释
+    // 处理待处理的工具调用
+    private void processPendingToolCalls(String userMessage) {
+        if (pendingToolCalls.isEmpty()) return;
+        
+        StringBuilder toolResults = new StringBuilder();
+        toolResults.append("\n\n工具调用结果：\n");
+        
+        for (AgentApiClient.ToolCall toolCall : pendingToolCalls) {
+            String result = toolExecutor.executeTool(toolCall.getName(), toolCall.getArguments());
+            toolResults.append("- ").append(toolCall.getName()).append(": ").append(result).append("\n");
+        }
+        
+        // 清空待处理列表
+        pendingToolCalls.clear();
+        
+        // 继续对话，将工具结果发送给AI
+        // 这里可以触发新一轮的API调用，将工具结果包含在消息中
+        appendToChat("系统", "工具执行完成，AI将基于结果继续回答", false);
+    }
+    
+    // 处理工具结果并继续对话
+    private void processToolResult(AgentApiClient.ToolCall toolCall, String result) {
+        // 这里可以将工具结果发送回AI，让AI基于结果继续回答
+        // 需要修改API调用逻辑以支持多轮对话
+    }
+    */
+ 
+
+    // 内部聊天消息类（Serializable 以支持跨插件重载持久化）
+    public static class ChatMessage implements Serializable {
+        private static final long serialVersionUID = 1L;
+        private String role;
+        private String content;
+
+        public ChatMessage(String role, String content) {
+            this.role = role;
+            this.content = content;
+        }
+
+        public String getRole() {
+            return role;
+        }
+
+        public String getContent() {
+            return content;
+        }
+    }
+    
+    // ========== 聊天历史持久化 ==========
+    
+    private static final String CHAT_HISTORY_FILENAME = ".burp_ai_chat_history.dat";
+    private static final int MAX_PERSISTED_MESSAGES = 50;
+    private static final int MAX_MESSAGE_PERSIST_LENGTH = 8000;
+    
+    private File getChatHistoryFile() {
+        return new File(System.getProperty("user.home"), CHAT_HISTORY_FILENAME);
+    }
+    
+    private void saveChatHistory() {
+        try {
+            java.util.List<Object[]> snapshot = apiClient.getSharedChatUiHistorySnapshot();
+            List<ChatMessage> toSave = new ArrayList<>();
+            for (Object[] entry : snapshot) {
+                String sender = (String) entry[0];
+                String content = (String) entry[1];
+                boolean isUser = (Boolean) entry[2];
+                if (content != null && content.length() > MAX_MESSAGE_PERSIST_LENGTH) {
+                    content = content.substring(0, MAX_MESSAGE_PERSIST_LENGTH) + "\n...[已截断]";
+                }
+                toSave.add(new ChatMessage(isUser ? "user" : ("AI助手".equals(sender) ? "assistant" : "system"), content));
+            }
+            if (toSave.size() > MAX_PERSISTED_MESSAGES) {
+                toSave = new ArrayList<>(toSave.subList(toSave.size() - MAX_PERSISTED_MESSAGES, toSave.size()));
+            }
+            try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(getChatHistoryFile()))) {
+                oos.writeObject(toSave);
+            }
+        } catch (Exception e) {
+            api.logging().logToError("[ChatPanel] 保存聊天历史失败: " + e.getMessage());
+        }
+    }
+    
+    @SuppressWarnings("unchecked")
+    private void loadChatHistory() {
+        File historyFile = getChatHistoryFile();
+        if (!historyFile.exists()) return;
+        
+        try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(historyFile))) {
+            List<ChatMessage> loaded = (List<ChatMessage>) ois.readObject();
+            if (loaded != null && !loaded.isEmpty()) {
+                for (ChatMessage msg : loaded) {
+                    boolean isUser = "user".equals(msg.getRole());
+                    String sender = isUser ? "你" : ("assistant".equals(msg.getRole()) ? "AI助手" : "系统");
+                    apiClient.addChatUiEntryDirect(new Object[]{sender, msg.getContent(), isUser});
+                    if (isUser) {
+                        appendToChat("你", msg.getContent(), true);
+                    } else if ("assistant".equals(msg.getRole())) {
+                        appendMarkdownToChat("AI助手", msg.getContent());
+                    } else {
+                        appendToChat("系统", msg.getContent(), false);
+                    }
+                }
+                lastSyncedHistorySize = apiClient.getSharedChatUiHistorySize();
+                api.logging().logToOutput("[ChatPanel] 已恢复 " + loaded.size() + " 条聊天历史");
+            }
+        } catch (Exception e) {
+            api.logging().logToError("[ChatPanel] 加载聊天历史失败（可能格式变更），已忽略: " + e.getMessage());
+            historyFile.delete();
+        }
+    }
+
+    /**
+     * 将 AI 回复以 Markdown 渲染追加到聊天区域（用于历史恢复和完整回复）。
+     */
+    private void appendMarkdownToChat(String sender, String markdownContent) {
+        try {
+            StyledDocument doc = chatArea.getStyledDocument();
+            Style senderStyle = doc.addStyle("sender", null);
+            StyleConstants.setBold(senderStyle, true);
+            StyleConstants.setForeground(senderStyle, Color.GREEN);
+            doc.insertString(doc.getLength(), sender + ": \n", senderStyle);
+
+            MarkdownRenderer.appendMarkdown(chatArea, markdownContent);
+
+            Style spacing = doc.addStyle("spacing", null);
+            doc.insertString(doc.getLength(), "\n", spacing);
+            chatArea.setCaretPosition(doc.getLength());
+        } catch (Exception e) {
+            appendToChat(sender, markdownContent, false);
+        }
+    }
+    
+    /**
+     * 删除磁盘上的聊天历史文件。
+     */
+    private void deleteChatHistoryFile() {
+        File historyFile = getChatHistoryFile();
+        if (historyFile.exists()) {
+            historyFile.delete();
+        }
+    }
+}
