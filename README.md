@@ -52,8 +52,8 @@ mvn clean package
 
 编译完成后，在 `target` 目录下生成类似以下产物：
 
-- `ai-analyzer-1.2.2.jar`
-- `ai-analyzer-1.2.2-jar-with-dependencies.jar`
+- `ai-analyzer-1.4.0.jar`
+- `ai-analyzer-1.4.0-jar-with-dependencies.jar`
 
 ### 2. 加载到 Burp Suite
 
@@ -238,12 +238,12 @@ mvn clean package
 推荐在 Burp Suite 中加载：
 
 ```text
-target/ai-analyzer-1.2.2-jar-with-dependencies.jar
+target/ai-analyzer-1.4.0-jar-with-dependencies.jar
 ```
 
 ## 📝 更新日志
 
-### v1.2.2
+### v1.4.0
 - ✅ 移除主界面和侧栏中的「启用深度思考」GUI，避免重复入口
 - ✅ 移除主界面和侧栏中的「启用网络搜索」GUI
 - ✅ 将联网搜索开关统一迁移到 **配置 → 联网搜索** 中集中管理

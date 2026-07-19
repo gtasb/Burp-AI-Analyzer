@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.2.2 - 2026-07-19
+## v1.4.0 - 2026-07-19
 
 ### Changed
 - 移除主界面和侧栏中的「启用深度思考」GUI，避免重复入口与状态分裂。
@@ -13,7 +13,7 @@
 - 修复不同界面中网络搜索状态不同步的问题。
 
 ### Build
-- 发布新的可分发 JAR 包：`ai-analyzer-1.2.2-jar-with-dependencies.jar`
+- 发布新的可分发 JAR 包：`ai-analyzer-1.4.0-jar-with-dependencies.jar`
 
 ## v1.2.1
 - 修复了一些问题

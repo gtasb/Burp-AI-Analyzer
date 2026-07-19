@@ -1,4 +1,4 @@
-# AI Analyzer v1.2.2
+# AI Analyzer v1.4.0
 
 发布时间：2026-07-19
 
@@ -20,10 +20,10 @@
 - Burp Suite 建议加载带依赖版本：
 
 ```text
-target/ai-analyzer-1.2.2-jar-with-dependencies.jar
+target/ai-analyzer-1.4.0-jar-with-dependencies.jar
 ```
 
 ## 发布产物
 
-- `ai-analyzer-1.2.2.jar`
-- `ai-analyzer-1.2.2-jar-with-dependencies.jar`
+- `ai-analyzer-1.4.0.jar`
+- `ai-analyzer-1.4.0-jar-with-dependencies.jar`
