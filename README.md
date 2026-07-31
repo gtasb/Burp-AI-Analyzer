@@ -4,6 +4,10 @@
 
 ![图片描述](img/2.png "图片title")
 
+## 重构计划
+
+当前插件使用langchain4j作为agent框架，已逐渐落后于主流架构，预计未来使用Agentscope2java重构，敬请期待。
+
 ## ✨ 功能特性
 
 ### 🤖 AI 智能分析
