@@ -21,6 +21,7 @@ public class PluginSettings implements Serializable {
     private String model;
     private String apiProvider = "DashScope"; // API 提供者：DashScope 或 OpenAI兼容
     private String customParameters = ""; // 用户自定义参数（JSON 格式）
+    private String maxTokens = ""; // 用户显式指定上下文预算
     private List<ApiProfile> apiProfiles = new ArrayList<>(); // 常用 API 配置档案
     
     private String userPrompt;
@@ -84,6 +85,7 @@ public class PluginSettings implements Serializable {
         if (model == null) model = "qwen3-max";
         if (apiProvider == null) apiProvider = "DashScope";
         if (customParameters == null) customParameters = "";
+        if (maxTokens == null) maxTokens = "";
         if (apiProfiles == null) apiProfiles = new ArrayList<>();
         if (userPrompt == null) userPrompt = "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议";
 
@@ -325,6 +327,14 @@ public class PluginSettings implements Serializable {
     
     public void setCustomParameters(String customParameters) {
         this.customParameters = customParameters != null ? customParameters : "";
+    }
+
+    public String getMaxTokens() {
+        return maxTokens != null ? maxTokens : "";
+    }
+
+    public void setMaxTokens(String maxTokens) {
+        this.maxTokens = maxTokens != null ? maxTokens : "";
     }
 
     public List<ApiProfile> getApiProfiles() {

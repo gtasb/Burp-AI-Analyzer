@@ -36,7 +36,8 @@ import dev.langchain4j.model.chat.response.PartialResponseContext;
 import dev.langchain4j.mcp.client.McpClient;
 import dev.langchain4j.mcp.McpToolProvider;
 import dev.langchain4j.mcp.client.transport.McpTransport;
-import dev.langchain4j.memory.chat.MessageWindowChatMemory;
+import com.ai.analyzer.context.ChatContextManager;
+import com.ai.analyzer.context.ModelContextLimitResolver;
 import dev.langchain4j.model.chat.response.PartialThinking;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
@@ -78,11 +79,12 @@ public class AgentApiClient {
     private StreamingChatModel chatModel;
     private Assistant assistant;
     private ToolProvider mcpToolProvider;
-    private MessageWindowChatMemory chatMemory;
+    private ChatContextManager chatMemory;
     private SkillManager skillManager;
     private SkillToolsProvider skillToolsProvider;
     private PreScanFilterManager preScanFilterManager;
     private volatile int chatMemoryMaxMessages = DEFAULT_CHAT_MEMORY_MAX_MESSAGES;
+    private volatile int chatContextLimit = 128_000;
     private volatile Consumer<String> systemNoticeConsumer;
 
     // ========== 共享聊天 UI 历史（供多个 ChatPanel 实例同步显示） ==========
@@ -219,6 +221,7 @@ public class AgentApiClient {
     public boolean isEnableNotebook() { return config.isEnableNotebook(); }
     public boolean isEnableUnrestrictedCliTool() { return config.isEnableUnrestrictedCliTool(); }
     public String getCustomParameters() { return config.getCustomParameters(); }
+    public String getMaxTokens() { return config.getMaxTokens(); }
 
     public void setApiUrl(String apiUrl) {
         if (config.getApiUrl() == null || !config.getApiUrl().equals(apiUrl)) {
@@ -314,6 +317,17 @@ public class AgentApiClient {
             reinitializeChatModel();
             if (!customParameters.isEmpty()) {
                 logInfo("自定义参数已更新: " + customParameters);
+            }
+        }
+    }
+
+    public void setMaxTokens(String maxTokens) {
+        if (maxTokens == null) maxTokens = "";
+        String normalized = maxTokens.trim();
+        if (!config.getMaxTokens().equals(normalized)) {
+            config.setMaxTokens(normalized);
+            if (!normalized.isEmpty()) {
+                logInfo("显式 max_tokens 已更新: " + normalized);
             }
         }
     }
@@ -596,10 +610,9 @@ public class AgentApiClient {
         // maxMessages 需足够大以容纳多轮工具调用（每轮占 2 条消息），
         // 过小会淘汰原始 UserMessage，导致 DashScope InputRequiredException
         if (chatMemory == null) {
-            chatMemory = MessageWindowChatMemory.builder()
-                    .maxMessages(chatMemoryMaxMessages)
-                    .build();
-            logInfo("ChatMemory 已创建（最大" + chatMemoryMaxMessages + "条消息）");
+            refreshContextBudget();
+            chatMemory = new ChatContextManager("agent-client", chatMemoryMaxMessages, chatContextLimit, this::buildContextSummary);
+            logInfo("ChatContextManager 已创建（最大" + chatMemoryMaxMessages + "条消息/上下文预算=" + chatContextLimit + "）");
         }
         
         // 创建 Assistant
@@ -1154,9 +1167,8 @@ public class AgentApiClient {
         String contextSummary = buildContextSummary();
         chatMemoryMaxMessages = COMPACT_CHAT_MEMORY_MAX_MESSAGES;
         assistant = null;
-        chatMemory = MessageWindowChatMemory.builder()
-                .maxMessages(chatMemoryMaxMessages)
-                .build();
+        refreshContextBudget();
+        chatMemory = new ChatContextManager("agent-client-compact", chatMemoryMaxMessages, Math.max(32_000, chatContextLimit / 2), this::buildContextSummary);
         if (contextSummary != null && !contextSummary.isEmpty()) {
             chatMemory.add(new UserMessage(
                     "[系统自动压缩的历史上下文摘要]\n"
@@ -1171,9 +1183,8 @@ public class AgentApiClient {
     private void compactConversationContextOnly() {
         chatMemoryMaxMessages = COMPACT_CHAT_MEMORY_MAX_MESSAGES;
         assistant = null;
-        chatMemory = MessageWindowChatMemory.builder()
-                .maxMessages(chatMemoryMaxMessages)
-                .build();
+        refreshContextBudget();
+        chatMemory = new ChatContextManager("agent-client-minimal", chatMemoryMaxMessages, Math.max(16_000, Math.min(32_000, chatContextLimit / 4)), this::buildContextSummary);
         logInfo("已重置并收缩上下文窗口至 " + COMPACT_CHAT_MEMORY_MAX_MESSAGES + " 条消息");
     }
 
@@ -1184,6 +1195,17 @@ public class AgentApiClient {
             consumer.accept(message.trim());
         } catch (Exception e) {
             logDebug("系统提示回调失败: " + e.getMessage());
+        }
+    }
+
+    private void refreshContextBudget() {
+        try {
+            Integer resolved = ModelContextLimitResolver.resolveContextLimit(config);
+            if (resolved != null && resolved > 0) {
+                chatContextLimit = resolved;
+            }
+        } catch (Exception e) {
+            logDebug("解析上下文预算失败，使用默认值: " + e.getMessage());
         }
     }
 

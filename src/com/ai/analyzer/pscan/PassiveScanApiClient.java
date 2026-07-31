@@ -35,7 +35,8 @@ import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.mcp.McpToolProvider;
 import dev.langchain4j.mcp.client.McpClient;
 import dev.langchain4j.mcp.client.transport.McpTransport;
-import dev.langchain4j.memory.chat.MessageWindowChatMemory;
+import com.ai.analyzer.context.ChatContextManager;
+import com.ai.analyzer.context.ModelContextLimitResolver;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.service.AiServices;
@@ -74,6 +75,7 @@ public class PassiveScanApiClient {
     private String apiUrl;
     @Getter
     private String model;
+    private String maxTokens = "";
     @Getter
     private ApiProvider apiProvider = ApiProvider.DASHSCOPE;
     
@@ -82,7 +84,8 @@ public class PassiveScanApiClient {
     private final Object chatModelLock = new Object();
     
     // 共享的ChatMemory - DAST风格：多个Agent共享分析记录
-    private volatile MessageWindowChatMemory chatMemory;
+    private volatile ChatContextManager chatMemory;
+    private volatile int chatContextLimit = 128_000;
     private final Object chatMemoryLock = new Object();
     
     // 共享的Assistant实例
@@ -322,6 +325,18 @@ public class PassiveScanApiClient {
     public void setModel(String model) {
         if (this.model == null || !this.model.equals(model)) {
             this.model = model;
+            needsReinitialization = true;
+        }
+    }
+
+    public String getMaxTokens() {
+        return maxTokens != null ? maxTokens : "";
+    }
+
+    public void setMaxTokens(String maxTokens) {
+        String normalized = maxTokens != null ? maxTokens.trim() : "";
+        if (!this.maxTokens.equals(normalized)) {
+            this.maxTokens = normalized;
             needsReinitialization = true;
         }
     }
@@ -819,10 +834,9 @@ public class PassiveScanApiClient {
             synchronized (chatMemoryLock) {
                 if (chatMemory == null) {
                     // 使用较大的消息窗口，保留更多上下文（DAST风格：共享分析记录）
-                    chatMemory = MessageWindowChatMemory.builder()
-                            .maxMessages(50) // 保留50条消息，积累分析知识
-                            .build();
-                    logInfo("共享ChatMemory已创建（最大50条消息，DAST风格）");
+                    refreshContextBudget();
+                    chatMemory = new ChatContextManager("passive-scan", 50, Math.max(32_000, chatContextLimit), null);
+                    logInfo("共享 ChatContextManager 已创建（DAST风格，token/体积驱动）");
                 }
             }
         }
@@ -1175,9 +1189,8 @@ public class PassiveScanApiClient {
             throw new IllegalStateException("ChatModel 未初始化，无法创建 Assistant");
         }
         
-        MessageWindowChatMemory requestMemory = MessageWindowChatMemory.builder()
-                .maxMessages(100)
-                .build();
+        refreshContextBudget();
+        ChatContextManager requestMemory = new ChatContextManager("passive-scan-request", 100, Math.max(32_000, chatContextLimit), null);
         
         var builder = AiServices.builder(Assistant.class)
                 .streamingChatModel(localChatModel)
@@ -1251,6 +1264,23 @@ public class PassiveScanApiClient {
         }
         
         return builder.build();
+    }
+
+    private void refreshContextBudget() {
+        try {
+            Integer resolved = ModelContextLimitResolver.resolveContextLimit(
+                    "",
+                    maxTokens,
+                    model,
+                    apiProvider,
+                    apiUrl
+            );
+            if (resolved != null && resolved > 0) {
+                chatContextLimit = resolved;
+            }
+        } catch (Exception e) {
+            logDebug("解析被动扫描上下文预算失败，使用默认值: " + e.getMessage());
+        }
     }
 
     private void recordBurpMcpTraffic(BeforeToolExecution beforeToolExecution) {

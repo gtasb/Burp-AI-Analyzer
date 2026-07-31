@@ -25,6 +25,7 @@ public class AgentConfig {
     private boolean enableThinking = false;
     private boolean enableSearch = false;
     private String customParameters = "";
+    private String maxTokens = "";
     
     // ========== MCP 配置 ==========
     private boolean enableMcp = false;
@@ -106,6 +107,7 @@ public class AgentConfig {
         this.enableThinking = other.enableThinking;
         this.enableSearch = other.enableSearch;
         this.customParameters = other.customParameters;
+        this.maxTokens = other.maxTokens;
         this.enableMcp = other.enableMcp;
         this.burpMcpUrl = other.burpMcpUrl;
         this.burpMcpAuthorization = other.burpMcpAuthorization;
@@ -250,6 +252,8 @@ public class AgentConfig {
     public void setEnableSearch(boolean enableSearch) { this.enableSearch = enableSearch; }
     public String getCustomParameters() { return customParameters; }
     public void setCustomParameters(String customParameters) { this.customParameters = customParameters != null ? customParameters : ""; }
+    public String getMaxTokens() { return maxTokens != null ? maxTokens : ""; }
+    public void setMaxTokens(String maxTokens) { this.maxTokens = maxTokens != null ? maxTokens : ""; }
     public boolean isEnableMcp() { return enableMcp; }
     public void setEnableMcp(boolean enableMcp) { this.enableMcp = enableMcp; }
     public String getBurpMcpUrl() { return burpMcpUrl; }

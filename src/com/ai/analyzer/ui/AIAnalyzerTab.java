@@ -53,6 +53,7 @@ public class AIAnalyzerTab extends JPanel {
     private String currentApiKeySecret = "";
     private JTextField modelField;
     private JTextField customParametersField; // 自定义参数输入框
+    private JTextField maxTokensField; // 显式上下文预算输入框
     private JComboBox<String> apiProfileComboBox;
     private final List<PluginSettings.ApiProfile> apiProfiles = new ArrayList<>();
     private JCheckBox enableSearchCheckBox;
@@ -651,6 +652,7 @@ public class AIAnalyzerTab extends JPanel {
             psClient.setApiUrl(apiClient.getApiUrl());
             psClient.setApiKey(apiClient.getApiKey());
             psClient.setModel(apiClient.getModel());
+            psClient.setMaxTokens(apiClient.getMaxTokens());
             psClient.setApiProvider(apiClient.getApiProvider().getDisplayName());
             psClient.setEnableThinking(false);
             psClient.setEnableSearch(apiClient.isEnableSearch());
@@ -974,6 +976,15 @@ public class AIAnalyzerTab extends JPanel {
         modelField = new JTextField("qwen-max", 30);
         panel.add(modelField, gbc);
         
+        // max_tokens
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("max_tokens:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        maxTokensField = new JTextField("", 30);
+        maxTokensField.setToolTipText("显式指定上下文预算；留空时将自动读取自定义参数、模型元数据或默认规则");
+        panel.add(maxTokensField, gbc);
+
         // 自定义参数
         row++;
         gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
@@ -2556,6 +2567,7 @@ public class AIAnalyzerTab extends JPanel {
         apiClient.setApiKey(getEffectiveApiKeyFromField());
         apiClient.setModel(modelField.getText().trim());
         apiClient.setCustomParameters(customParametersField.getText().trim());
+        apiClient.setMaxTokens(maxTokensField.getText().trim());
         apiClient.setEnableThinking(false);
         apiClient.setEnableSearch(enableSearchCheckBox.isSelected());
         
@@ -2841,7 +2853,8 @@ public class AIAnalyzerTab extends JPanel {
             );
             // 设置 API 提供者
             settings.setApiProvider((String) apiProviderComboBox.getSelectedItem());
-            // 设置自定义参数
+            // 设置上下文预算与自定义参数
+            settings.setMaxTokens(maxTokensField.getText().trim());
             settings.setCustomParameters(customParametersField.getText().trim());
             settings.setApiProfiles(apiProfiles);
             settings.setBurpMcpAuthorization(burpMcpAuthorizationField != null ? burpMcpAuthorizationField.getText().trim() : "");
@@ -3003,6 +3016,7 @@ public class AIAnalyzerTab extends JPanel {
         apiUrlField.setText(settings.getApiUrl());
         setApiKeySecretAndMask(settings.getApiKey());
         modelField.setText(settings.getModel());
+        maxTokensField.setText(settings.getMaxTokens());
         customParametersField.setText(settings.getCustomParameters());
         apiProfiles.clear();
         apiProfiles.addAll(settings.getApiProfiles());
@@ -3117,6 +3131,7 @@ public class AIAnalyzerTab extends JPanel {
         apiClient.setApiUrl(settings.getApiUrl());
         apiClient.setApiKey(settings.getApiKey());
         apiClient.setModel(settings.getModel());
+        apiClient.setMaxTokens(settings.getMaxTokens());
         apiClient.setCustomParameters(settings.getCustomParameters());
         apiClient.setEnableThinking(false);
         apiClient.setEnableSearch(settings.isEnableSearch());
@@ -3276,6 +3291,8 @@ public class AIAnalyzerTab extends JPanel {
                     displayScanResult(scanResult);
                     
                     api.logging().logToOutput("请求已添加到AI分析器: " + method + " " + url);
+                    // 立即开始分析：右键发送到 AI 分析时应直接触发默认提示词分析，避免用户还需手动点击
+                    SwingUtilities.invokeLater(this::performAnalysis);
                 } else {
                     api.logging().logToOutput("请求已存在，跳过添加: " + method + " " + url);
                 }
