@@ -14,7 +14,9 @@ public class AISidePanelRequestEditor implements ExtensionProvidedHttpRequestEdi
     private final ChatPanel chatPanel;
     private JPanel mainPanel;
     private HttpRequest currentRequest;
+    private HttpRequestResponse currentRequestResponse;
     private HttpRequestEditor requestEditor;
+    private MessageCollectionPanel collectionPanel;
 
     public AISidePanelRequestEditor(MontoyaApi api, ChatPanel chatPanel) {
         this.api = api;
@@ -32,6 +34,15 @@ public class AISidePanelRequestEditor implements ExtensionProvidedHttpRequestEdi
         JPanel requestPanel = new JPanel(new BorderLayout());
         requestPanel.setBorder(BorderFactory.createTitledBorder("HTTP请求"));
         requestPanel.add(requestEditor.uiComponent(), BorderLayout.CENTER);
+
+        collectionPanel = new MessageCollectionPanel(chatPanel,
+                () -> currentRequestResponse,
+                rr -> {
+                    if (rr != null && rr.request() != null) {
+                        requestEditor.setRequest(rr.request());
+                    }
+                });
+        requestPanel.add(collectionPanel, BorderLayout.SOUTH);
 
         JPanel chatPanelContainer = new JPanel(new BorderLayout());
         chatPanelContainer.setBorder(BorderFactory.createTitledBorder("AI助手"));
@@ -75,6 +86,7 @@ public class AISidePanelRequestEditor implements ExtensionProvidedHttpRequestEdi
 
     @Override
     public void setRequestResponse(HttpRequestResponse requestResponse) {
+        this.currentRequestResponse = requestResponse;
         if (requestResponse != null) {
             setRequest(requestResponse.request());
             chatPanel.setCurrentRequest(requestResponse);

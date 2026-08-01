@@ -1,8 +1,8 @@
 package com.ai.analyzer.ui;
 
 import burp.api.montoya.MontoyaApi;
-import com.ai.analyzer.Client.AgentApiClient;
-import com.ai.analyzer.utils.MarkdownRenderer;
+import com.ai.analyzer.core.AgentApiClient;
+import com.ai.analyzer.util.MarkdownRenderer;
 // import com.example.ai.analyzer.Tools.ToolDefinitions;
 // import com.example.ai.analyzer.Tools.ToolExecutor;
 
@@ -286,7 +286,7 @@ public class ChatPanel extends JPanel {
             if (currentRequest.response() != null) {
                 totalLength += currentRequest.response().toByteArray().getBytes().length;
             }
-            if (totalLength > com.ai.analyzer.utils.HttpFormatter.DEFAULT_MAX_LENGTH) {
+            if (totalLength > com.ai.analyzer.util.HttpFormatter.DEFAULT_MAX_LENGTH) {
                 appendToChat("系统", "HTTP内容过长（" + totalLength + " 字符），完整报文将缓存，提示词仅含预览与 fileId", false);
             }
         }
@@ -614,6 +614,22 @@ public class ChatPanel extends JPanel {
 
     public void notifyRequestUpdated(HttpRequestResponse request) {
         setCurrentRequest(request);
+    }
+
+    /**
+     * 批量分析入口：把收藏的 N 条报文拼成一条提示词，复用现有流式发送链路。
+     * 报文全文作为用户消息文本进入上下文，当前请求上下文保持不变。
+     */
+    public void sendBatchAnalysis(java.util.List<HttpRequestResponse> items) {
+        if (isStreaming || items == null || items.isEmpty()) {
+            return;
+        }
+        String batchPrompt = com.ai.analyzer.util.BatchPromptBuilder.buildBatchAnalysisPrompt(items);
+        if (batchPrompt.isEmpty()) {
+            return;
+        }
+        inputField.setText(batchPrompt);
+        sendMessage();
     }
     
     /**

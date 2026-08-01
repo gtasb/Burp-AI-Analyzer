@@ -1,4 +1,4 @@
-package com.ai.analyzer.Tools;
+package com.ai.analyzer.tools;
 
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.core.Range;
@@ -6,8 +6,8 @@ import burp.api.montoya.core.Registration;
 import burp.api.montoya.http.HttpService;
 import burp.api.montoya.http.message.requests.HttpRequest;
 import burp.api.montoya.intruder.*;
-import dev.langchain4j.agent.tool.P;
-import dev.langchain4j.agent.tool.Tool;
+import io.agentscope.core.tool.Tool;
+import io.agentscope.core.tool.ToolParam;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -16,10 +16,10 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Burp 扩展工具类 - 为 AI 提供 Burp 原生功能的访问
+ * Burp 扩展工具 - 为 AI 提供 Burp 原生功能的访问
  * 解决 MCP 工具不支持的功能，如批量 payloads 传入 Intruder
- * 
- * 参考: https://github.com/238469/burp-ai-fuzzer
+ *
+ * 参考 https://github.com/238469/burp-ai-fuzzer
  */
 public class BurpExtTools {
     
@@ -52,28 +52,27 @@ public class BurpExtTools {
     
     /**
      * 发送请求到 Intruder，并使用 AI 生成的 payloads
-     * 
+     *
      * AI 只需指定要注入的参数名，工具会自动在请求中找到并标记插入点。
-     * 
+     *
      * Payloads 会自动配置到全局 Provider，用户只需：
      * 1. 在 Intruder 中选择 Payload type 为 "Extension-generated"
      * 2. 选择 "AI Analyzer Payloads" 作为 Payload source
      * 3. 点击 "Start attack" 开始攻击
      */
-    @Tool(name = "BurpExtTools_send_to_intruder", value = {
-        "发送请求到 Burp Intruder 进行批量 payload 测试。",
-        "【重要】AI 只需指定要注入的参数名（targetParameters），工具会自动在请求中找到并标记插入点。",
-        "支持的参数位置：URL 查询参数、POST 表单参数、JSON 字段值、Cookie 值",
-        "适用场景：SQL注入、XSS、命令注入、目录遍历等需要批量测试的场景"
-    })
+    @Tool(name = "BurpExtTools_send_to_intruder", description =
+            "发送请求到 Burp Intruder 进行批量 payload 测试。"
+            + "【重要】AI 只需指定要注入的参数名（targetParameters），工具会自动在请求中找到并标记插入点。"
+            + "支持的参数位置：URL 查询参数、POST 表单参数、JSON 字段值、Cookie 值。"
+            + "适用场景：SQL注入、XSS、命令注入、目录遍历等需要批量测试的场景")
     public String sendToIntruder(
-            @P("原始 HTTP 请求内容（不需要添加任何标记）") String requestContent,
-            @P("目标主机名，例如：example.com") String targetHostname,
-            @P("目标端口，例如：443 或 80") int targetPort,
-            @P("是否使用HTTPS") boolean usesHttps,
-            @P("Intruder 标签页名称") String tabName,
-            @P("要注入的参数名列表，工具会自动找到这些参数并标记为插入点。例如：[\"id\", \"name\", \"search\"]") List<String> targetParameters,
-            @P("AI 生成的 payload 列表，例如：[\"' OR '1'='1\", \"<script>alert(1)</script>\", \"../../../etc/passwd\"]") List<String> payloads
+            @ToolParam(name = "requestContent", description = "原始 HTTP 请求内容（不需要添加任何标记）") String requestContent,
+            @ToolParam(name = "targetHostname", description = "目标主机名，例如：example.com") String targetHostname,
+            @ToolParam(name = "targetPort", description = "目标端口，例如：443 或 80") int targetPort,
+            @ToolParam(name = "usesHttps", description = "是否使用HTTPS") boolean usesHttps,
+            @ToolParam(name = "tabName", description = "Intruder 标签页名称") String tabName,
+            @ToolParam(name = "targetParameters", description = "要注入的参数名列表，工具会自动找到这些参数并标记为插入点。例如：[\"id\", \"name\", \"search\"]") List<String> targetParameters,
+            @ToolParam(name = "payloads", description = "AI 生成的 payload 列表，例如：[\"' OR '1'='1\", \"<script>alert(1)</script>\", \"../../../etc/passwd\"]") List<String> payloads
     ) {
         try {
             // 1. 验证参数
@@ -264,19 +263,6 @@ public class BurpExtTools {
         
         return result; // 未找到参数，返回原请求
     }
-    
-    /**
-     * 复制文本到系统剪贴板
-     */
-/*     private void copyToClipboard(String text) {
-        try {
-            StringSelection selection = new StringSelection(text);
-            Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
-            clipboard.setContents(selection, selection);
-        } catch (Exception e) {
-            api.logging().logToError("[BurpExtTools] 复制到剪贴板失败: " + e.getMessage());
-        }
-    } */
     
     /**
      * 解析请求中的插入点标记（§...§）

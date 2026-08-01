@@ -3,18 +3,19 @@ package com.ai.analyzer.ui;
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.http.message.HttpRequestResponse;
 
-import com.ai.analyzer.Client.AgentApiClient;
-import com.ai.analyzer.model.PluginSettings;
-import com.ai.analyzer.model.RequestData;
-import com.ai.analyzer.pscan.PassiveScanApiClient;
-import com.ai.analyzer.pscan.PassiveScanManager;
-import com.ai.analyzer.pscan.PassiveScanTask;
-import com.ai.analyzer.pscan.ScanResult;
-import com.ai.analyzer.skills.Skill;
-import com.ai.analyzer.skills.SkillManager;
-import com.ai.analyzer.utils.AppLogBuffer;
-import com.ai.analyzer.utils.MarkdownRenderer;
-import com.ai.analyzer.rulesMatch.PreScanFilterManager;
+import com.ai.analyzer.core.AgentApiClient;
+import com.ai.analyzer.core.PluginSettings;
+import com.ai.analyzer.core.RequestData;
+import com.ai.analyzer.scan.pscan.PassiveScanApiClient;
+import com.ai.analyzer.scan.pscan.PassiveScanManager;
+import com.ai.analyzer.scan.pscan.PassiveScanTask;
+import com.ai.analyzer.scan.pscan.ScanResult;
+import com.ai.analyzer.util.AppLogBuffer;
+import com.ai.analyzer.util.DebugContext;
+import com.ai.analyzer.util.MarkdownRenderer;
+import com.ai.analyzer.agent.skills.Skill;
+import com.ai.analyzer.agent.skills.SkillManager;
+import com.ai.analyzer.scan.rulesmatch.PreScanFilterManager;
 // import com.example.ai.analyzer.Tools.ToolDefinitions;
 // import com.example.ai.analyzer.Tools.ToolExecutor;
 
@@ -54,6 +55,7 @@ public class AIAnalyzerTab extends JPanel {
     private JTextField modelField;
     private JTextField customParametersField; // 自定义参数输入框
     private JTextField maxTokensField; // 显式上下文预算输入框
+    private JTextField tokenBudgetField; // 扫描周期 Token 预算输入框
     private JComboBox<String> apiProfileComboBox;
     private final List<PluginSettings.ApiProfile> apiProfiles = new ArrayList<>();
     private JCheckBox enableSearchCheckBox;
@@ -71,23 +73,23 @@ public class AIAnalyzerTab extends JPanel {
     // private JCheckBox enableRagCheckBox;
     // private JTextField ragDocumentsPathField;
     
-    // Skills 标签页组件
-    private JCheckBox enableSkillsCheckBox;
-    private JTextField skillsDirectoryField;
-    private JTable skillsTable;
-    private DefaultTableModel skillsTableModel;
-    private JTextPane skillPreviewPane;
-    
     // 前置扫描器组件
     private JCheckBox enablePreScanCheckbox;
     private JCheckBox enablePythonScriptCheckbox;
-    private JCheckBox enableNotebookCheckbox;
     // CLI 标签页组件
     private JCheckBox enableCliToolCheckBox;
     private JCheckBox enableUnrestrictedCliToolCheckBox;
     private JTextArea cliWhitelistArea;
     private JTextArea cliToolPromptArea;
     private JButton browseWorkplaceDirButton;
+
+    // Skills 组件
+    private SkillManager skillManager;
+    private JCheckBox enableSkillsCheckBox;
+    private JTextField skillsDirectoryField;
+    private JTable skillsTable;
+    private DefaultTableModel skillsTableModel;
+    private JTextArea skillPreviewPane;
     private JButton refreshSkillsButton;
     private JButton createExampleSkillButton;
     
@@ -148,7 +150,10 @@ public class AIAnalyzerTab extends JPanel {
     private JSpinner threadCountSpinner;
     private JButton startPassiveScanButton;
     private JButton stopPassiveScanButton;
+    private com.ai.analyzer.scan.active.ActiveAuditManager activeAuditManager;
+    private JButton auditQueueButton;
     private JLabel passiveScanStatusLabel;
+    private JLabel tokenUsageLabel;
     private JProgressBar passiveScanProgressBar;
     private JTable passiveScanTable;
     private DefaultTableModel passiveScanTableModel;
@@ -209,13 +214,12 @@ public class AIAnalyzerTab extends JPanel {
         // 第三个标签页：cli（命令行工具）
         JPanel cliPanel = createCliTabPanel();
         mainTabbedPane.addTab("Cli", cliPanel);
-        
-        // 第四个标签页：Skills（自定义技能）
-        JPanel skillsPanel = createSkillsTabPanel();
-        mainTabbedPane.addTab("Skills", skillsPanel);
 
         JPanel mcpTrafficPanel = createMcpTrafficTabPanel();
         mainTabbedPane.addTab("Logger", mcpTrafficPanel);
+
+        JPanel skillsPanel = createSkillsTabPanel();
+        mainTabbedPane.addTab("技能", skillsPanel);
 
         JPanel debugPanel = createDebugLogTabPanel();
         mainTabbedPane.addTab("Debug", debugPanel);
@@ -232,13 +236,66 @@ public class AIAnalyzerTab extends JPanel {
         logArea.setLineWrap(false);
         logArea.setFont(createLogFont());
 
+        // 调试模式开关
+        JCheckBox enableDebugCheckBox = new JCheckBox("启用调试模式");
+        enableDebugCheckBox.setToolTipText("启用后记录所有 Agent 事件、工具调用、模型交互的详细日志");
+        enableDebugCheckBox.addActionListener(e -> {
+            if (enableDebugCheckBox.isSelected()) {
+                DebugContext.enable();
+            } else {
+                DebugContext.disable();
+            }
+        });
+
+        // 导出调试日志按钮
+        JButton exportButton = new JButton("导出调试日志");
+        exportButton.setToolTipText("将 DebugContext 事件日志导出到文件");
+        exportButton.addActionListener(e -> {
+            JFileChooser chooser = new JFileChooser();
+            chooser.setSelectedFile(new java.io.File("burp-debug-log.txt"));
+            if (chooser.showSaveDialog(panel) == JFileChooser.APPROVE_OPTION) {
+                try {
+                    DebugContext.dumpToFile(chooser.getSelectedFile());
+                    api.logging().logToOutput("[Debug] 调试日志已导出到: " + chooser.getSelectedFile().getAbsolutePath());
+                } catch (Exception ex) {
+                    api.logging().logToError("[Debug] 导出调试日志失败: " + ex.getMessage());
+                }
+            }
+        });
+
+        // 事件计数器
+        JLabel eventCounterLabel = new JLabel("事件: 0");
+
         JButton refreshButton = new JButton("刷新");
         JButton clearButton = new JButton("清空");
+
         JPanel top = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        top.add(enableDebugCheckBox);
+        top.add(exportButton);
         top.add(refreshButton);
         top.add(clearButton);
+        top.add(eventCounterLabel);
 
-        Runnable refresh = () -> logArea.setText(AppLogBuffer.snapshot());
+        Runnable refresh = () -> {
+            StringBuilder sb = new StringBuilder();
+            // AppLogBuffer 日志
+            String appLog = AppLogBuffer.snapshot();
+            if (!appLog.isEmpty()) {
+                sb.append("=== 应用日志 ===\n");
+                sb.append(appLog);
+                sb.append("\n\n");
+            }
+            // DebugContext 事件日志
+            if (DebugContext.isEnabled()) {
+                sb.append("=== 调试事件 (DebugContext) ===\n");
+                sb.append(DebugContext.snapshotText());
+                eventCounterLabel.setText("事件: " + DebugContext.snapshot().size());
+            } else {
+                eventCounterLabel.setText("事件: -- (调试模式未启用)");
+            }
+            logArea.setText(sb.toString());
+        };
+
         refreshButton.addActionListener(e -> refresh.run());
         clearButton.addActionListener(e -> {
             AppLogBuffer.clear();
@@ -514,6 +571,23 @@ public class AIAnalyzerTab extends JPanel {
         clearPassiveScanButton.addActionListener(e -> clearPassiveScanResults());
         controlPanel.add(clearPassiveScanButton);
 
+        JButton resetTokenButton = new JButton("重置Token统计");
+        resetTokenButton.setToolTipText("清零累计 Token 用量与预算状态（预算值本身保留）");
+        resetTokenButton.addActionListener(e ->
+                com.ai.analyzer.util.TokenUsageTracker.instance().reset());
+        controlPanel.add(resetTokenButton);
+
+        JButton activeAuditButton = new JButton("主动审计选中");
+        activeAuditButton.setToolTipText("对结果列表中选中的请求发起 Burp Scanner 主动审计，完成后问题自动合并回列表");
+        activeAuditButton.addActionListener(e -> startActiveAuditForSelection());
+        controlPanel.add(activeAuditButton);
+
+        auditQueueButton = new JButton("审计队列(0)");
+        auditQueueButton.setToolTipText("被动扫描判定的高危结果自动进入待审计队列；点击一键对队列内全部目标发起 Burp 主动审计");
+        auditQueueButton.setEnabled(false);
+        auditQueueButton.addActionListener(e -> auditPendingQueue());
+        controlPanel.add(auditQueueButton);
+
         JPanel statusPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 5));
         passiveScanStatusLabel = new JLabel("就绪");
         passiveScanStatusLabel.setPreferredSize(new Dimension(200, 20));
@@ -522,6 +596,9 @@ public class AIAnalyzerTab extends JPanel {
         passiveScanProgressBar.setPreferredSize(new Dimension(150, 20));
         passiveScanProgressBar.setStringPainted(true);
         statusPanel.add(passiveScanProgressBar);
+        tokenUsageLabel = new JLabel("Token: 0 次调用");
+        tokenUsageLabel.setForeground(Color.DARK_GRAY);
+        statusPanel.add(tokenUsageLabel);
 
         JPanel passiveModeControlLine = new JPanel(new BorderLayout());
         passiveModeControlLine.add(controlPanel, BorderLayout.WEST);
@@ -565,6 +642,29 @@ public class AIAnalyzerTab extends JPanel {
         passiveScanManager.setOnProgressChanged(progress -> {
             SwingUtilities.invokeLater(() -> passiveScanProgressBar.setValue(progress));
         });
+
+        // ========== 主动审计闭环（Burp Scanner → 问题推送回合并进被动列表） ==========
+        activeAuditManager = new com.ai.analyzer.scan.active.ActiveAuditManager(api.scanner());
+        activeAuditManager.setOnIssueFound(issue ->
+                SwingUtilities.invokeLater(() -> passiveScanManager.addAuditIssue(issue)));
+        activeAuditManager.setOnStatusChanged(status ->
+                SwingUtilities.invokeLater(() -> passiveScanStatusLabel.setText(status)));
+
+        // ========== 被动 → 主动协作：高危结果自动进入待审计队列 ==========
+        passiveScanManager.setOnHighRiskResult(result ->
+                activeAuditManager.queueForAudit(result.getRequestResponse()));
+        activeAuditManager.setOnQueueChanged(() ->
+                SwingUtilities.invokeLater(() -> {
+                    int size = activeAuditManager.pendingQueueSize();
+                    auditQueueButton.setText("审计队列(" + size + ")");
+                    auditQueueButton.setEnabled(size > 0);
+                }));
+        refreshAuditQueueButton();
+
+        // ========== Token 用量统计与预算显示 ==========
+        com.ai.analyzer.util.TokenUsageTracker.instance().setListener(snapshot ->
+                SwingUtilities.invokeLater(() -> updateTokenUsageLabel(snapshot)));
+        updateTokenUsageLabel(com.ai.analyzer.util.TokenUsageTracker.instance().snapshot());
         
         // ========== 设置流式输出回调（两级渲染：纯文本追加 + 定期 Markdown 刷新） ==========
         final long[] pscanPlainTime = {0L};
@@ -684,14 +784,12 @@ public class AIAnalyzerTab extends JPanel {
             
             // Python 脚本执行配置
             psClient.setEnablePythonScript(apiClient.isEnablePythonScript());
-            psClient.setEnableNotebook(apiClient.isEnableNotebook());
             psClient.setEnableCliTool(apiClient.getConfig().isEnableCliTool());
             psClient.setEnableUnrestrictedCliTool(apiClient.getConfig().isEnableUnrestrictedCliTool());
             psClient.setCliWhitelist(apiClient.getConfig().getCliWhitelist());
             psClient.setCliToolPrompt(apiClient.getConfig().getCliToolPrompt());
             psClient.setWorkplaceDirectoryPath(workplaceDirectoryField != null ? workplaceDirectoryField.getText().trim() : "");
-            psClient.setEnableSkills(enableSkillsCheckBox != null && enableSkillsCheckBox.isSelected());
-            
+
             // ========== 同步前置扫描管理器 ==========
             if (preScanFilterManager != null) {
                 psClient.setPreScanFilterManager(preScanFilterManager);
@@ -737,10 +835,102 @@ public class AIAnalyzerTab extends JPanel {
         passiveScanProgressBar.setValue(0);
         passiveScanStatusLabel.setText("就绪");
     }
+
+    /**
+     * 解析 Token 预算输入（支持 1000 / 100K / 1M 后缀），非法或留空返回 0（不限制）。
+     */
+    private long parseTokenBudget(String text) {
+        if (text == null) return 0;
+        String s = text.trim().toUpperCase().replace(",", "").replace("_", "");
+        if (s.isEmpty()) return 0;
+        double multiplier = 1;
+        if (s.endsWith("K")) {
+            multiplier = 1_000;
+            s = s.substring(0, s.length() - 1);
+        } else if (s.endsWith("M")) {
+            multiplier = 1_000_000;
+            s = s.substring(0, s.length() - 1);
+        }
+        try {
+            double v = Double.parseDouble(s.trim());
+            if (v <= 0) return 0;
+            return (long) (v * multiplier);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    /**
+     * 更新 Token 用量标签（EDT 线程调用）。
+     */
+    private void updateTokenUsageLabel(com.ai.analyzer.util.TokenUsageTracker.UsageSnapshot snapshot) {        if (tokenUsageLabel == null) return;
+        String text = "Token: " + snapshot.summary();
+        if (snapshot.budgetTokens() > 0) {
+            text += " / 预算 " + snapshot.budgetTokens();
+            if (snapshot.overBudget()) {
+                text += " ⛔已用尽";
+                tokenUsageLabel.setForeground(Color.RED);
+            } else {
+                tokenUsageLabel.setForeground(Color.DARK_GRAY);
+            }
+        } else {
+            tokenUsageLabel.setForeground(Color.DARK_GRAY);
+        }
+        tokenUsageLabel.setText(text);
+    }
+
+    /**
+     * 一键审计待审计队列（被动高危结果自动入队的目标）。
+     */
+    private void auditPendingQueue() {
+        if (activeAuditManager == null) {
+            return;
+        }
+        activeAuditManager.auditPendingQueue();
+    }
+
+    /**
+     * 刷新审计队列按钮状态（EDT 线程调用）。
+     */
+    private void refreshAuditQueueButton() {
+        if (auditQueueButton == null || activeAuditManager == null) return;
+        int size = activeAuditManager.pendingQueueSize();
+        auditQueueButton.setText("审计队列(" + size + ")");
+        auditQueueButton.setEnabled(size > 0);
+    }
     
     /**
      * 更新被动扫描表格
      */
+    /**
+     * 对被动扫描结果列表中选中的请求发起主动审计（Burp Scanner）。
+     */
+    private void startActiveAuditForSelection() {
+        if (activeAuditManager == null || passiveScanTable == null) {
+            return;
+        }
+        int[] viewRows = passiveScanTable.getSelectedRows();
+        java.util.List<HttpRequestResponse> targets = new java.util.ArrayList<>();
+        for (int viewRow : viewRows) {
+            int modelRow = passiveScanTable.convertRowIndexToModel(viewRow);
+            Object idObj = passiveScanTableModel.getValueAt(modelRow, 0);
+            if (idObj instanceof Number) {
+                ScanResult result = passiveScanManager.getResultById(((Number) idObj).intValue());
+                if (result != null && result.getRequestResponse() != null) {
+                    targets.add(result.getRequestResponse());
+                }
+            }
+        }
+        if (targets.isEmpty()) {
+            passiveScanStatusLabel.setText("请先在结果列表中选择要审计的请求");
+            return;
+        }
+        int started = activeAuditManager.startAudit(targets);
+        if (started > 0) {
+            passiveScanStatusLabel.setText("主动审计已启动，共 " + started + " 个目标请求");
+        }
+    }
+
     private void updatePassiveScanTable(ScanResult result) {
         // 查找是否已存在该行
         int existingRow = -1;
@@ -897,7 +1087,196 @@ public class AIAnalyzerTab extends JPanel {
         return panel;
     }
     
-    private JPanel createConfigSubTab_Basic() {
+    private JPanel createSkillsTabPanel() {
+        JPanel panel = new JPanel(new BorderLayout(8, 8));
+        panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+        JPanel controlPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+
+        enableSkillsCheckBox = new JCheckBox("启用 Skills");
+        enableSkillsCheckBox.addActionListener(e -> {
+            boolean enabled = enableSkillsCheckBox.isSelected();
+            apiClient.setEnableSkills(enabled);
+            if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
+                passiveScanManager.getApiClient().setEnableSkills(enabled);
+            }
+            skillsDirectoryField.setEnabled(enabled);
+            if (skillsTable != null) skillsTable.setEnabled(enabled);
+        });
+        controlPanel.add(enableSkillsCheckBox);
+
+        skillsDirectoryField = new JTextField(40);
+        skillsDirectoryField.setEnabled(false);
+        controlPanel.add(new JLabel("目录:"));
+        controlPanel.add(skillsDirectoryField);
+
+        refreshSkillsButton = new JButton("刷新");
+        refreshSkillsButton.addActionListener(e -> refreshSkills());
+        controlPanel.add(refreshSkillsButton);
+
+        createExampleSkillButton = new JButton("创建示例技能");
+        createExampleSkillButton.addActionListener(e -> createExampleSkill());
+        controlPanel.add(createExampleSkillButton);
+
+        panel.add(controlPanel, BorderLayout.NORTH);
+
+        JSplitPane splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
+
+        String[] columnNames = {"技能名称", "描述", "启用", "工具数"};
+        skillsTableModel = new DefaultTableModel(columnNames, 0) {
+            @Override
+            public boolean isCellEditable(int row, int column) {
+                return column == 2;
+            }
+            @Override
+            public Class<?> getColumnClass(int columnIndex) {
+                return columnIndex == 2 ? Boolean.class : String.class;
+            }
+        };
+        skillsTable = new JTable(skillsTableModel);
+        skillsTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        skillsTable.getColumnModel().getColumn(0).setPreferredWidth(120);
+        skillsTable.getColumnModel().getColumn(1).setPreferredWidth(300);
+        skillsTable.getColumnModel().getColumn(2).setPreferredWidth(50);
+        skillsTable.getColumnModel().getColumn(3).setPreferredWidth(50);
+        skillsTable.getSelectionModel().addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) {
+                updateSkillPreview();
+            }
+        });
+        skillsTableModel.addTableModelListener(e -> {
+            if (e.getType() == javax.swing.event.TableModelEvent.UPDATE && e.getColumn() == 2) {
+                int row = e.getFirstRow();
+                String name = (String) skillsTableModel.getValueAt(row, 0);
+                boolean enabled = (Boolean) skillsTableModel.getValueAt(row, 2);
+                if (skillManager != null) {
+                    skillManager.setSkillEnabled(name, enabled);
+                }
+            }
+        });
+
+        JScrollPane tableScroll = new JScrollPane(skillsTable);
+        splitPane.setTopComponent(tableScroll);
+
+        skillPreviewPane = new JTextArea();
+        skillPreviewPane.setEditable(false);
+        skillPreviewPane.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        JScrollPane previewScroll = new JScrollPane(skillPreviewPane);
+        previewScroll.setBorder(BorderFactory.createTitledBorder("技能预览"));
+        splitPane.setBottomComponent(previewScroll);
+
+        splitPane.setResizeWeight(0.6);
+        splitPane.setDividerLocation(300);
+        panel.add(splitPane, BorderLayout.CENTER);
+
+        skillManager = new SkillManager();
+        if (api != null) skillManager.setApi(api);
+
+        return panel;
+    }
+
+    private void refreshSkills() {
+        if (skillManager == null || skillsDirectoryField == null) return;
+        String dir = skillsDirectoryField.getText().trim();
+        if (dir.isEmpty()) return;
+
+        skillManager.setSkillsDirectoryPath(dir);
+        updateSkillsTable();
+
+        apiClient.setSkillsDirectoryPath(dir);
+        if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
+            passiveScanManager.getApiClient().setSkillsDirectoryPath(dir);
+        }
+    }
+
+    private void updateSkillsTable() {
+        if (skillsTableModel == null || skillManager == null) return;
+        skillsTableModel.setRowCount(0);
+        for (Skill skill : skillManager.getAllSkills()) {
+            skillsTableModel.addRow(new Object[]{
+                    skill.getName(),
+                    skill.getShortDescription(),
+                    skill.isEnabled(),
+                    skill.getToolCount()
+            });
+        }
+    }
+
+    private void updateSkillPreview() {
+        if (skillPreviewPane == null || skillsTable == null || skillManager == null) return;
+        int row = skillsTable.getSelectedRow();
+        if (row < 0) {
+            skillPreviewPane.setText("");
+            return;
+        }
+        String name = (String) skillsTableModel.getValueAt(row, 0);
+        Skill skill = skillManager.getSkill(name);
+        if (skill != null) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("名称: ").append(skill.getName()).append("\n");
+            sb.append("描述: ").append(skill.getDescription()).append("\n");
+            sb.append("路径: ").append(skill.getFilePath() != null ? skill.getFilePath() : "N/A").append("\n\n");
+            sb.append("--- 内容 ---\n\n");
+            sb.append(skill.getContent() != null ? skill.getContent() : "(无内容)");
+            skillPreviewPane.setText(sb.toString());
+            skillPreviewPane.setCaretPosition(0);
+        }
+    }
+
+    private void createExampleSkill() {
+        if (skillsDirectoryField == null) return;
+        String dir = skillsDirectoryField.getText().trim();
+        if (dir.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "请先设置 Skills 目录", "提示", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        File skillDir = new File(dir, "example-scanner");
+        if (skillDir.exists()) {
+            JOptionPane.showMessageDialog(this, "示例技能目录已存在: " + skillDir.getAbsolutePath(), "提示", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        skillDir.mkdirs();
+        File skillMd = new File(skillDir, "SKILL.md");
+        String skillContent = "---\n" +
+                "name: example-scanner\n" +
+                "description: 示例安全扫描技能 — 当需要对目标进行基础信息收集时使用\n" +
+                "tools:\n" +
+                "  - name: port_scan\n" +
+                "    description: 使用 nmap 进行端口扫描\n" +
+                "    command: \"nmap\"\n" +
+                "    args: \"-sV -p {ports} {target}\"\n" +
+                "    working_dir: \".\"\n" +
+                "    timeout: 300\n" +
+                "    parameters:\n" +
+                "      - name: target\n" +
+                "        type: string\n" +
+                "        description: 目标IP或域名\n" +
+                "        required: true\n" +
+                "      - name: ports\n" +
+                "        type: string\n" +
+                "        description: 端口范围\n" +
+                "        required: false\n" +
+                "        default: \"1-1000\"\n" +
+                "---\n" +
+                "# Example Scanner\n\n" +
+                "## 功能概述\n" +
+                "这是一个示例技能，用于演示 Skills 系统的基本用法。\n\n" +
+                "## 使用说明\n" +
+                "1. 当用户请求对目标进行端口扫描时，使用 `port_scan` 工具\n" +
+                "2. 分析扫描结果并报告开放端口\n\n" +
+                "## 注意事项\n" +
+                "- 请确保 nmap 已安装并在 PATH 中\n" +
+                "- 扫描结果可能因防火墙规则而不完整\n";
+        try {
+            java.nio.file.Files.writeString(skillMd.toPath(), skillContent);
+            JOptionPane.showMessageDialog(this, "示例技能已创建: " + skillMd.getAbsolutePath(), "成功", JOptionPane.INFORMATION_MESSAGE);
+            refreshSkills();
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(this, "创建失败: " + ex.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+        private JPanel createConfigSubTab_Basic() {
         JPanel panel = new JPanel(new GridBagLayout());
         panel.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
         GridBagConstraints gbc = new GridBagConstraints();
@@ -985,6 +1364,15 @@ public class AIAnalyzerTab extends JPanel {
         maxTokensField.setToolTipText("显式指定上下文预算；留空时将自动读取自定义参数、模型元数据或默认规则");
         panel.add(maxTokensField, gbc);
 
+        // Token 预算（扫描周期）
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("Token 预算:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        tokenBudgetField = new JTextField("", 30);
+        tokenBudgetField.setToolTipText("扫描周期累计输入 Token（含缓存）预算上限；0 或留空表示不限制。用尽后自动跳过新的分析调用");
+        panel.add(tokenBudgetField, gbc);
+
         // 自定义参数
         row++;
         gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
@@ -1003,7 +1391,7 @@ public class AIAnalyzerTab extends JPanel {
         panel.add(new JLabel("Workplace 目录:"), gbc);
         gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         workplaceDirectoryField = new JTextField("", 30);
-        workplaceDirectoryField.setToolTipText("统一工作目录，自动派生：skills / rag / python-workdir / notebooks / .cache");
+        workplaceDirectoryField.setToolTipText("统一工作目录，自动派生：rag / python-workdir / .cache");
         workplaceDirectoryField.getDocument().addDocumentListener(new DocumentListener() {
             @Override public void insertUpdate(DocumentEvent e) { applyWorkplaceToDerivedPaths(true, false); }
             @Override public void removeUpdate(DocumentEvent e) { applyWorkplaceToDerivedPaths(true, false); }
@@ -1317,16 +1705,6 @@ public class AIAnalyzerTab extends JPanel {
         });
         panel.add(enablePythonScriptCheckbox, gbc);
         
-        // Notebook
-        row++;
-        gbc.gridy = row;
-        enableNotebookCheckbox = new JCheckBox("启用 Notebook 工具（共享渗透记录）", false);
-        enableNotebookCheckbox.setToolTipText("<html>Agent 与人工工程师共享工作笔记，位于 Workplace/notebooks</html>");
-        enableNotebookCheckbox.addActionListener(e -> {
-            apiClient.setEnableNotebook(enableNotebookCheckbox.isSelected());
-        });
-        panel.add(enableNotebookCheckbox, gbc);
-
         // 底部填充
         row++;
         gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2;
@@ -1381,7 +1759,7 @@ public class AIAnalyzerTab extends JPanel {
                 name, enabled, type(sse|streamableHttp|stdio|websocket),
                 url, command(数组), env(对象), toolWhitelist(数组)
                 示例会显示默认配置。""");
-        customMcpConfigArea.setText(com.ai.analyzer.mcpClient.CustomMcpConfigParser.defaultConfigJson());
+        customMcpConfigArea.setText(com.ai.analyzer.agent.mcpclient.CustomMcpConfigParser.defaultConfigJson());
         customMcpConfigArea.getDocument().addDocumentListener(new DocumentListener() {
             @Override public void insertUpdate(DocumentEvent e) { validateCustomMcpConfig(); }
             @Override public void removeUpdate(DocumentEvent e) { validateCustomMcpConfig(); }
@@ -1416,7 +1794,7 @@ public class AIAnalyzerTab extends JPanel {
         JButton restoreCustomMcpButton = new JButton("恢复默认");
         validateCustomMcpButton.addActionListener(e -> validateCustomMcpConfig());
         restoreCustomMcpButton.addActionListener(e -> customMcpConfigArea.setText(
-                com.ai.analyzer.mcpClient.CustomMcpConfigParser.defaultConfigJson()));
+                com.ai.analyzer.agent.mcpclient.CustomMcpConfigParser.defaultConfigJson()));
         customMcpButtonPanel.add(validateCustomMcpButton);
         customMcpButtonPanel.add(restoreCustomMcpButton);
         panel.add(customMcpButtonPanel, gbc);
@@ -1443,14 +1821,14 @@ public class AIAnalyzerTab extends JPanel {
     }
 
     private int countEnabledCustomMcpConfigs() {
-        return com.ai.analyzer.utils.McpConfigValidator.countEnabledCustomMcpConfigs(
+        return com.ai.analyzer.util.McpConfigValidator.countEnabledCustomMcpConfigs(
                 customMcpConfigArea != null ? customMcpConfigArea.getText() : "");
     }
 
     private void validateCustomMcpConfig() {
         boolean masterSwitchOn = enableCustomMcpCheckBox != null && enableCustomMcpCheckBox.isSelected();
-        com.ai.analyzer.utils.McpConfigValidator.McpConfigValidationResult result =
-                com.ai.analyzer.utils.McpConfigValidator.validate(
+        com.ai.analyzer.util.McpConfigValidator.McpConfigValidationResult result =
+                com.ai.analyzer.util.McpConfigValidator.validate(
                         customMcpConfigArea != null ? customMcpConfigArea.getText() : "",
                         masterSwitchOn,
                         UIManager.getColor("Label.disabledForeground"));
@@ -1466,8 +1844,8 @@ public class AIAnalyzerTab extends JPanel {
 
     private boolean confirmSaveWithInvalidMcpConfig() {
         boolean masterSwitchOn = enableCustomMcpCheckBox != null && enableCustomMcpCheckBox.isSelected();
-        com.ai.analyzer.utils.McpConfigValidator.McpConfigValidationResult result =
-                com.ai.analyzer.utils.McpConfigValidator.validate(
+        com.ai.analyzer.util.McpConfigValidator.McpConfigValidationResult result =
+                com.ai.analyzer.util.McpConfigValidator.validate(
                         customMcpConfigArea != null ? customMcpConfigArea.getText() : "",
                         masterSwitchOn,
                         UIManager.getColor("Label.disabledForeground"));
@@ -1620,7 +1998,7 @@ public class AIAnalyzerTab extends JPanel {
         panel.add(activeLabel, gbc);
         
         gbc.gridy = 1; gbc.weighty = 0.5; gbc.fill = GridBagConstraints.BOTH;
-        activeSystemPromptArea = new JTextArea(com.ai.analyzer.Client.SystemPromptBuilder.getDefaultBasePrompt());
+        activeSystemPromptArea = new JTextArea(com.ai.analyzer.core.SystemPromptBuilder.getDefaultBasePrompt());
         activeSystemPromptArea.setLineWrap(true);
         activeSystemPromptArea.setWrapStyleWord(true);
         activeSystemPromptArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
@@ -1634,7 +2012,7 @@ public class AIAnalyzerTab extends JPanel {
         panel.add(passiveLabel, gbc);
         
         gbc.gridy = 3; gbc.weighty = 0.5; gbc.fill = GridBagConstraints.BOTH;
-        passiveSystemPromptArea = new JTextArea(com.ai.analyzer.pscan.SystemPromptBuilder.getDefaultBasePrompt());
+        passiveSystemPromptArea = new JTextArea(com.ai.analyzer.scan.pscan.SystemPromptBuilder.getDefaultBasePrompt());
         passiveSystemPromptArea.setLineWrap(true);
         passiveSystemPromptArea.setWrapStyleWord(true);
         passiveSystemPromptArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
@@ -1646,8 +2024,8 @@ public class AIAnalyzerTab extends JPanel {
         gbc.anchor = GridBagConstraints.EAST;
         JButton resetPromptButton = new JButton("恢复默认提示词");
         resetPromptButton.addActionListener(e -> {
-            activeSystemPromptArea.setText(com.ai.analyzer.Client.SystemPromptBuilder.getDefaultBasePrompt());
-            passiveSystemPromptArea.setText(com.ai.analyzer.pscan.SystemPromptBuilder.getDefaultBasePrompt());
+            activeSystemPromptArea.setText(com.ai.analyzer.core.SystemPromptBuilder.getDefaultBasePrompt());
+            passiveSystemPromptArea.setText(com.ai.analyzer.scan.pscan.SystemPromptBuilder.getDefaultBasePrompt());
         });
         panel.add(resetPromptButton, gbc);
         
@@ -1733,156 +2111,6 @@ public class AIAnalyzerTab extends JPanel {
     }
     
     /**
-     * 创建 Skills 标签页（第四个标签页）
-     * 用于管理用户自定义的技能（Skills）
-     */
-    private JPanel createSkillsTabPanel() {
-        JPanel skillsPanel = new JPanel(new BorderLayout(10, 10));
-        skillsPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-        
-        // 顶部配置面板（统一左对齐）
-        JPanel topPanel = new JPanel();
-        topPanel.setLayout(new BoxLayout(topPanel, BoxLayout.Y_AXIS));
-        topPanel.setBorder(BorderFactory.createTitledBorder("Skills 配置"));
-        
-        // 启用 Skills 复选框
-        enableSkillsCheckBox = new JCheckBox("启用 Skills（自定义技能指令）", false);
-        enableSkillsCheckBox.setToolTipText("启用后，AI 将加载并应用选中的技能指令");
-        enableSkillsCheckBox.addActionListener(e -> {
-            boolean enabled = enableSkillsCheckBox.isSelected();
-            // Skills 目录由 Workplace 自动派生，避免手动配置不一致
-            skillsDirectoryField.setEnabled(false);
-            refreshSkillsButton.setEnabled(enabled);
-            createExampleSkillButton.setEnabled(enabled);
-            skillsTable.setEnabled(enabled);
-            apiClient.setEnableSkills(enabled);
-            if (enabled) {
-                applyWorkplaceToDerivedPaths(true, true);
-            }
-        });
-        JPanel checkboxRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
-        checkboxRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-        checkboxRow.add(enableSkillsCheckBox);
-        topPanel.add(checkboxRow);
-
-        skillsDirectoryField = new JTextField("", 40);
-        skillsDirectoryField.setEnabled(false);
-        skillsDirectoryField.setEditable(false);
-        skillsDirectoryField.setToolTipText("自动使用 Workplace/skills");
-        
-        // 按钮面板
-        JPanel buttonsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
-        buttonsPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        
-        refreshSkillsButton = new JButton("刷新 Skills");
-        refreshSkillsButton.setEnabled(false);
-        refreshSkillsButton.addActionListener(e -> refreshSkills());
-        buttonsPanel.add(refreshSkillsButton);
-        
-        createExampleSkillButton = new JButton("创建示例 Skill");
-        createExampleSkillButton.setEnabled(false);
-        createExampleSkillButton.addActionListener(e -> createExampleSkill());
-        buttonsPanel.add(createExampleSkillButton);
-        
-        topPanel.add(Box.createVerticalStrut(6));
-        topPanel.add(buttonsPanel);
-        
-        skillsPanel.add(topPanel, BorderLayout.NORTH);
-        
-        // 中间分割面板：技能列表 + 预览
-        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
-        splitPane.setDividerLocation(400);
-        
-        // 左侧：Skills 列表
-        JPanel listPanel = new JPanel(new BorderLayout());
-        listPanel.setBorder(BorderFactory.createTitledBorder("已加载的 Skills"));
-        
-        String[] columnNames = {"启用", "名称", "描述"};
-        skillsTableModel = new DefaultTableModel(columnNames, 0) {
-            @Override
-            public Class<?> getColumnClass(int columnIndex) {
-                if (columnIndex == 0) return Boolean.class;
-                return String.class;
-            }
-            @Override
-            public boolean isCellEditable(int row, int column) {
-                return column == 0; // 只有"启用"列可编辑
-            }
-        };
-        skillsTable = new JTable(skillsTableModel);
-        skillsTable.setEnabled(false);
-        skillsTable.getColumnModel().getColumn(0).setMaxWidth(50);
-        skillsTable.getColumnModel().getColumn(0).setMinWidth(50);
-        skillsTable.getColumnModel().getColumn(1).setPreferredWidth(120);
-        skillsTable.getColumnModel().getColumn(2).setPreferredWidth(250);
-        
-        // 监听复选框变化
-        skillsTableModel.addTableModelListener(e -> {
-            if (e.getColumn() == 0) {
-                int row = e.getFirstRow();
-                Boolean enabled = (Boolean) skillsTableModel.getValueAt(row, 0);
-                String skillName = (String) skillsTableModel.getValueAt(row, 1);
-                apiClient.getSkillManager().setSkillEnabled(skillName, enabled);
-            }
-        });
-        
-        // 监听选择变化，更新预览
-        skillsTable.getSelectionModel().addListSelectionListener(e -> {
-            if (!e.getValueIsAdjusting()) {
-                updateSkillPreview();
-            }
-        });
-        
-        JScrollPane tableScrollPane = new JScrollPane(skillsTable);
-        listPanel.add(tableScrollPane, BorderLayout.CENTER);
-        
-        splitPane.setLeftComponent(listPanel);
-        
-        // 右侧：Skill 预览
-        JPanel previewPanel = new JPanel(new BorderLayout());
-        previewPanel.setBorder(BorderFactory.createTitledBorder("Skill 预览"));
-        
-        skillPreviewPane = new JTextPane();
-        skillPreviewPane.setEditable(false);
-        skillPreviewPane.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
-        skillPreviewPane.setBackground(new Color(250, 250, 250));
-        JScrollPane previewScrollPane = new JScrollPane(skillPreviewPane);
-        previewPanel.add(previewScrollPane, BorderLayout.CENTER);
-        
-        splitPane.setRightComponent(previewPanel);
-        
-        skillsPanel.add(splitPane, BorderLayout.CENTER);
-        
-        // 底部说明
-        JTextArea infoArea = new JTextArea();
-        infoArea.setEditable(false);
-        infoArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
-        infoArea.setBackground(new Color(245, 245, 245));
-        infoArea.setForeground(new Color(100, 100, 100));
-        infoArea.setText("Skills 使用说明：\n" +
-                        "• Skills 是用户自定义的指令集，用于指导 AI 执行特定任务\n" +
-                        "• 每个 Skill 是一个包含 SKILL.md 文件的文件夹\n" +
-                        "• SKILL.md 格式：\n" +
-                        "  ---\n" +
-                        "  name: skill-name\n" +
-                        "  description: 技能描述\n" +
-                        "  ---\n" +
-                        "  # 技能指令内容...\n" +
-                        "• 勾选技能后，其指令将被添加到 AI 的系统提示词中\n" +
-                        "• 参考: https://github.com/anthropics/skills");
-        infoArea.setLineWrap(true);
-        infoArea.setWrapStyleWord(true);
-        infoArea.setRows(6);
-        JScrollPane infoScrollPane = new JScrollPane(infoArea);
-        infoScrollPane.setBorder(BorderFactory.createTitledBorder("使用说明"));
-        infoScrollPane.setPreferredSize(new Dimension(0, 120));
-        
-        skillsPanel.add(infoScrollPane, BorderLayout.SOUTH);
-        
-        return skillsPanel;
-    }
-    
-    /**
      * 浏览并设置 Workplace 根目录
      */
     private void browseWorkplaceDirectory() {
@@ -1930,7 +2158,7 @@ public class AIAnalyzerTab extends JPanel {
     }
 
     /**
-     * 根据 Workplace 同步派生目录（skills/rag/python-workdir）到 UI 与客户端。
+     * 根据 Workplace 同步派生目录（rag/python-workdir）到 UI 与客户端。
      */
     private void applyWorkplaceToDerivedPaths(boolean pushToClients, boolean createDirs) {
         if (workplaceDirectoryField == null) return;
@@ -1938,135 +2166,37 @@ public class AIAnalyzerTab extends JPanel {
         if (workplace.isEmpty()) return;
 
         File workplaceDir = new File(workplace);
-        File skillsDir = new File(workplaceDir, "skills");
         File ragDir = new File(workplaceDir, "rag");
         File pythonDir = new File(workplaceDir, "python-workdir");
-        File notebooksDir = new File(workplaceDir, "notebooks");
         File cacheDir = new File(workplaceDir, ".cache");
+        File skillsDir = new File(workplaceDir, "skills");
 
         if (createDirs) {
             if (!workplaceDir.exists()) workplaceDir.mkdirs();
-            if (!skillsDir.exists()) skillsDir.mkdirs();
             if (!ragDir.exists()) ragDir.mkdirs();
             if (!pythonDir.exists()) pythonDir.mkdirs();
-            if (!notebooksDir.exists()) notebooksDir.mkdirs();
             if (!cacheDir.exists()) cacheDir.mkdirs();
+            if (!skillsDir.exists()) skillsDir.mkdirs();
         }
 
-        if (skillsDirectoryField != null) {
-            skillsDirectoryField.setText(skillsDir.getAbsolutePath());
-        }
         if (ragMcpDocumentsPathField != null) {
             ragMcpDocumentsPathField.setText(ragDir.getAbsolutePath());
+        }
+        if (skillsDirectoryField != null) {
+            skillsDirectoryField.setText(skillsDir.getAbsolutePath());
         }
 
         if (pushToClients) {
             apiClient.setWorkplaceDirectoryPath(workplaceDir.getAbsolutePath());
-            apiClient.setSkillsDirectoryPath(skillsDir.getAbsolutePath());
             apiClient.setRagMcpDocumentsPath(ragDir.getAbsolutePath());
+            apiClient.setSkillsDirectoryPath(skillsDir.getAbsolutePath());
+            com.ai.analyzer.util.MessageCollectionStore.setWorkplaceDirectory(workplaceDir.getAbsolutePath());
             if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
                 passiveScanManager.getApiClient().setWorkplaceDirectoryPath(workplaceDir.getAbsolutePath());
                 passiveScanManager.getApiClient().setRagMcpDocumentsPath(ragDir.getAbsolutePath());
+                passiveScanManager.getApiClient().setSkillsDirectoryPath(skillsDir.getAbsolutePath());
             }
         }
-    }
-
-    /**
-     * 刷新 Skills 列表
-     */
-    private void refreshSkills() {
-        String dirPath = skillsDirectoryField.getText().trim();
-        if (dirPath.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "请先设置 Workplace 目录", "提示", JOptionPane.WARNING_MESSAGE);
-            return;
-        }
-        
-        // 设置路径并加载
-        apiClient.setSkillsDirectoryPath(dirPath);
-        apiClient.getSkillManager().loadSkills();
-        
-        // 更新表格
-        updateSkillsTable();
-        
-        api.logging().logToOutput("Skills 已刷新，共 " + apiClient.getSkillManager().getAllSkills().size() + " 个");
-    }
-    
-    /**
-     * 更新 Skills 表格
-     */
-    private void updateSkillsTable() {
-        skillsTableModel.setRowCount(0);
-        
-        List<Skill> skills = apiClient.getSkillManager().getAllSkills();
-        for (Skill skill : skills) {
-            Object[] row = {
-                skill.isEnabled(),
-                skill.getName(),
-                skill.getShortDescription()
-            };
-            skillsTableModel.addRow(row);
-        }
-    }
-    
-    /**
-     * 更新 Skill 预览
-     */
-    private void updateSkillPreview() {
-        int selectedRow = skillsTable.getSelectedRow();
-        if (selectedRow < 0) {
-            skillPreviewPane.setText("");
-            return;
-        }
-        
-        String skillName = (String) skillsTableModel.getValueAt(selectedRow, 1);
-        Skill skill = apiClient.getSkillManager().getSkill(skillName);
-        
-        if (skill != null) {
-            StringBuilder preview = new StringBuilder();
-            preview.append("【名称】").append(skill.getName()).append("\n\n");
-            preview.append("【描述】").append(skill.getDescription()).append("\n\n");
-            preview.append("【文件路径】").append(skill.getFilePath()).append("\n\n");
-            preview.append("【指令内容】\n").append(skill.getContent());
-            skillPreviewPane.setText(preview.toString());
-            skillPreviewPane.setCaretPosition(0);
-        }
-    }
-    
-    /**
-     * 创建示例 Skill
-     */
-    private void createExampleSkill() {
-        String dirPath = skillsDirectoryField.getText().trim();
-        if (dirPath.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "请先设置 Skills 目录路径", "提示", JOptionPane.WARNING_MESSAGE);
-            return;
-        }
-        
-        // 检查目录是否存在
-        File dir = new File(dirPath);
-        if (!dir.exists()) {
-            int result = JOptionPane.showConfirmDialog(this, 
-                "目录不存在，是否创建？\n" + dirPath, 
-                "确认", JOptionPane.YES_NO_OPTION);
-            if (result == JOptionPane.YES_OPTION) {
-                if (!dir.mkdirs()) {
-                    JOptionPane.showMessageDialog(this, "创建目录失败", "错误", JOptionPane.ERROR_MESSAGE);
-                    return;
-                }
-            } else {
-                return;
-            }
-        }
-        
-        // 创建示例 Skill
-        apiClient.getSkillManager().createExampleSkill(dirPath);
-        
-        // 刷新列表
-        refreshSkills();
-        
-        JOptionPane.showMessageDialog(this, 
-            "示例 Skill 已创建！\n路径: " + dirPath + "/example-skill/SKILL.md", 
-            "成功", JOptionPane.INFORMATION_MESSAGE);
     }
 
     private JPanel createRequestListPanel() {
@@ -2568,6 +2698,8 @@ public class AIAnalyzerTab extends JPanel {
         apiClient.setModel(modelField.getText().trim());
         apiClient.setCustomParameters(customParametersField.getText().trim());
         apiClient.setMaxTokens(maxTokensField.getText().trim());
+        com.ai.analyzer.util.TokenUsageTracker.instance().setBudget(
+                parseTokenBudget(tokenBudgetField.getText()));
         apiClient.setEnableThinking(false);
         apiClient.setEnableSearch(enableSearchCheckBox.isSelected());
         
@@ -2601,14 +2733,14 @@ public class AIAnalyzerTab extends JPanel {
                 try {
                     String httpContent = "";
                     if (finalScanResult != null && finalScanResult.getRequestResponse() != null) {
-                        httpContent = com.ai.analyzer.utils.HttpFormatter.formatHttpRequestResponse(
+                        httpContent = com.ai.analyzer.util.HttpFormatter.formatHttpRequestResponse(
                             finalScanResult.getRequestResponse());
                     } else if (finalRequestData != null) {
                         httpContent = finalRequestData.getFullRequestResponse();
                     }
                     
                     final boolean httpTooLong = !httpContent.isEmpty() 
-                        && httpContent.length() > com.ai.analyzer.utils.HttpFormatter.DEFAULT_MAX_LENGTH;
+                        && httpContent.length() > com.ai.analyzer.util.HttpFormatter.DEFAULT_MAX_LENGTH;
                     final int httpOrigLen = httpContent.length();
                     
                     try {
@@ -2855,6 +2987,7 @@ public class AIAnalyzerTab extends JPanel {
             settings.setApiProvider((String) apiProviderComboBox.getSelectedItem());
             // 设置上下文预算与自定义参数
             settings.setMaxTokens(maxTokensField.getText().trim());
+            settings.setTokenBudgetTokens(parseTokenBudget(tokenBudgetField.getText()));
             settings.setCustomParameters(customParametersField.getText().trim());
             settings.setApiProfiles(apiProfiles);
             settings.setBurpMcpAuthorization(burpMcpAuthorizationField != null ? burpMcpAuthorizationField.getText().trim() : "");
@@ -2866,7 +2999,6 @@ public class AIAnalyzerTab extends JPanel {
             
             // 设置 Python 脚本执行选项
             settings.setEnablePythonScript(enablePythonScriptCheckbox != null && enablePythonScriptCheckbox.isSelected());
-            settings.setEnableNotebook(enableNotebookCheckbox != null && enableNotebookCheckbox.isSelected());
 
             // CLI 工具选项
             settings.setEnableCliTool(enableCliToolCheckBox != null && enableCliToolCheckBox.isSelected());
@@ -2882,11 +3014,18 @@ public class AIAnalyzerTab extends JPanel {
                 passiveScanManager.getApiClient().setCustomMcpConfigJson(settings.isEnableCustomMcp() ? settings.getCustomMcpConfigJson() : "");
             }
             
-            // 设置 Skills 选项
-            settings.setEnableSkills(enableSkillsCheckBox.isSelected());
-            settings.setSkillsDirectoryPath(skillsDirectoryField.getText().trim());
-            settings.setEnabledSkillNames(apiClient.getSkillManager().getEnabledSkillNames());
             settings.setWorkplaceDirectoryPath(workplaceDirectoryField != null ? workplaceDirectoryField.getText().trim() : "");
+
+            // Skills 配置
+            if (enableSkillsCheckBox != null) {
+                settings.setEnableSkills(enableSkillsCheckBox.isSelected());
+            }
+            if (skillsDirectoryField != null) {
+                settings.setSkillsDirectoryPath(skillsDirectoryField.getText().trim());
+            }
+            if (skillManager != null) {
+                settings.setEnabledSkillNames(new java.util.ArrayList<>(skillManager.getEnabledSkillNames()));
+            }
 
             // 联网搜索配置
             if (searchModeComboBox != null) {
@@ -2928,18 +3067,18 @@ public class AIAnalyzerTab extends JPanel {
             if (activeSystemPromptArea != null) {
                 String activeText = activeSystemPromptArea.getText();
                 settings.setCustomActiveSystemPrompt(
-                    activeText.strip().equals(com.ai.analyzer.Client.SystemPromptBuilder.getDefaultBasePrompt().strip()) ? null : activeText);
+                    activeText.strip().equals(com.ai.analyzer.core.SystemPromptBuilder.getDefaultBasePrompt().strip()) ? null : activeText);
             }
             if (passiveSystemPromptArea != null) {
                 String passiveText = passiveSystemPromptArea.getText();
                 settings.setCustomPassiveSystemPrompt(
-                    passiveText.strip().equals(com.ai.analyzer.pscan.SystemPromptBuilder.getDefaultBasePrompt().strip()) ? null : passiveText);
+                    passiveText.strip().equals(com.ai.analyzer.scan.pscan.SystemPromptBuilder.getDefaultBasePrompt().strip()) ? null : passiveText);
             }
             // 被动扫描过滤（与默认值相同时存空串）
             if (passiveScanSkipExtensionsArea != null) {
                 String extText = passiveScanSkipExtensionsArea.getText();
                 settings.setPassiveScanSkipExtensions(
-                    extText.strip().equals(com.ai.analyzer.pscan.PassiveScanTask.getDefaultSkipExtensionsText().strip()) ? "" : extText);
+                    extText.strip().equals(com.ai.analyzer.scan.pscan.PassiveScanTask.getDefaultSkipExtensionsText().strip()) ? "" : extText);
             }
             if (passiveScanDomainBlacklistArea != null) settings.setPassiveScanDomainBlacklist(passiveScanDomainBlacklistArea.getText());
             
@@ -2947,6 +3086,9 @@ public class AIAnalyzerTab extends JPanel {
             apiClient.setCustomSystemPrompt(settings.getCustomActiveSystemPrompt());
             if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
                 passiveScanManager.getApiClient().setCustomSystemPrompt(settings.getCustomPassiveSystemPrompt());
+                // Skills 配置同步到被动扫描客户端
+                passiveScanManager.getApiClient().setEnableSkills(settings.isEnableSkills());
+                passiveScanManager.getApiClient().setSkillsDirectoryPath(settings.resolveSkillsDirectoryPath());
             }
             // 应用被动扫描过滤规则
             applyPassiveScanFilters();
@@ -3017,6 +3159,10 @@ public class AIAnalyzerTab extends JPanel {
         setApiKeySecretAndMask(settings.getApiKey());
         modelField.setText(settings.getModel());
         maxTokensField.setText(settings.getMaxTokens());
+        if (tokenBudgetField != null) {
+            tokenBudgetField.setText(settings.getTokenBudgetTokens() > 0
+                    ? String.valueOf(settings.getTokenBudgetTokens()) : "");
+        }
         customParametersField.setText(settings.getCustomParameters());
         apiProfiles.clear();
         apiProfiles.addAll(settings.getApiProfiles());
@@ -3102,7 +3248,7 @@ public class AIAnalyzerTab extends JPanel {
             String customMcp = settings.getCustomMcpConfigJson();
             hasSavedCustomMcp = customMcp != null && !customMcp.trim().isEmpty();
             if (!hasSavedCustomMcp) {
-                customMcpConfigArea.setText(com.ai.analyzer.mcpClient.CustomMcpConfigParser.defaultConfigJson());
+                customMcpConfigArea.setText(com.ai.analyzer.agent.mcpclient.CustomMcpConfigParser.defaultConfigJson());
             } else {
                 customMcpConfigArea.setText(customMcp);
             }
@@ -3153,31 +3299,13 @@ public class AIAnalyzerTab extends JPanel {
         // apiClient.setEnableRag(settings.isEnableRag()); // 默认 RAG 暂时禁用
         // apiClient.setRagDocumentsPath(settings.getRagDocumentsPath()); // 默认 RAG 暂时禁用
         // apiClient.ensureRagInitialized(); // 默认 RAG 暂时禁用
-        
-        // Skills 配置
-        enableSkillsCheckBox.setSelected(settings.isEnableSkills());
-        String effectiveSkillsPath = settings.resolveSkillsDirectoryPath();
-        if (effectiveSkillsPath == null || effectiveSkillsPath.isEmpty()) {
-            effectiveSkillsPath = settings.getSkillsDirectoryPath();
-        }
-        skillsDirectoryField.setText(effectiveSkillsPath != null ? effectiveSkillsPath : "");
-        skillsDirectoryField.setEnabled(false);
-        refreshSkillsButton.setEnabled(settings.isEnableSkills());
-        createExampleSkillButton.setEnabled(settings.isEnableSkills());
-        skillsTable.setEnabled(settings.isEnableSkills());
-        
-        apiClient.setEnableSkills(settings.isEnableSkills());
+
         apiClient.setWorkplaceDirectoryPath(settings.getWorkplaceDirectoryPath());
-        if (effectiveSkillsPath != null && !effectiveSkillsPath.isEmpty()) {
-            apiClient.setSkillsDirectoryPath(effectiveSkillsPath);
-            apiClient.getSkillManager().loadSkills();
-            // 恢复已启用的 skills
-            if (settings.getEnabledSkillNames() != null) {
-                apiClient.getSkillManager().setEnabledSkillNames(settings.getEnabledSkillNames());
-            }
-            updateSkillsTable();
-        }
         applyWorkplaceToDerivedPaths(true, true);
+        // apiClient.setRagDocumentsPath(settings.getRagDocumentsPath()); // 默认 RAG 暂时禁用
+        // apiClient.ensureRagInitialized(); // 默认 RAG 暂时禁用
+        
+        apiClient.setWorkplaceDirectoryPath(settings.getWorkplaceDirectoryPath());
         
         // 前置扫描器配置
         if (enablePreScanCheckbox != null) {
@@ -3196,10 +3324,26 @@ public class AIAnalyzerTab extends JPanel {
             enablePythonScriptCheckbox.setSelected(settings.isEnablePythonScript());
             apiClient.setEnablePythonScript(settings.isEnablePythonScript());
         }
-        if (enableNotebookCheckbox != null) {
-            enableNotebookCheckbox.setSelected(settings.isEnableNotebook());
-            apiClient.setEnableNotebook(settings.isEnableNotebook());
+
+        // Skills 配置
+        if (enableSkillsCheckBox != null) {
+            enableSkillsCheckBox.setSelected(settings.isEnableSkills());
+            apiClient.setEnableSkills(settings.isEnableSkills());
         }
+        if (skillsDirectoryField != null) {
+            settings.getSkillsDirectoryPath(); // 触发 resolveUnderWorkplace
+            // 如果 workplace 设置了，skills 目录会自动推导
+            if (settings.hasWorkplaceDirectory()) {
+                skillsDirectoryField.setText(settings.resolveSkillsDirectoryPath());
+            } else if (!settings.getSkillsDirectoryPath().isEmpty()) {
+                skillsDirectoryField.setText(settings.getSkillsDirectoryPath());
+            }
+        }
+        if (skillManager != null) {
+            skillManager.setSkillsDirectoryPath(settings.resolveSkillsDirectoryPath());
+            skillManager.setEnabledSkillNames(new java.util.HashSet<>(settings.getEnabledSkillNames()));
+        }
+        apiClient.setSkillsDirectoryPath(settings.resolveSkillsDirectoryPath());
 
         // CLI 工具配置
         if (enableCliToolCheckBox != null) {
@@ -3228,8 +3372,11 @@ public class AIAnalyzerTab extends JPanel {
         apiClient.setCustomSystemPrompt(settings.getCustomActiveSystemPrompt());
         if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
             passiveScanManager.getApiClient().setCustomSystemPrompt(settings.getCustomPassiveSystemPrompt());
+            // Skills 配置同步到被动扫描客户端
+            passiveScanManager.getApiClient().setEnableSkills(settings.isEnableSkills());
+            passiveScanManager.getApiClient().setSkillsDirectoryPath(settings.resolveSkillsDirectoryPath());
         }
-        
+
         // 被动扫描过滤配置
         if (passiveScanSkipExtensionsArea != null) passiveScanSkipExtensionsArea.setText(settings.getPassiveScanSkipExtensions());
         if (passiveScanDomainBlacklistArea != null) passiveScanDomainBlacklistArea.setText(settings.getPassiveScanDomainBlacklist());

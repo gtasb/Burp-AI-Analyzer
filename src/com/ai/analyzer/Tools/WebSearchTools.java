@@ -1,28 +1,31 @@
-package com.ai.analyzer.Tools;
+package com.ai.analyzer.tools;
 
-import dev.langchain4j.agent.tool.P;
-import dev.langchain4j.agent.tool.Tool;
-import dev.langchain4j.web.search.WebSearchEngine;
-import dev.langchain4j.web.search.WebSearchRequest;
-import dev.langchain4j.web.search.WebSearchResults;
-import dev.langchain4j.web.search.tavily.TavilyWebSearchEngine;
-import dev.langchain4j.web.search.google.customsearch.GoogleCustomWebSearchEngine;
-import dev.langchain4j.community.web.search.duckduckgo.DuckDuckGoWebSearchEngine;
-import com.ai.analyzer.utils.ArtifactCache;
+import com.ai.analyzer.util.ArtifactCache;
+import com.ai.analyzer.util.PromptInjectionGuard;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import io.agentscope.core.tool.Tool;
+import io.agentscope.core.tool.ToolParam;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 public class WebSearchTools {
     private static final int MAX_FETCH_BYTES = 512 * 1024;
@@ -38,31 +41,24 @@ public class WebSearchTools {
             .followRedirects(HttpClient.Redirect.NORMAL)
             .build();
 
-    private final WebSearchEngine searchEngine;
+    /** 支持的搜索后端 */
+    private enum SearchEngine { TAVILY, GOOGLE, DUCKDUCKGO }
+
+    private final SearchEngine engine;
+    private final String apiKey;
+    private final String baseUrl; // Tavily 自定义端点（代理等场景）
+    private final String csi;     // Google Custom Search Engine ID
 
     public static WebSearchTools tavily(String apiKey, String baseUrl) {
-        var builder = TavilyWebSearchEngine.builder()
-                .apiKey(apiKey)
-                .includeAnswer(true)
-                .timeout(Duration.ofSeconds(30));
-        if (baseUrl != null && !baseUrl.trim().isEmpty()) {
-            builder.baseUrl(baseUrl.trim());
-        }
-        return new WebSearchTools(builder.build());
+        return new WebSearchTools(SearchEngine.TAVILY, apiKey, baseUrl, null);
     }
 
     public static WebSearchTools google(String apiKey, String csi) {
-        return new WebSearchTools(GoogleCustomWebSearchEngine.builder()
-                .apiKey(apiKey)
-                .csi(csi)
-                .timeout(Duration.ofSeconds(30))
-                .build());
+        return new WebSearchTools(SearchEngine.GOOGLE, apiKey, null, csi);
     }
 
     public static WebSearchTools duckDuckGo() {
-        return new WebSearchTools(DuckDuckGoWebSearchEngine.builder()
-                .duration(Duration.ofSeconds(30))
-                .build());
+        return new WebSearchTools(SearchEngine.DUCKDUCKGO, null, null, null);
     }
 
     public WebSearchTools(String apiKey) {
@@ -70,67 +66,40 @@ public class WebSearchTools {
     }
 
     public WebSearchTools(String apiKey, String baseUrl) {
-        this(buildTavily(apiKey, baseUrl));
+        this(SearchEngine.TAVILY, apiKey, baseUrl, null);
     }
 
-    private WebSearchTools(WebSearchEngine engine) {
-        this.searchEngine = engine;
+    private WebSearchTools(SearchEngine engine, String apiKey, String baseUrl, String csi) {
+        this.engine = engine;
+        this.apiKey = apiKey;
+        this.baseUrl = baseUrl;
+        this.csi = csi;
     }
 
-    private static WebSearchEngine buildTavily(String apiKey, String baseUrl) {
-        var builder = TavilyWebSearchEngine.builder()
-                .apiKey(apiKey)
-                .includeAnswer(true)
-                .timeout(Duration.ofSeconds(30));
-        if (baseUrl != null && !baseUrl.trim().isEmpty()) {
-            builder.baseUrl(baseUrl.trim());
-        }
-        return builder.build();
-    }
-
-    @Tool(name = "web_search", value = {
-            "在互联网上搜索信息，用于查询最新漏洞(CVE)、技术文档、安全公告、资产信息等。",
-            "参数 query 为搜索关键词或自然语言问题。",
-            "返回结果包含引擎提供的直接答案（如果有）以及若干条网页摘要和链接。",
-            "若需要查看某条链接的完整内容，可继续调用 fetch_url。"
-    })
-    public String searchWeb(@P("搜索关键词或自然语言问题") String query) {
+    @Tool(name = "web_search", description =
+            "在互联网上搜索信息，用于查询最新漏洞(CVE)、技术文档、安全公告、资产信息等。"
+            + "参数 query 为搜索关键词或自然语言问题。"
+            + "返回结果包含引擎提供的直接答案（如果有）以及若干条网页摘要和链接。"
+            + "若需要查看某条链接的完整内容，可继续调用 fetch_url。")
+    public String searchWeb(@ToolParam(name = "query", description = "搜索关键词或自然语言问题") String query) {
         if (query == null || query.trim().isEmpty()) {
             return "搜索失败: query 不能为空，请提供搜索关键词或自然语言问题。";
         }
-
-        WebSearchRequest request = WebSearchRequest.builder()
-                .searchTerms(query.trim())
-                .maxResults(5)
-                .build();
+        String q = query.trim();
 
         // 对不稳定搜索引擎进行 2 次重试
         Exception lastError = null;
         for (int attempt = 0; attempt < 2; attempt++) {
             try {
-                WebSearchResults results = searchEngine.search(request);
-                if (results == null || results.results() == null || results.results().isEmpty()) {
+                String text = switch (engine) {
+                    case TAVILY -> searchTavily(q);
+                    case GOOGLE -> searchGoogle(q);
+                    case DUCKDUCKGO -> searchDuckDuckGo(q);
+                };
+                if (text == null) {
                     return "未找到相关搜索结果，可尝试换用更具体的关键词。";
                 }
-
-                StringBuilder sb = new StringBuilder();
-                // Tavily 等引擎可能提供直接答案，优先展示给 LLM
-                String answer = extractAnswer(results);
-                if (answer != null && !answer.trim().isEmpty()) {
-                    sb.append("【搜索直接答案】\n").append(answer.trim()).append("\n\n");
-                }
-
-                sb.append("【相关网页】\n");
-                int idx = 1;
-                for (var r : results.results()) {
-                    sb.append("[").append(idx++).append("] ");
-                    if (r.title() != null) sb.append(r.title()).append("\n");
-                    if (r.url() != null) sb.append("URL: ").append(r.url()).append("\n");
-                    if (r.snippet() != null) sb.append(r.snippet().trim()).append("\n");
-                    sb.append("\n");
-                }
-                sb.append("如需阅读某条链接的完整正文，请调用 fetch_url(url=\"...\")。");
-                return sb.toString().trim();
+                return text;
             } catch (Exception e) {
                 lastError = e;
                 if (attempt == 0) {
@@ -146,24 +115,172 @@ public class WebSearchTools {
     }
 
     /**
-     * 尝试从搜索结果中提取引擎提供的直接答案(Tavily 的 answer 字段在反射中)。
+     * Tavily REST API：POST /search，自带直接答案字段。
      */
-    private static String extractAnswer(WebSearchResults results) {
-        try {
-            java.lang.reflect.Method m = results.getClass().getMethod("answer");
-            Object ans = m.invoke(results);
-            return ans == null ? null : ans.toString();
-        } catch (Exception ignored) {
-            return null;
+    private String searchTavily(String query) throws Exception {
+        if (apiKey == null || apiKey.isEmpty()) {
+            throw new IOException("Tavily API Key 未配置");
         }
+        String endpoint = (baseUrl != null && !baseUrl.trim().isEmpty() ? baseUrl.trim() : "https://api.tavily.com") + "/search";
+        String body = "{\"api_key\":\"" + escapeJson(apiKey) + "\",\"query\":\"" + escapeJson(query)
+                + "\",\"max_results\":5,\"include_answer\":true}";
+
+        HttpRequest req = HttpRequest.newBuilder(URI.create(endpoint))
+                .timeout(Duration.ofSeconds(30))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+                .build();
+        HttpResponse<String> resp = FETCH_HTTP.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        if (resp.statusCode() != 200) {
+            throw new IOException("Tavily 搜索失败: HTTP " + resp.statusCode());
+        }
+
+        JsonObject root = JsonParser.parseString(resp.body()).getAsJsonObject();
+        StringBuilder sb = new StringBuilder();
+        if (root.has("answer")) {
+            String answer = root.get("answer").getAsString().trim();
+            if (!answer.isEmpty()) {
+                sb.append("【搜索直接答案】\n").append(answer).append("\n\n");
+            }
+        }
+        sb.append("【相关网页】\n");
+        JsonArray results = root.has("results") ? root.getAsJsonArray("results") : new JsonArray();
+        if (results.isEmpty()) return null;
+
+        int idx = 1;
+        for (JsonElement el : results) {
+            JsonObject r = el.getAsJsonObject();
+            sb.append("[").append(idx++).append("] ");
+            if (r.has("title") && !r.get("title").isJsonNull()) sb.append(r.get("title").getAsString()).append("\n");
+            if (r.has("url") && !r.get("url").isJsonNull()) sb.append("URL: ").append(r.get("url").getAsString()).append("\n");
+            if (r.has("content") && !r.get("content").isJsonNull()) {
+                String c = r.get("content").getAsString().trim();
+                if (!c.isEmpty()) sb.append(c).append("\n");
+            }
+            sb.append("\n");
+        }
+        sb.append("如需阅读某条链接的完整正文，请调用 fetch_url(url=\"...\")。");
+        return sb.toString().trim();
     }
 
-    @Tool(name = "fetch_url", value = {
-            "GET 抓取指定 URL 的正文内容（用于阅读搜索结果中的网页详情）。",
-            "仅支持 http/https；返回纯文本（HTML 会剥离标签）。内容过长会自动截断并缓存。",
-            "典型用法：web_search 得到链接后，用本工具读取 CVE 详情页、公告正文等。"
-    })
-    public String fetchUrl(@P("完整的 http 或 https URL") String url) {
+    /**
+     * Google Custom Search JSON API：GET /customsearch/v1。
+     */
+    private String searchGoogle(String query) throws Exception {
+        if (apiKey == null || apiKey.isEmpty() || csi == null || csi.isEmpty()) {
+            throw new IOException("Google 搜索 API Key / CX 未配置");
+        }
+        String url = "https://www.googleapis.com/customsearch/v1?key=" + urlEncode(apiKey)
+                + "&cx=" + urlEncode(csi)
+                + "&q=" + urlEncode(query)
+                + "&num=5";
+
+        HttpRequest req = HttpRequest.newBuilder(URI.create(url))
+                .timeout(Duration.ofSeconds(30))
+                .GET()
+                .build();
+        HttpResponse<String> resp = FETCH_HTTP.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        if (resp.statusCode() != 200) {
+            throw new IOException("Google 搜索失败: HTTP " + resp.statusCode());
+        }
+
+        JsonObject root = JsonParser.parseString(resp.body()).getAsJsonObject();
+        if (!root.has("items")) return null;
+
+        StringBuilder sb = new StringBuilder("【相关网页】\n");
+        JsonArray items = root.getAsJsonArray("items");
+        int idx = 1;
+        for (JsonElement el : items) {
+            JsonObject item = el.getAsJsonObject();
+            sb.append("[").append(idx++).append("] ");
+            if (item.has("title")) sb.append(item.get("title").getAsString()).append("\n");
+            if (item.has("link")) sb.append("URL: ").append(item.get("link").getAsString()).append("\n");
+            if (item.has("snippet")) sb.append(item.get("snippet").getAsString().trim()).append("\n");
+            sb.append("\n");
+        }
+        sb.append("如需阅读某条链接的完整正文，请调用 fetch_url(url=\"...\")。");
+        return sb.toString().trim();
+    }
+
+    /**
+     * DuckDuckGo HTML 端点：解析 result__a / result__snippet。
+     */
+    private String searchDuckDuckGo(String query) throws Exception {
+        String url = "https://html.duckduckgo.com/html/?q=" + urlEncode(query);
+
+        HttpRequest req = HttpRequest.newBuilder(URI.create(url))
+                .timeout(Duration.ofSeconds(30))
+                .header("User-Agent", FETCH_UA)
+                .header("Accept", "text/html")
+                .GET()
+                .build();
+        HttpResponse<String> resp = FETCH_HTTP.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        if (resp.statusCode() != 200) {
+            throw new IOException("DuckDuckGo 搜索失败: HTTP " + resp.statusCode());
+        }
+        String html = resp.body();
+
+        List<String[]> items = new ArrayList<>();
+        Matcher linkM = Pattern.compile("class=\"result__a\"[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>", Pattern.DOTALL).matcher(html);
+        while (linkM.find() && items.size() < 5) {
+            items.add(new String[]{extractDdgHref(linkM.group(1)), stripHtmlTags(linkM.group(2))});
+        }
+        if (items.isEmpty()) return null;
+
+        Matcher snipM = Pattern.compile("class=\"result__snippet\"[^>]*>(.*?)</a>", Pattern.DOTALL).matcher(html);
+        List<String> snippets = new ArrayList<>();
+        while (snipM.find() && snippets.size() < 5) {
+            snippets.add(stripHtmlTags(snipM.group(1)).trim());
+        }
+
+        StringBuilder sb = new StringBuilder("【相关网页】\n");
+        for (int i = 0; i < items.size(); i++) {
+            sb.append("[").append(i + 1).append("] ").append(items.get(i)[1]).append("\n");
+            sb.append("URL: ").append(items.get(i)[0]).append("\n");
+            if (i < snippets.size() && !snippets.get(i).isEmpty()) {
+                sb.append(snippets.get(i)).append("\n");
+            }
+            sb.append("\n");
+        }
+        sb.append("如需阅读某条链接的完整正文，请调用 fetch_url(url=\"...\")。");
+        return sb.toString().trim();
+    }
+
+    /**
+     * 从 DDG 的 /l/?uddg= 跳转链接中还原真实 URL。
+     */
+    private static String extractDdgHref(String href) {
+        int i = href.indexOf("uddg=");
+        if (i >= 0) {
+            int j = href.indexOf('&', i);
+            String enc = j < 0 ? href.substring(i + 5) : href.substring(i + 5, j);
+            try {
+                return URLDecoder.decode(enc, StandardCharsets.UTF_8);
+            } catch (Exception ignored) {
+                // fall through
+            }
+        }
+        return href.replace("&amp;", "&");
+    }
+
+    private static String stripHtmlTags(String s) {
+        if (s == null) return "";
+        return decodeBasicEntities(s.replaceAll("<[^>]+>", "").replace("&amp;", "&"));
+    }
+
+    private static String escapeJson(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private static String urlEncode(String s) throws Exception {
+        return URLEncoder.encode(s, StandardCharsets.UTF_8).replace("+", "%20");
+    }
+
+    @Tool(name = "fetch_url", description =
+            "GET 抓取指定 URL 的正文内容（用于阅读搜索结果中的网页详情）。"
+            + "仅支持 http/https；返回纯文本（HTML 会剥离标签）。内容过长会自动截断并缓存。"
+            + "典型用法：web_search 得到链接后，用本工具读取 CVE 详情页、公告正文等。")
+    public String fetchUrl(@ToolParam(name = "url", description = "完整的 http 或 https URL") String url) {
         if (url == null || url.trim().isEmpty()) {
             return "抓取失败: URL 不能为空，请提供完整的 http/https URL。";
         }
@@ -232,6 +349,8 @@ public class WebSearchTools {
             }
 
             text = normalizeWs(text);
+            // 提示注入防护：网页内容为不可信外部数据，进入 LLM 上下文前检测并包裹警告标记
+            text = PromptInjectionGuard.guard(text);
             String header = "[来源] " + uri + "\n[HTTP " + status + "]\n\n";
             int fullLen = text.length();
             if (fullLen == 0) {

@@ -1,37 +1,65 @@
-# AI漏洞分析助手 - Burp Suite插件 🎯
+# Burp AI Analyzer — 智能渗透测试助手
 
-> 🚀 让AI成为你的安全测试助手！基于 LangChain4j + 通义千问 + MCP 协议的智能渗透测试工具
+> 基于 **AgentScope Java 2.0** + **HarnessAgent** + **MCP 协议**的 Burp Suite 插件，让 AI 成为你的渗透测试搭档。
 
 ![图片描述](img/2.png "图片title")
 
-## 重构计划
+## 架构
 
-当前插件使用langchain4j作为agent框架，已逐渐落后于主流架构，预计未来使用Agentscope2java重构，敬请期待。
+```
+┌─────────────────────────────────────────────────────┐
+│                    Burp Suite UI                     │
+│  AI分析标签页 · 侧栏 · 被动扫描 · 配置 · Skills · Debug │
+├─────────────────────────────────────────────────────┤
+│                 AgentScopeAgentRuntime               │
+│  ┌───────────────────────────────────────────────┐  │
+│  │              HarnessAgent                      │  │
+│  │  ┌─────────┐ ┌────────┐ ┌──────────────────┐  │  │
+│  │  │ Memory  │ │ Skills │ │ SubAgent (动态)   │  │  │
+│  │  │ 持久记忆 │ │ 自动注入│ │ spawn_subagent   │  │  │
+│  │  └─────────┘ └────────┘ └──────────────────┘  │  │
+│  │  ┌─────────┐ ┌──────────────────────────────┐  │  │
+│  │  │Compact  │ │ ToolResultEviction (16KB)     │  │  │
+│  │  │30msg→10 │ │ 大结果自动卸载到磁盘           │  │  │
+│  │  └─────────┘ └──────────────────────────────┘  │  │
+│  └───────────────────────────────────────────────┘  │
+├─────────────────────────────────────────────────────┤
+│                    Toolkit                           │
+│  BurpExtTools · Burp MCP · ShellCommand · ReadFile │
+│  WebSearch · Skills · MCP                          │
+└─────────────────────────────────────────────────────┘
+```
 
 ## ✨ 功能特性
 
 ### 🤖 AI 智能分析
-- **流式输出** - 实时显示 AI 分析过程，体验流畅
-- **联网搜索** - 支持统一在「配置 → 联网搜索」中管理搜索能力与搜索引擎
-- **上下文记忆** - 支持多轮对话，AI 记住之前的分析内容
+- **流式输出** — 实时显示 AI 思考和分析过程
+- **联网搜索** — Tavily / Google / DuckDuckGo 多引擎支持
+- **持久记忆** — HarnessAgent 跨会话记忆，分析结果自动积累
+- **上下文压缩** — 长对话自动压缩，防止 token 超限
 
-### 🔧 Python 执行工具
-- **脚本执行** 允许大模型执行自定义python脚本
-
-### 🔧 MCP 工具调用
-- **Burp MCP** - 直接操控 Burp Suite，自动发送请求、创建 Repeater 标签页
-- **RAG MCP** - 接入本地知识库，结合安全文档进行分析
-- **Chrome MCP** - 控制浏览器进行自动化测试（规划中）
+### 🔧 Agent 工具
+- **Burp 原生操控** — `create_repeater_tab`、`send_to_intruder`（AI 自动标记参数并注入 payloads）
+- **Burp MCP** — `http_send_request` / `http_send_requests_parallel` / `http_fuzz` / `http_race` 等（需启用 Burp MCP 工具调用）
+- **Shell 执行** — AgentScope `ShellCommandTool`，Python 脚本、CLI 工具
+- **文件系统** — `ReadFileTool` / `WriteFileTool`，访问知识库文档
+- **联网搜索** — `web_search` / `fetch_url`（Tavily / Google / DuckDuckGo）
 
 ### 🎯 Skills 自定义技能
-- **自定义指令** - 创建专属技能指导 AI 行为
-- **可执行工具** - 定义本地命令/工具，让 AI 自动调用（如 nmap、sqlmap 等）
-- **参数模板** - 灵活的参数配置，AI 智能填充
+- **HarnessAgent 自动注入** — `workspace/skills/` 下的 `SKILL.md` 自动加载到系统提示词
+- **`load_skill_through_path`** — Agent 按需加载技能指令
+- **四层优先级** — 全局目录 → 市场仓库 → 工作区共享 → 用户个人
+- **可执行脚本** — 技能自带脚本，通过 `execute_shell_command` 运行
+
+### 🧩 动态子代理
+- **`spawn_subagent`** — 主 Agent 可以随时创建临时子代理
+- **并行处理** — 信息收集、漏洞分析、批量扫描同时进行
+- **继承工具链** — 子代理自动继承父代理的 Model 和 Toolkit
 
 ### 📊 专业渲染
-- **Markdown 渲染** - 支持标题、列表、代码块、链接等格式
-- **工具执行可视化** - 清晰展示 AI 调用了哪些工具、传入了什么参数
-- **语法高亮** - 代码块使用深色主题，便于阅读
+- **Markdown 渲染** — 标题、列表、代码块、链接
+- **工具执行可视化** — 清晰展示工具调用、参数、结果
+- **语法高亮** — 深色主题代码块
 
 ## 🛠️ 技术栈
 
@@ -39,248 +67,204 @@
 |------|------|
 | 运行环境 | Java 21 (LTS) |
 | Burp API | Montoya API |
-| AI 框架 | LangChain4j |
-| 大模型 | 通义千问 (qwen-max) |
+| AI 框架 | **AgentScope Java 2.0** |
+| Agent 引擎 | **HarnessAgent**（workspace + memory + skills + subagent） |
+| 大模型 | 通义千问 (qwen-max) / OpenAI 兼容 / Anthropic 兼容 |
 | 工具协议 | Model Context Protocol (MCP) |
-| RAG | rag-mcp-server |
-| Skills | Anthropic Agent Skills 规范 |
+| Web Search | Tavily / Google Custom Search / DuckDuckGo |
+| Skills | AgentScope FileSystemSkillRepository（Anthropic Agent Skills 兼容） |
 | GUI | Swing |
 
 ## 📦 快速开始
 
-### 1. 编译插件
+### 1. 编译
 
 ```bash
 mvn clean package
 ```
 
-编译完成后，在 `target` 目录下生成类似以下产物：
-
-- `ai-analyzer-1.4.0.jar`
-- `ai-analyzer-1.4.0-jar-with-dependencies.jar`
+产物：`target/ai-analyzer-1.4.0-jar-with-dependencies.jar`
 
 ### 2. 加载到 Burp Suite
 
-1. 打开 Burp Suite
-2. 进入 `Extensions` → `Installed`
-3. 点击 `Add` → 选择 `Java` 类型
-4. 选择编译好的 jar 文件
-5. 点击 `Next` 完成加载
+1. `Extensions` → `Installed` → `Add` → 选择 `Java` 类型
+2. 选择编译好的 jar 文件
+3. 点击 `Next` 完成
 
 ### 3. 配置 API
 
-1. 在 Burp 中找到 `AI分析` 标签页
-2. 填写配置：
-   - **API Key**: 你的百炼 API Key
-   - **模型**: 默认 `qwen-max`
-   - **支持自定义 API**: 你也可以使用 openai 兼容格式接口，以支持更多模型
+在 **AI分析** 标签页 → **配置** 子标签：
 
-### 4. 使用教程
+- **API 提供者** — DashScope / OpenAI 兼容 / Anthropic 兼容
+- **API Key** — 你的 API Key
+- **模型** — 默认 `qwen-max`
+- **工作区目录** — 统一管理 skills / 知识库 / Python 脚本
+
+### 4. 使用
 
 ![图片描述](img/3.png "图片title")
 
-#### 方式一：主动分析（请求分析标签页）
+#### 主动分析（聊天式交互）
 
-1. 在 **Proxy / Repeater / Target** 等任意 HTTP 请求处右键
-2. 选择 **「发送到AI分析」**，请求会出现在左侧请求列表
-3. 在右侧选中该请求，可查看 HTTP 请求/响应
-4. 在底部「分析提示词」输入框填写或修改提示（默认：请分析这个请求中可能存在的安全漏洞）
-5. 点击 **「开始分析」**，AI 将流式输出分析结果
-6. 如需联网能力，请前往 **配置 → 联网搜索** 中统一开启并配置搜索方式
+1. 在 Proxy / Repeater / Target 右键 → **发送到AI分析**
+2. 在底部输入框提问或使用默认提示词
+3. 点击 **开始分析**，AI 流式输出结果
+4. 支持多轮对话，Agent 记住上下文
 
-#### 方式二：AI 侧栏实时对话（推荐）
+#### 侧栏实时对话
 
-1. 在 **Proxy** 或 **Repeater** 中打开任意请求
-2. 在请求/响应编辑器下方找到 **「AI助手」** 标签页（侧栏），在响应的编辑器中打开侧栏（如果在请求的编辑器中打开，大模型只会看到请求的内容）
-3. 侧栏会自动加载当前请求的上下文
-4. 在输入框直接提问，例如：
-   - 「分析这个请求的安全风险」
-   - 「是否存在 SQL 注入可能？」
-   - 「帮我构造一个 XSS payload 测试」
-5. 支持多轮对话，AI 会记住上下文
-6. 是否允许联网搜索由 **配置 → 联网搜索** 统一控制，侧栏不再单独提供该开关
-（目前存在一个小 bug ，启动 BP 后第一次运行插件时，会出现侧栏被重置的情况）
+1. 在 Proxy / Repeater 中打开请求
+2. 在响应编辑器下方找到 **AI助手** 侧栏
+3. 直接提问，侧栏自动加载当前请求上下文
 
-#### 方式三：被动扫描（批量分析）
+#### 被动扫描（批量分析）
 
-1. 在 **AI分析** 标签页 → **请求分析** 子标签
-2. 勾选 **「启用被动扫描」**，设置线程数（默认 5）
-3. 点击 **「开始扫描」**
-4. 插件会从 **HTTP History** 自动获取流量并交给 AI 分析
-5. 扫描结果按风险等级（严重/高/中/低/信息）展示在表格中
-6. 点击某行可查看该请求的详细分析与 HTTP 内容
+1. **请求分析** 子标签 → 勾选 **启用被动扫描**
+2. 设置线程数，点击 **开始扫描**
+3. Agent 从 HTTP History 获取流量自动分析
+4. 结果按风险等级展示在表格中
 
-#### 其他功能入口
+## 🎯 Skills 技能系统
 
-| 功能 | 入口 |
-|------|------|
-| API / MCP / 知识库配置 | **配置** 标签页 |
-| 联网搜索开关与搜索引擎配置 | **配置 → 联网搜索** |
-| 自定义 Skills（指令 + 工具） | **Skills** 标签页 |
-| Python 脚本执行 | 配置 → 启用 Python 脚本执行 |
-| Burp MCP 工具调用 | 配置 → 启用 Burp MCP 工具 |
+Skills 使用 AgentScope 的 `FileSystemSkillRepository` + `HarnessAgent` 自动注入。
 
-## RAG MCP （目前更建议使用直接查找或skills）
+### 目录结构
 
-RAG MCP 是一个本地知识库，用于存储和检索安全文档。
-
-1. 安装RAG MCP Server
-
-使用uvx（推荐）
-```bash
-# Install with uvx (comes with uv)
-uvx rag-mcp
 ```
-
-使用pip（需要配置好环境变量）
-```bash
-pip install rag-mcp
+workspace/
+├── skills/                  # 共享技能（HarnessAgent 自动加载）
+│   ├── sql-injection/
+│   │   └── SKILL.md
+│   ├── xss-tester/
+│   │   └── SKILL.md
+│   └── nmap-scanner/
+│       ├── SKILL.md
+│       └── scripts/
+│           └── scan.sh
+├── AGENTS.md                # Agent 人格定义
+├── MEMORY.md                # 长期记忆
+└── knowledge/               # 领域知识
 ```
-
-2. 配置 RAG MCP
-
-文档我们用的是PayloadsAllTheThings
-
-## 🎯 Skills 自定义技能
-
-Skills 是用户自定义的技能系统，参考 [Anthropic Agent Skills](https://github.com/anthropics/skills) 规范实现。
-
-### Skills 能做什么？
-
-1. **自定义指令** - 创建专属的 AI 行为指导，如「SQL注入测试专家」「代码审计助手」
-2. **可执行工具** - 定义本地命令行工具，AI 在需要时自动调用（如 nmap、sqlmap、nuclei 等）
-3. **参数化执行** - 支持参数模板，AI 根据上下文智能填充参数
-
-### 快速开始
-
-1. 在插件的 **Skills** 标签页中启用 Skills 功能
-2. 设置 Skills 目录路径（存放 SKILL.md 文件的目录）
-3. 点击「创建示例 Skill」生成示例文件
-4. 勾选启用想要使用的技能
 
 ### SKILL.md 格式
 
-每个技能是一个文件夹，包含一个 `SKILL.md` 文件：
+```markdown
+---
+description: Use when testing for SQL injection vulnerabilities
+tools:
+  - name: sqlmap
+    description: Run sqlmap against a target URL
+    command: sqlmap
+    args: -u {url} --batch
+    timeout: 300
+---
 
-```
-skills/
-├── sql-injection-tester/
-│   └── SKILL.md
-├── network-scanner/
-│   └── SKILL.md
-└── code-auditor/
-    └── SKILL.md
-```
+# SQL Injection Tester
 
-### 安全注意事项
-
-- ⚠️ 工具执行有超时限制（默认 120 秒）
-- ⚠️ 输出大小限制（100KB）
-- ⚠️ 仅对授权目标进行测试
-- ⚠️ 确保工具路径正确且有执行权限
-
-## 🔗 获取 API Key
-
-1. 访问 [阿里云 DashScope 控制台](https://dashscope.console.aliyun.com/)
-2. 登录/注册阿里云账号
-3. 开通 DashScope 服务
-4. 创建 API Key 并复制
-
-## 🌟 使用示例
-
-### MCP 自动化测试
-```
-提示词：获取最近的代理历史记录，分析安全风险
-
-AI 执行：
-▶ get_proxy_http_history
-   count=10
-   
-分析结果：发现敏感信息泄露...
+1. Identify injection points in the target URL
+2. Run `sqlmap` tool with the target URL
+3. Analyze results and report findings
 ```
 
-## ⚙️ 高级配置
+### 管理方式
 
-### MCP 工具配置
+- **Skills 标签页** — 启用/禁用、预览、创建示例
+- **工作区目录** — 统一管理所有 Skills 文件
+- **HarnessAgent** — 自动扫描并注入到系统提示词
+
+## 🔗 MCP 工具
+
+| MCP 服务 | 说明 | 配置 |
+|----------|------|------|
+| **Burp MCP** | 操控 Burp Suite（HTTP 请求、Repeater、Intruder） | `http://127.0.0.1:9876/` |
+| **RAG MCP** | 本地知识库检索（PayloadsAllTheThings 等） | 文档路径 |
+| **Chrome MCP** | 浏览器自动化测试 | MCP 地址 |
+| **自定义 MCP** | 任意 MCP 服务器（SSE/StreamableHTTP/STDIO/WebSocket） | JSON 配置 |
+
+## ⚙️ 配置参考
+
+### API 配置
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
-| 启用 Burp MCP | 允许 AI 操控 Burp Suite | 关闭 |
+| API 提供者 | DashScope / OpenAI 兼容 / Anthropic 兼容 | DashScope |
+| API URL | API 端点地址 | `https://dashscope.aliyuncs.com/api/v1` |
+| API Key | 认证密钥 | - |
+| 模型 | 模型名称 | `qwen-max` |
+| 最大 Token | 响应长度限制 | - |
+
+### 联网搜索
+
+| 配置项 | 说明 |
+|--------|------|
+| 搜索方式 | 模型内置搜索 / Tavily / Google / DuckDuckGo |
+| Tavily API Key | Tavily 搜索引擎密钥 |
+| Google API Key + CSE ID | Google Custom Search 配置 |
+
+### MCP 工具
+
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| 启用 Burp MCP | 允许 AI 操控 Burp | 关闭 |
 | Burp MCP 地址 | MCP 服务器地址 | `http://127.0.0.1:9876/` |
 | 启用 RAG MCP | 接入本地知识库 | 关闭 |
-| RAG 文档路径 | 知识库文档目录 | - |
+| RAG 文档路径 | 知识库目录 | 工作区/rag |
+| 启用 Chrome MCP | 浏览器自动化 | 关闭 |
 
-### Skills 配置
+### Skills
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
-| 启用 Skills | 允许使用自定义技能 | 关闭 |
-| Skills 目录 | 存放 SKILL.md 的目录 | - |
-
-### 联网搜索参数
-
-| 参数 | 说明 |
-|------|------|
-| 启用网络搜索 | 统一控制是否允许 AI 使用联网搜索 |
-| 搜索方式 | 支持模型内置搜索、Tavily、Google Custom Search、DuckDuckGo |
-| Tavily API Key / Base URL | Tavily 搜索引擎配置 |
-| Google API Key / CSE ID | Google Custom Search 配置 |
+| 启用 Skills | 自动加载 workspace/skills/ | 关闭 |
+| Skills 目录 | SKILL.md 存放目录 | 工作区/skills |
 
 ## 📋 环境要求
 
-- Java 21 或更高版本
-- Burp Suite Professional Edition
-- 通义千问 API Key
+- **Java 21** 或更高版本
+- **Burp Suite Professional** Edition
+- **API Key** — 通义千问 / OpenAI / Anthropic
 
-## 🔨 开发构建
+## 🔨 开发
 
 ```bash
-# Maven 构建
+# 编译
 mvn clean package
-```
 
-推荐在 Burp Suite 中加载：
+# 运行测试
+mvn test
 
-```text
-target/ai-analyzer-1.4.0-jar-with-dependencies.jar
+# 加载到 Burp
+# target/ai-analyzer-1.4.0-jar-with-dependencies.jar
 ```
 
 ## 📝 更新日志
 
+### v2.0.0（当前）
+- ✅ **AgentScope Java 2.0** 全面替换 LangChain4j
+- ✅ **HarnessAgent** — 持久会话、workspace、memory、compaction、skills 自动注入
+- ✅ **动态子代理** — `spawn_subagent` 并行处理
+- ✅ **Debug 模式** — 实时事件日志 + 导出
+- ✅ **Skills 系统** — FileSystemSkillRepository + HarnessAgent 自动注入
+- ✅ **被动扫描** — 升级为 HarnessAgent，持久记忆积累
+- ✅ **英文提示词** — LLM 提示词全部英文化
+- ✅ 移除 24 个 LC4j 文件，净删 8741 行代码
+
 ### v1.4.0
-- ✅ 移除主界面和侧栏中的「启用深度思考」GUI，避免重复入口
-- ✅ 移除主界面和侧栏中的「启用网络搜索」GUI
-- ✅ 将联网搜索开关统一迁移到 **配置 → 联网搜索** 中集中管理
-- ✅ 修复网络搜索复选框状态异常、不同界面状态不同步的问题
-- ✅ 重新整理联网搜索说明文档与使用方式
+- ✅ 联网搜索统一配置管理
+- ✅ 修复网络搜索状态同步问题
 
 ### v1.2.1
-- ✅ 修复了一些问题
-- ✅ 增加主动模式
-- ✅ 增加 Notebook 模块，现在可以把项目中的重要信息记载到其中，更好进行人机协同
-- ✅ 增加 workplace 功能，用于统一管理 skills/知识库/python脚本/Notebook
+- ✅ 主动模式、Workplace 统一管理
 
 ### v1.2.0
-- ✅ 允许 Agent 运行 python 代码
-- ✅ 完善了被动扫描功能
-- ✅ 参考 HaE、z0scan 等优秀开源工具，增加了前置扫描器
-- ✅ 优化某些逻辑
+- ✅ Python 脚本执行、被动扫描完善、前置扫描器
 
 ### v1.1.0
-- ✅ Skills 自定义技能系统
-- ✅ 支持定义可执行工具（nmap、sqlmap 等）
-- ✅ 参数模板和智能填充
-- ✅ 工具执行超时和输出限制
+- ✅ Skills 自定义技能系统、可执行工具定义
 
 ### v1.0.0
-- ✅ 基础 AI 分析功能
-- ✅ 流式输出支持
-- ✅ MCP 工具调用（Burp MCP、RAG MCP）
-- ✅ Markdown 渲染
-- ✅ 工具执行可视化
+- ✅ 基础 AI 分析、流式输出、MCP 工具调用、Markdown 渲染
 
 ---
 
-**Happy Hacking! 🎯🔍**
-
-*让 AI 成为你的安全测试助手，发现更多漏洞！*
+**Happy Hacking! 🎯**
