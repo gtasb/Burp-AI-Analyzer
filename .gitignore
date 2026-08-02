@@ -94,3 +94,9 @@ src/com/ai/analyzer/rag/Easy_RAG_Example.java
 # Test data
 test-data/
 *.http
+
+# Real credential files (never commit)
+test_env.txt
+.env
+*.env
+secrets.txt
