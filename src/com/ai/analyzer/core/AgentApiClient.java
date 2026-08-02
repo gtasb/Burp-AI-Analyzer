@@ -51,6 +51,8 @@ public class AgentApiClient {
     private AgentScopeAgentRuntime agentScopeRuntime;
     private Toolkit asToolkit;
     private volatile Consumer<String> systemNoticeConsumer;
+    private volatile Consumer<String> modelBehaviorConsumer;
+    private volatile com.ai.analyzer.agent.runtime.RequireConfirmHandler confirmHandler;
 
     // ========== 共享聊天 UI 历史（供多个 ChatPanel 实例同步显示） ==========
     private static final int MAX_SHARED_UI_HISTORY = 200;
@@ -156,6 +158,25 @@ public class AgentApiClient {
 
     public void setSystemNoticeConsumer(Consumer<String> systemNoticeConsumer) {
         this.systemNoticeConsumer = systemNoticeConsumer;
+    }
+
+    /**
+     * 注册模型行为回调（thinking 增量 / 工具调用开始与结束）。
+     * 消息格式 {@code TYPE|detail}：THINKING / TOOL_START / TOOL_END。
+     * 与 {@link #setSystemNoticeConsumer} 一样由 UI 在流式会话期间设置、结束后清除。
+     */
+    public void setModelBehaviorConsumer(Consumer<String> modelBehaviorConsumer) {
+        this.modelBehaviorConsumer = modelBehaviorConsumer;
+    }
+
+    private void emitModelBehavior(String type, String detail) {
+        Consumer<String> consumer = this.modelBehaviorConsumer;
+        if (consumer == null || detail == null) return;
+        try {
+            consumer.accept(type + "|" + detail);
+        } catch (Exception e) {
+            logDebug("模型行为回调失败: " + e.getMessage());
+        }
     }
 
     public String getApiKey() { return config.getApiKey(); }
@@ -383,13 +404,41 @@ public class AgentApiClient {
             logInfo("Skills 已" + (enableSkills ? "启用" : "禁用"));
         }
     }
-
     public void setSkillsDirectoryPath(String path) {
         String normalized = path != null ? path.trim() : "";
         if (!config.getSkillsDirectoryPath().equals(normalized)) {
             config.setSkillsDirectoryPath(normalized);
             invalidateAgentScopeRuntime();
         }
+    }
+
+    /**
+     * 启用/禁用 AgentScope Plan Mode。
+     * 启用后 Agent 可自主进入计划阶段（只读调查 → plan_write 写计划 → plan_exit 请求批准），
+     * 批准后进入执行阶段。切换会重建 AgentScope 运行时（下次请求生效）。
+     */
+    public void setEnablePlanMode(boolean enablePlanMode) {
+        if (config.isEnablePlanMode() != enablePlanMode) {
+            config.setEnablePlanMode(enablePlanMode);
+            invalidateAgentScopeRuntime();
+            logInfo("Plan Mode 已" + (enablePlanMode ? "启用" : "禁用"));
+        }
+    }
+
+    public boolean isEnablePlanMode() {
+        return config.isEnablePlanMode();
+    }
+
+    /**
+     * 设置用户确认回调（HITL）。agent 请求批准（如 plan_exit）时触发；
+     * 未设置时自动拒绝（安全默认）。由 UI 在流式会话期间设置、结束后清除。
+     */
+    public void setRequireConfirmHandler(com.ai.analyzer.agent.runtime.RequireConfirmHandler handler) {
+        AgentScopeAgentRuntime runtime = agentScopeRuntime;
+        if (runtime != null) {
+            runtime.setRequireConfirmHandler(handler);
+        }
+        this.confirmHandler = handler;
     }
 
     public String getSkillsDirectoryPath() {
@@ -541,7 +590,9 @@ public class AgentApiClient {
                     List<String> args = command.size() > 1 ? command.subList(1, command.size()) : List.of();
                     java.util.Map<String, String> headers = new java.util.HashMap<>();
                     if (customConfig.getAuthorization() != null && !customConfig.getAuthorization().isEmpty()) {
-                        headers.put("Authorization", "Bearer " + customConfig.getAuthorization());
+                        headers.put("Authorization",
+                                com.ai.analyzer.agent.mcpclient.AgentScopeMcpManager
+                                        .normalizeBearer(customConfig.getAuthorization()));
                     }
                     AgentScopeMcpManager.registerCustomMcp(asToolkit,
                             customConfig.getName(),
@@ -574,6 +625,12 @@ public class AgentApiClient {
             if (!config.isEnableCliTool() && !config.isEnablePythonScript()) {
                 runtimeBuilder.disableShellTool();
             }
+            // Plan Mode：允许 Agent 先计划（只读调查 → 写 PLAN.md → 请求批准）再执行
+            runtimeBuilder.enablePlanMode(config.isEnablePlanMode());
+            if (config.isEnablePlanMode()) {
+                // 计划阶段写的 todos 在每次推理前展示，配合 todo_write 保持执行聚焦
+                runtimeBuilder.enableTaskList(true);
+            }
             // Skills：启用时注入技能仓库，Harness 自动将 SKILL.md 提示注入上下文
             String skillsDir = config.getSkillsDirectoryPath();
             if (config.isEnableSkills() && skillsDir != null && !skillsDir.trim().isEmpty()) {
@@ -587,7 +644,11 @@ public class AgentApiClient {
                 }
             }
             agentScopeRuntime = runtimeBuilder.build();
-            logInfo("AgentScopeAgentRuntime 已创建");
+            // runtime 重建后恢复确认回调（HITL）
+            if (confirmHandler != null) {
+                agentScopeRuntime.setRequireConfirmHandler(confirmHandler);
+            }
+            logInfo("AgentScopeAgentRuntime 已创建" + (config.isEnablePlanMode() ? "（Plan Mode 已启用）" : ""));
 
         } catch (Exception e) {
             logError("AgentScope 运行时初始化失败: " + e.getMessage());
@@ -779,18 +840,21 @@ public class AgentApiClient {
                                 }
                             }
                             case THINKING -> {
+                                String thinkingDelta = event.text();
                                 if (!thinkingNoticeShown[0]) {
                                     emitSystemNotice("思考中...");
                                     thinkingNoticeShown[0] = true;
                                 }
+                                emitModelBehavior("THINKING", thinkingDelta != null ? thinkingDelta : "");
                                 DebugContext.log("AgentApiClient", "thinking",
-                                        java.util.Map.of("len", String.valueOf(event.text() != null ? event.text().length() : 0)));
+                                        java.util.Map.of("len", String.valueOf(thinkingDelta != null ? thinkingDelta.length() : 0)));
                             }
                             case TOOL_START -> {
                                 AppLogBuffer.tool("AgentApiClient", event.toolName() != null ? event.toolName() : "");
                                 String toolName = event.toolName();
                                 if (toolName != null && !toolName.isEmpty()) {
                                     onChunk.accept("\n🔧 <b>调用工具: " + escapeHtml(toolName) + "</b>\n");
+                                    emitModelBehavior("TOOL_START", toolName);
                                 }
                                 DebugContext.log("AgentApiClient", "tool_start",
                                         java.util.Map.of("tool", toolName != null ? toolName : "null"));
@@ -803,6 +867,8 @@ public class AgentApiClient {
                                 if (toolFailed) {
                                     onChunk.accept("\n⚠️ <b>工具执行失败: " + escapeHtml(toolName != null ? toolName : "unknown") + "</b>\n");
                                 }
+                                emitModelBehavior("TOOL_END", (toolName != null ? toolName : "unknown")
+                                        + (toolFailed ? "|failed" : "|ok"));
                                 DebugContext.log("AgentApiClient", "tool_end",
                                         java.util.Map.of("tool", toolName != null ? toolName : "null", "failed", String.valueOf(toolFailed)));
                             }

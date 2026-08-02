@@ -11,6 +11,7 @@ import io.agentscope.core.event.ToolCallStartEvent;
 import io.agentscope.core.event.ToolResultEndEvent;
 import io.agentscope.core.message.AssistantMessage;
 import io.agentscope.core.message.Msg;
+import io.agentscope.core.message.MsgRole;
 import io.agentscope.core.message.SystemMessage;
 import io.agentscope.core.message.ToolResultMessage;
 import io.agentscope.core.message.ToolResultState;
@@ -67,11 +68,13 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
     private final boolean disableFilesystemTools;
     private final boolean disableShellTool;
     private final boolean enablePlanMode;
+    private final boolean enableTaskList;
     private final int maxContextTokens;
     private final List<io.agentscope.core.skill.repository.AgentSkillRepository> skillRepositories;
 
     private volatile HarnessAgent harnessAgent;
     private final AtomicReference<Subscription> currentSubscription = new AtomicReference<>();
+    private volatile RequireConfirmHandler confirmHandler;
 
     private AgentScopeAgentRuntime(Builder builder) {
         this.mode = builder.mode;
@@ -83,8 +86,17 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         this.disableFilesystemTools = builder.disableFilesystemTools;
         this.disableShellTool = builder.disableShellTool;
         this.enablePlanMode = builder.enablePlanMode;
+        this.enableTaskList = builder.enableTaskList;
         this.maxContextTokens = builder.maxContextTokens;
         this.skillRepositories = builder.skillRepositories;
+    }
+
+    /**
+     * 设置用户确认回调（HITL）。ASK 决策（如 plan_exit 请求批准）会调用它，
+     * 未设置时自动拒绝（安全默认）。
+     */
+    public void setRequireConfirmHandler(RequireConfirmHandler handler) {
+        this.confirmHandler = handler;
     }
 
     // ---- AgentRuntime implementation ----
@@ -116,8 +128,37 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         });
 
         try {
-            buildEventStream(asMessages, ctx, listener, future)
-                    .blockLast(java.time.Duration.ofMillis(chatTimeoutMs));
+            // HITL 循环：agent 遇到 ASK 决策（如 plan_exit）时会暂停并发起确认，
+            // 我们在收集到待确认工具调用后询问用户，用 ConfirmResult 恢复 agent，
+            // 直到一次完整执行流程结束（或用户取消/出错）。
+            List<Msg> currentMessages = asMessages;
+            while (!future.isCancelled()) {
+                List<io.agentscope.core.message.ToolUseBlock> pendingConfirm = new java.util.ArrayList<>();
+                buildEventStream(currentMessages, ctx, listener, future, pendingConfirm)
+                        .blockLast(java.time.Duration.ofMillis(chatTimeoutMs));
+
+                if (future.isCancelled() || pendingConfirm.isEmpty()) {
+                    break;
+                }
+
+                // agent 暂停等待确认：询问用户（无回调时自动拒绝，安全默认）
+                String summary = buildConfirmSummary(pendingConfirm);
+                boolean approved = confirmHandler != null
+                        && confirmHandler.confirm("permission_ask", summary);
+
+                List<io.agentscope.core.event.ConfirmResult> results = pendingConfirm.stream()
+                        .map(t -> new io.agentscope.core.event.ConfirmResult(approved, t))
+                        .toList();
+                java.util.Map<String, Object> meta = new java.util.HashMap<>();
+                meta.put(Msg.METADATA_CONFIRM_RESULTS, results);
+                currentMessages = List.of(Msg.builder()
+                        .name("user")
+                        .role(MsgRole.USER)
+                        .textContent(approved ? "approved" : "denied")
+                        .metadata(meta)
+                        .build());
+            }
+            future.complete(null);
         } catch (Exception e) {
             listener.onEvent(RuntimeEvent.error(e));
             listener.onError(e);
@@ -125,6 +166,25 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         }
 
         return session;
+    }
+
+    /**
+     * 生成待确认工具调用的可读摘要（工具名 + 参数摘要，限长）。
+     */
+    private String buildConfirmSummary(List<io.agentscope.core.message.ToolUseBlock> pending) {
+        StringBuilder sb = new StringBuilder();
+        for (io.agentscope.core.message.ToolUseBlock block : pending) {
+            if (sb.length() > 0) sb.append("\n");
+            sb.append("工具: ").append(block.getName());
+            try {
+                String input = String.valueOf(block.getInput());
+                if (input.length() > 200) input = input.substring(0, 200) + "…";
+                if (!"null".equals(input) && !input.isEmpty()) {
+                    sb.append("\n  参数: ").append(input);
+                }
+            } catch (Exception ignored) {}
+        }
+        return sb.toString();
     }
 
     @Override
@@ -142,7 +202,8 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
             List<Msg> messages,
             RuntimeContext ctx,
             RuntimeEventListener listener,
-            CompletableFuture<String> future) {
+            CompletableFuture<String> future,
+            List<io.agentscope.core.message.ToolUseBlock> pendingConfirm) {
 
         reactor.core.publisher.Flux<AgentEvent> flux;
         switch (mode) {
@@ -155,11 +216,10 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
 
         return flux
                 .doOnSubscribe(sub -> currentSubscription.set(sub))
-                .doOnNext(event -> dispatchAgentScopeEvent(event, listener))
+                .doOnNext(event -> dispatchAgentScopeEvent(event, listener, pendingConfirm))
                 .doOnComplete(() -> {
                     currentSubscription.set(null);
                     listener.onComplete();
-                    future.complete(null);
                 })
                 .doOnError(error -> {
                     currentSubscription.set(null);
@@ -174,7 +234,8 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
      *
      * <p>使用 instanceof 模式匹配（Java 21）分派具体事件类型。
      */
-    private void dispatchAgentScopeEvent(AgentEvent event, RuntimeEventListener listener) {
+    private void dispatchAgentScopeEvent(AgentEvent event, RuntimeEventListener listener,
+            List<io.agentscope.core.message.ToolUseBlock> pendingConfirm) {
         if (event == null) return;
 
         if (event instanceof TextBlockDeltaEvent e) {
@@ -222,6 +283,15 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
             listener.onEvent(RuntimeEvent.subagent(
                     e.getLabel() != null ? e.getLabel() : e.getSubagentId(), null));
             DebugContext.log("AgentScopeAgentRuntime", "subagent_exposed", Map.of("label", e.getLabel() != null ? e.getLabel() : "null"));
+        } else if (event instanceof io.agentscope.core.event.RequireUserConfirmEvent e) {
+            // ASK 决策：agent 暂停等待用户确认（如 plan_exit 请求批准计划）。
+            // 收集待确认工具调用，事件流完成后由 chat() 的 HITL 循环询问用户。
+            List<io.agentscope.core.message.ToolUseBlock> pending = e.getToolCalls();
+            if (pending != null && !pending.isEmpty()) {
+                pendingConfirm.addAll(pending);
+            }
+            DebugContext.log("AgentScopeAgentRuntime", "require_user_confirm",
+                    Map.of("count", String.valueOf(pending != null ? pending.size() : 0)));
         }
         // 其他事件类型（MODEL_CALL_START/END, AGENT_START/END, HINT_BLOCK 等）静默忽略
     }
@@ -267,6 +337,10 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
                     }
                     if (enablePlanMode) {
                         builder.enablePlanMode();
+                    }
+                    if (enableTaskList) {
+                        // 任务清单：plan 阶段写的 todos 会在每次推理前以提示形式展示
+                        builder.enableTaskList();
                     }
                     if (maxContextTokens > 0) {
                         builder.maxContextTokens(maxContextTokens);
@@ -356,6 +430,7 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         private boolean disableFilesystemTools;
         private boolean disableShellTool;
         private boolean enablePlanMode;
+        private boolean enableTaskList;
         private int maxContextTokens;
         private List<io.agentscope.core.skill.repository.AgentSkillRepository> skillRepositories;
 
@@ -414,6 +489,12 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         /** 启用 Harness Plan Mode（PlanEnterTool/PlanWriteTool/PlanExitTool），默认关闭 */
         public Builder enablePlanMode(boolean enablePlanMode) {
             this.enablePlanMode = enablePlanMode;
+            return this;
+        }
+
+        /** 启用 Harness 任务清单（todo_write + 每轮推理前展示 todos），默认关闭 */
+        public Builder enableTaskList(boolean enableTaskList) {
+            this.enableTaskList = enableTaskList;
             return this;
         }
 

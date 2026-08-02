@@ -64,6 +64,9 @@ public class PluginSettings implements Serializable {
     // 自定义系统提示词（初始值留空，getter 中兜底返回默认提示词）
     private String customActiveSystemPrompt = null;
     private String customPassiveSystemPrompt = null;
+
+    // Plan Mode（AgentScope 计划模式）：Agent 先写计划并获得批准后再执行
+    private boolean enablePlanMode = false;
     
     // 联网搜索配置: "enableSearch" = 模型内置参数, "tavily" = Tavily搜索引擎, "off" = 关闭
     private String searchMode = "enableSearch";
@@ -495,6 +498,15 @@ public class PluginSettings implements Serializable {
 
     public void setWorkplaceDirectoryPath(String workplaceDirectoryPath) {
         this.workplaceDirectoryPath = workplaceDirectoryPath != null ? workplaceDirectoryPath.trim() : "";
+    }
+
+    // Plan Mode 配置
+    public boolean isEnablePlanMode() {
+        return enablePlanMode;
+    }
+
+    public void setEnablePlanMode(boolean enablePlanMode) {
+        this.enablePlanMode = enablePlanMode;
     }
 
     public boolean hasWorkplaceDirectory() {

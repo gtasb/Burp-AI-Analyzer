@@ -61,6 +61,7 @@ public class AgentConfig {
     private String cliToolPrompt = "";
     private String workplaceDirectoryPath = "";
     private String customSystemPrompt = "";
+    private boolean enablePlanMode = false;
     
     /**
      * API 提供者类型枚举
@@ -131,6 +132,7 @@ public class AgentConfig {
         this.cliToolPrompt = other.cliToolPrompt;
         this.workplaceDirectoryPath = other.workplaceDirectoryPath;
         this.customSystemPrompt = other.customSystemPrompt;
+        this.enablePlanMode = other.enablePlanMode;
         this.customMcpConfigJson = other.customMcpConfigJson;
         this.customMcpConfigs = other.customMcpConfigs;
     }
@@ -300,6 +302,9 @@ public class AgentConfig {
     public void setWorkplaceDirectoryPath(String workplaceDirectoryPath) { this.workplaceDirectoryPath = workplaceDirectoryPath != null ? workplaceDirectoryPath : ""; }
     public String getCustomSystemPrompt() { return customSystemPrompt; }
     public void setCustomSystemPrompt(String customSystemPrompt) { this.customSystemPrompt = customSystemPrompt != null ? customSystemPrompt : ""; }
+
+    public boolean isEnablePlanMode() { return enablePlanMode; }
+    public void setEnablePlanMode(boolean enablePlanMode) { this.enablePlanMode = enablePlanMode; }
 
     @Override
     public String toString() {
