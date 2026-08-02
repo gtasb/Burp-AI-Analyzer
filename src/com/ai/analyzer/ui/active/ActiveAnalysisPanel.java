@@ -48,6 +48,11 @@ public class ActiveAnalysisPanel extends JPanel {
     private JLabel targetInfoLabel;
     private JList<AnalysisHistoryStore.AnalysisHistoryEntry> analysisHistoryList;
     private DefaultListModel<AnalysisHistoryStore.AnalysisHistoryEntry> analysisHistoryModel;
+    private JTextArea behaviorTextArea;
+    private JScrollPane behaviorScrollPane;
+    /** 模型行为订阅（add/remove 成对使用，避免覆盖侧栏 ChatPanel 的订阅） */
+    private final java.util.function.Consumer<String> modelBehaviorConsumer =
+            behavior -> SwingUtilities.invokeLater(() -> handleModelBehavior(behavior));
 
     // ========== 分析状态 ==========
     private boolean isAnalyzing = false;
@@ -103,7 +108,10 @@ public class ActiveAnalysisPanel extends JPanel {
     private void buildUi() {
         setLayout(new BorderLayout(0, 5));
 
-        // ---- 顶部：Agent 模式切换（普通 / 计划模式）+ 工具按钮 ----
+        // ---- 顶部区域：模式切换 + 工具按钮 / 快捷任务 / 目标速览（三层叠放，统一放入 NORTH） ----
+        JPanel topArea = new JPanel();
+        topArea.setLayout(new BoxLayout(topArea, BoxLayout.Y_AXIS));
+
         JPanel modeBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
         modeBar.add(new JLabel("Agent模式:"));
         planModeComboBox = new JComboBox<>(new String[]{"普通模式", "计划模式(Plan Mode)"});
@@ -127,7 +135,11 @@ public class ActiveAnalysisPanel extends JPanel {
         batchAnalyzeButton.setToolTipText("将请求列表中选中的多个请求一次性提交给 Agent 归纳分析");
         batchAnalyzeButton.addActionListener(e -> performBatchAnalysis());
         modeBar.add(batchAnalyzeButton);
-        add(modeBar, BorderLayout.NORTH);
+        JButton pasteMessageButton = new JButton("粘贴报文");
+        pasteMessageButton.setToolTipText("粘贴原始 HTTP 请求/响应报文进行分析（无需先在请求列表中选中）");
+        pasteMessageButton.addActionListener(e -> showPasteMessageDialog());
+        modeBar.add(pasteMessageButton);
+        topArea.add(modeBar);
 
         // ---- 快捷任务行：常见渗透测试任务一键填充提示词并执行 ----
         JPanel quickBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
@@ -135,14 +147,16 @@ public class ActiveAnalysisPanel extends JPanel {
         for (QuickTaskPresets.QuickTask task : QuickTaskPresets.defaults()) {
             quickBar.add(createQuickTaskButton(task.label(), task.prompt()));
         }
-        add(quickBar, BorderLayout.NORTH);
+        topArea.add(quickBar);
 
         // ---- 目标上下文速览条 ----
         JPanel infoBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 3));
         targetInfoLabel = new JLabel("未选择请求 — 自由对话模式");
         targetInfoLabel.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
         infoBar.add(targetInfoLabel);
-        add(infoBar, BorderLayout.NORTH);
+        topArea.add(infoBar);
+
+        add(topArea, BorderLayout.NORTH);
 
         // ---- 结果区域 ----
         activeModeResultTextPane = new JTextPane() {
@@ -194,7 +208,24 @@ public class ActiveAnalysisPanel extends JPanel {
         historyPanel.add(historyScroll, BorderLayout.CENTER);
         historyPanel.add(clearHistoryButton, BorderLayout.SOUTH);
 
-        JSplitPane resultSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, resultScrollPane, historyPanel);
+        // ---- 右侧第二个页签：模型行为（thinking / 工具调用实时流） ----
+        behaviorTextArea = new JTextArea();
+        behaviorTextArea.setEditable(false);
+        behaviorTextArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
+        behaviorTextArea.setLineWrap(true);
+        behaviorTextArea.setWrapStyleWord(true);
+        applyEditorTheme(behaviorTextArea);
+        behaviorScrollPane = new JScrollPane(behaviorTextArea);
+        behaviorScrollPane.setBorder(BorderFactory.createTitledBorder("模型行为（思考/工具调用）"));
+        behaviorScrollPane.setVisible(true);
+        JPanel behaviorPanel = new JPanel(new BorderLayout());
+        behaviorPanel.add(behaviorScrollPane, BorderLayout.CENTER);
+
+        JTabbedPane rightTabs = new JTabbedPane();
+        rightTabs.addTab("分析历史", historyPanel);
+        rightTabs.addTab("模型行为", behaviorPanel);
+
+        JSplitPane resultSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, resultScrollPane, rightTabs);
         resultSplit.setDividerLocation(680);
         resultSplit.setResizeWeight(1.0);
         resultSplit.setContinuousLayout(true);
@@ -391,6 +422,13 @@ public class ActiveAnalysisPanel extends JPanel {
         final int runId = ++analysisRunId;
         notifyStateChanged();
 
+        if (apiClient != null) {
+            apiClient.addModelBehaviorConsumer(modelBehaviorConsumer);
+        }
+        if (behaviorTextArea != null) {
+            behaviorTextArea.setText("");
+        }
+
         final boolean isActiveMode = activeModeSelected;
         if (isActiveMode && activeModePromptArea != null) {
             activeModePromptArea.setText("");
@@ -533,6 +571,9 @@ public class ActiveAnalysisPanel extends JPanel {
                     }
                 } finally {
                     if (runId == analysisRunId) {
+                        if (apiClient != null) {
+                            apiClient.removeModelBehaviorConsumer(modelBehaviorConsumer);
+                        }
                         isAnalyzing = false;
                         notifyStateChanged();
                     }
@@ -579,6 +620,7 @@ public class ActiveAnalysisPanel extends JPanel {
         if (currentWorker != null && !currentWorker.isDone()) {
             if (apiClient != null) {
                 apiClient.cancelStreaming();
+                apiClient.removeModelBehaviorConsumer(modelBehaviorConsumer);
             }
             analysisRunId++;
             currentWorker.cancel(true);
@@ -603,6 +645,7 @@ public class ActiveAnalysisPanel extends JPanel {
         if (currentWorker != null && !currentWorker.isDone()) {
             if (apiClient != null) {
                 apiClient.cancelStreaming();
+                apiClient.removeModelBehaviorConsumer(modelBehaviorConsumer);
             }
             analysisRunId++;
             currentWorker.cancel(true);
@@ -654,6 +697,95 @@ public class ActiveAnalysisPanel extends JPanel {
         }
         sb.append("</html>");
         targetInfoLabel.setText(sb.toString());
+    }
+
+    // ========== 模型行为可观测（thinking / 工具调用实时流） ==========
+
+    private void appendBehaviorLog(String line) {
+        if (behaviorTextArea == null) return;
+        behaviorTextArea.append(line + "\n");
+        if (behaviorScrollPane != null) {
+            JScrollBar vbar = behaviorScrollPane.getVerticalScrollBar();
+            boolean atBottom = vbar.getMaximum() - vbar.getValue() - vbar.getVisibleAmount() < 80;
+            if (atBottom) {
+                behaviorTextArea.setCaretPosition(behaviorTextArea.getDocument().getLength());
+            }
+        }
+    }
+
+    /** 模型行为流：TYPE|detail（THINKING / TOOL_START / TOOL_END），与 ChatPanel 相同格式 */
+    private void handleModelBehavior(String message) {
+        if (message == null || message.isEmpty()) return;
+        int sep = message.indexOf('|');
+        String type = sep >= 0 ? message.substring(0, sep) : "OTHER";
+        String detail = sep >= 0 ? message.substring(sep + 1) : message;
+        String timestamp = java.time.LocalDateTime.now().format(
+                java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+        String line;
+        switch (type) {
+            case "THINKING" -> {
+                String compact = detail.replaceAll("\\s+", " ").trim();
+                if (compact.length() > 60) {
+                    compact = compact.substring(0, 60) + "...";
+                }
+                line = "[" + timestamp + "] 思考: " + compact;
+            }
+            case "TOOL_START" -> line = "[" + timestamp + "] 调用工具: " + detail;
+            case "TOOL_END" -> {
+                boolean failed = detail.endsWith("|failed");
+                String tool = failed ? detail.substring(0, detail.length() - 7) : detail;
+                line = "[" + timestamp + "] " + (failed ? "工具失败: " : "工具完成: ") + tool;
+            }
+            default -> line = "[" + timestamp + "] " + detail;
+        }
+        appendBehaviorLog(line);
+    }
+
+    // ========== 粘贴报文分析 ==========
+
+    private void showPasteMessageDialog() {
+        if (isAnalyzing) {
+            JOptionPane.showMessageDialog(this, "当前正在分析中，请等待完成或点击停止");
+            return;
+        }
+        JTextArea rawArea = new JTextArea(20, 60);
+        rawArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        rawArea.setLineWrap(false);
+        JScrollPane rawScroll = new JScrollPane(rawArea);
+        rawScroll.setBorder(BorderFactory.createTitledBorder("粘贴原始 HTTP 请求/响应报文"));
+        JPanel dialogPanel = new JPanel(new BorderLayout(5, 5));
+        dialogPanel.add(rawScroll, BorderLayout.CENTER);
+        dialogPanel.add(new JLabel("支持粘贴 Burp/抓包工具复制的完整报文（含请求行与请求头，可包含响应）"), BorderLayout.NORTH);
+        int option = JOptionPane.showConfirmDialog(this, dialogPanel, "粘贴报文分析",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (option != JOptionPane.OK_OPTION) {
+            return;
+        }
+        String raw = rawArea.getText();
+        if (raw == null || raw.isBlank()) {
+            JOptionPane.showMessageDialog(this, "报文内容为空");
+            return;
+        }
+        String targetDesc = "粘贴报文分析";
+        String host = "";
+        try {
+            HttpRequest parsed = HttpRequest.httpRequest(raw.trim());
+            if (parsed != null && parsed.url() != null && !parsed.url().isBlank()) {
+                targetDesc = parsed.method() + " " + parsed.url();
+                host = extractHost(parsed.url());
+            }
+        } catch (Exception ignored) {
+            // 解析失败（如带响应或非标准报文），使用原始文本分析
+        }
+        String detail = (host.isEmpty() ? "" : "Host: " + host + " · ") + "报文 " + raw.length() + " 字节";
+        String userPrompt = (activeModePromptArea != null ? activeModePromptArea.getText().trim() : "");
+        if (userPrompt.isEmpty()) {
+            userPrompt = "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议";
+        }
+        if (apiClientConfigUpdater != null) {
+            apiClientConfigUpdater.run();
+        }
+        startAnalysisWorker(raw.trim(), userPrompt, targetDesc, detail);
     }
 
     private void recordAnalysisHistory(String targetDesc, String prompt, String result) {
