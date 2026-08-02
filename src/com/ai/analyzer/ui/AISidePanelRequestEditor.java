@@ -27,13 +27,13 @@ public class AISidePanelRequestEditor implements ExtensionProvidedHttpRequestEdi
     private void initializeUI() {
         mainPanel = new JPanel(new BorderLayout());
         
+        // 左右分栏：左侧 = 报文 + 收藏列表，右侧 = AI 助手
         JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
-        splitPane.setDividerLocation(400);
+        splitPane.setDividerLocation(420);
+        splitPane.setResizeWeight(0);
+        splitPane.setContinuousLayout(true);
 
         requestEditor = api.userInterface().createHttpRequestEditor();
-        JPanel requestPanel = new JPanel(new BorderLayout());
-        requestPanel.setBorder(BorderFactory.createTitledBorder("HTTP请求"));
-        requestPanel.add(requestEditor.uiComponent(), BorderLayout.CENTER);
 
         collectionPanel = new MessageCollectionPanel(chatPanel,
                 () -> currentRequestResponse,
@@ -42,13 +42,26 @@ public class AISidePanelRequestEditor implements ExtensionProvidedHttpRequestEdi
                         requestEditor.setRequest(rr.request());
                     }
                 });
-        requestPanel.add(collectionPanel, BorderLayout.SOUTH);
+
+        // 左侧上下分栏：上 = HTTP 请求报文，下 = 收藏报文，分隔条可自由拖动
+        JSplitPane leftSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
+        leftSplit.setDividerLocation(300);
+        leftSplit.setResizeWeight(0.55);
+        leftSplit.setContinuousLayout(true);
+
+        JPanel requestPanel = new JPanel(new BorderLayout());
+        requestPanel.setBorder(BorderFactory.createTitledBorder("HTTP请求"));
+        requestPanel.setMinimumSize(new Dimension(0, 0));
+        requestPanel.add(requestEditor.uiComponent(), BorderLayout.CENTER);
+        leftSplit.setTopComponent(requestPanel);
+        leftSplit.setBottomComponent(collectionPanel);
+        collectionPanel.setMinimumSize(new Dimension(0, 0));
 
         JPanel chatPanelContainer = new JPanel(new BorderLayout());
         chatPanelContainer.setBorder(BorderFactory.createTitledBorder("AI助手"));
         chatPanelContainer.add(chatPanel, BorderLayout.CENTER);
 
-        splitPane.setLeftComponent(requestPanel);
+        splitPane.setLeftComponent(leftSplit);
         splitPane.setRightComponent(chatPanelContainer);
 
         mainPanel.add(splitPane, BorderLayout.CENTER);

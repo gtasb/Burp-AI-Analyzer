@@ -112,6 +112,19 @@ public class MessageCollectionPanel extends JPanel {
         int[] rows = table.getSelectedRows();
         List<HttpRequestResponse> selected = new ArrayList<>();
         if (rows.length == 0) {
+            // 未选中任何条目时"发送选中"实际会发送全部，容易误操作，需确认
+            int total = MessageCollectionStore.snapshot().size();
+            if (total == 0) {
+                statusLabel.setText("列表为空，无可发送的报文");
+                return;
+            }
+            int choice = JOptionPane.showConfirmDialog(this,
+                    "未选中任何条目。确定将全部 " + total + " 条报文发送给 AI 吗？",
+                    "发送全部报文",
+                    JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
+            if (choice != JOptionPane.OK_OPTION) {
+                return;
+            }
             for (StoreEntry entry : MessageCollectionStore.snapshot()) {
                 selected.add(entry.getRequestResponse());
             }

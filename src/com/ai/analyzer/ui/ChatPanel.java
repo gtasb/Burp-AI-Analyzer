@@ -27,6 +27,9 @@ public class ChatPanel extends JPanel {
     private JButton sendButton;
     private JButton clearContextButton;
     private JButton stopButton;
+    private JToggleButton behaviorToggleButton;
+    private JScrollPane behaviorScrollPane;
+    private JScrollPane chatScrollPane;
     private HttpRequestResponse currentRequest;
     private String lastSentRequestFingerprint;
     private boolean isStreaming = false;
@@ -74,6 +77,12 @@ public class ChatPanel extends JPanel {
             apiClient.setModel(analyzerTab.getModel());
             apiClient.setEnableThinking(false);
             apiClient.setEnableSearch(analyzerTab.isEnableSearch());
+            // 与主标签页共享同一工作区目录与 Skills 配置：
+            // HarnessAgent 的持久记忆（MEMORY.md 等）与技能均落盘到该目录，
+            // 使侧栏 Agent 与主动/被动模式共享对项目的理解（磁盘层记忆联动）
+            apiClient.setWorkplaceDirectoryPath(analyzerTab.getWorkplaceDirectoryPath());
+            apiClient.setEnableSkills(analyzerTab.isEnableSkills());
+            apiClient.setSkillsDirectoryPath(analyzerTab.getSkillsDirectoryPath());
         } else {
             // 如果没有analyzerTab，保留当前apiClient中的搜索配置
             apiClient.setEnableThinking(false);
@@ -98,20 +107,20 @@ public class ChatPanel extends JPanel {
         chatArea.setEditable(false);
         chatArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
         applyEditorTheme(chatArea);
-        JScrollPane chatScrollPane = new JScrollPane(chatArea);
+        chatScrollPane = new JScrollPane(chatArea);
         chatScrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
         chatScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         
-        // 创建debug日志区域（初始隐藏）
+        // 创建debug日志区域（默认显示，作为模型行为/调试流）
         debugLogArea = new JTextArea();
         debugLogArea.setEditable(false);
         debugLogArea.setFont(createLogFont());
         applyEditorTheme(debugLogArea);
         debugLogArea.setRows(5);
         debugLogScrollPane = new JScrollPane(debugLogArea);
-        debugLogScrollPane.setBorder(BorderFactory.createTitledBorder("Debug日志"));
+        debugLogScrollPane.setBorder(BorderFactory.createTitledBorder("模型行为 / 调试日志"));
         debugLogScrollPane.setPreferredSize(new Dimension(0, 150));
-        debugLogScrollPane.setVisible(false);
+        behaviorScrollPane = debugLogScrollPane;
         
         mainSplitPane.setTopComponent(chatScrollPane);
         mainSplitPane.setBottomComponent(debugLogScrollPane);
@@ -137,16 +146,19 @@ public class ChatPanel extends JPanel {
         stopButton.setEnabled(false); // 初始状态禁用
         stopButton.setPreferredSize(new Dimension(60, 25));
         stopButton.setMargin(new Insets(2, 8, 2, 8));
-        
+
+        behaviorToggleButton = new JToggleButton("模型行为", true);
+        behaviorToggleButton.setToolTipText("显示/隐藏模型思考与工具调用实时流");
+        behaviorToggleButton.setPreferredSize(new Dimension(80, 25));
+        behaviorToggleButton.setMargin(new Insets(2, 8, 2, 8));
+        behaviorToggleButton.addActionListener(e -> toggleBehaviorPanel());
+
         topPanel.add(sendButton);
         topPanel.add(clearContextButton);
         topPanel.add(stopButton);
-        
-        // 顶部仅保留操作按钮，搜索能力改为由配置页统一管理
-        JPanel topContainer = new JPanel(new BorderLayout());
-        topContainer.add(topPanel, BorderLayout.EAST);
-        
-        inputPanel.add(topContainer, BorderLayout.NORTH);
+        topPanel.add(behaviorToggleButton);
+
+        inputPanel.add(topPanel, BorderLayout.NORTH);
 
         // 输入框（多行自动换行，Enter发送，Shift+Enter换行）
         inputField = new JTextArea(2, 0);
@@ -219,6 +231,26 @@ public class ChatPanel extends JPanel {
     }
     
     /**
+     * 执行渲染并智能滚动：仅当用户本来就位于底部附近时才自动滚到底部，
+     * 避免流式输出时把正在向上阅读的用户拽回底部。
+     */
+    private void renderPreservingScroll(Runnable render) {
+        if (chatScrollPane == null) {
+            render.run();
+            return;
+        }
+        JScrollBar vbar = chatScrollPane.getVerticalScrollBar();
+        boolean atBottom = vbar.getMaximum() - vbar.getValue() - vbar.getVisibleAmount() < 80;
+        int prevValue = vbar.getValue();
+        render.run();
+        if (atBottom) {
+            chatArea.setCaretPosition(chatArea.getDocument().getLength());
+        } else {
+            vbar.setValue(prevValue);
+        }
+    }
+
+    /**
      * 添加debug日志
      */
     private void debugLog(String message) {
@@ -231,24 +263,49 @@ public class ChatPanel extends JPanel {
                 debugLogArea.append(logMessage);
                 debugLogArea.setCaretPosition(debugLogArea.getDocument().getLength());
             });
+            // 仅调试模式开启时输出到 Burp 日志，避免每次请求都把完整上下文明文刷进 Output
+            api.logging().logToOutput("[AI助手-Debug] " + message);
         }
-        // 同时输出到Burp日志
-        api.logging().logToOutput("[AI助手-Debug] " + message);
     }
     
     /**
-     * 切换debug日志显示
+     * 切换模型行为/调试日志面板显示
      */
-    private void toggleDebugLog() {
-        debugEnabled = !debugEnabled;
-        debugLogScrollPane.setVisible(debugEnabled);
-        if (debugEnabled) {
-            debugLog("Debug日志已启用");
-        } else {
-            api.logging().logToOutput("[AI助手] Debug日志已禁用");
-        }
+    private void toggleBehaviorPanel() {
+        debugEnabled = behaviorToggleButton.isSelected();
+        behaviorScrollPane.setVisible(debugEnabled);
         revalidate();
         repaint();
+    }
+
+    /**
+     * 模型行为流：TYPE|detail（THINKING / TOOL_START / TOOL_END）
+     */
+    private void handleModelBehavior(String message) {
+        if (message == null || message.isEmpty()) return;
+        int sep = message.indexOf('|');
+        String type = sep >= 0 ? message.substring(0, sep) : "OTHER";
+        String detail = sep >= 0 ? message.substring(sep + 1) : message;
+        String timestamp = java.time.LocalDateTime.now().format(
+                java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+        String line;
+        switch (type) {
+            case "THINKING" -> {
+                String compact = detail.replaceAll("\\s+", " ").trim();
+                if (compact.length() > 60) {
+                    compact = compact.substring(0, 60) + "...";
+                }
+                line = "[" + timestamp + "] 🧠 " + compact;
+            }
+            case "TOOL_START" -> line = "[" + timestamp + "] 🔧 调用工具: " + detail;
+            case "TOOL_END" -> {
+                boolean failed = detail.endsWith("|failed");
+                String tool = failed ? detail.substring(0, detail.length() - 7) : detail;
+                line = "[" + timestamp + "] " + (failed ? "⚠️ 工具失败: " : "✅ 工具完成: ") + tool;
+            }
+            default -> line = "[" + timestamp + "] " + detail;
+        }
+        debugLog(line);
     }
 
     private void sendMessage() {
@@ -259,7 +316,10 @@ public class ChatPanel extends JPanel {
         // 如果没有用户输入，使用默认分析提示
         String finalMessage = message.isEmpty() ? "请分析当前请求的安全风险" : message;
         
-        if (!message.isEmpty()) {
+        if (message.isEmpty()) {
+            // 让"空输入 → 默认提示词"这个隐含行为可见，而不是静默发生
+            appendToChat("系统", "输入为空，已使用默认提示词: " + finalMessage, false);
+        } else {
             appendToChatAndShare("你", message, true);
         }
         
@@ -361,6 +421,9 @@ public class ChatPanel extends JPanel {
                     apiClient.setSystemNoticeConsumer(systemNotice ->
                         SwingUtilities.invokeLater(() -> appendToChat("系统", systemNotice, false))
                     );
+                    apiClient.setModelBehaviorConsumer(behavior ->
+                        SwingUtilities.invokeLater(() -> handleModelBehavior(behavior))
+                    );
 
                     java.util.function.Consumer<String> chunkHandler = chunk -> {
                         if (isCancelled() || !isStreaming || runId != streamRunId) return;
@@ -375,8 +438,8 @@ public class ChatPanel extends JPanel {
                         SwingUtilities.invokeLater(() -> {
                             if (isCancelled() || !isStreaming || runId != streamRunId) return;
                             try {
-                                MarkdownRenderer.appendMarkdownStreaming(chatArea, snapshot, aiMessageStartPos);
-                                chatArea.setCaretPosition(chatArea.getStyledDocument().getLength());
+                                renderPreservingScroll(() ->
+                                        MarkdownRenderer.appendMarkdownStreaming(chatArea, snapshot, aiMessageStartPos));
                             } catch (Exception e) {
                                 api.logging().logToError("流式Markdown渲染失败: " + e.getMessage());
                             }
@@ -392,6 +455,7 @@ public class ChatPanel extends JPanel {
                         }
                     } finally {
                         apiClient.setSystemNoticeConsumer(null);
+                        apiClient.setModelBehaviorConsumer(null);
                     }
                     
                     debugLog("AI API调用完成，fullResponse长度: " + fullResponse.length());
@@ -407,8 +471,8 @@ public class ChatPanel extends JPanel {
                                 if (currentLength > aiMessageStartPos) {
                                     doc.remove(aiMessageStartPos, currentLength - aiMessageStartPos);
                                 }
-                                MarkdownRenderer.appendMarkdown(chatArea, finalContent);
-                                chatArea.setCaretPosition(doc.getLength());
+                                renderPreservingScroll(() ->
+                                        MarkdownRenderer.appendMarkdown(chatArea, finalContent));
                             } catch (Exception e) {
                                 api.logging().logToError("最终Markdown渲染失败: " + e.getMessage());
                             }
@@ -481,21 +545,25 @@ public class ChatPanel extends JPanel {
 
     private void appendToChat(String sender, String message, boolean isUser) {
         try {
-            StyledDocument doc = chatArea.getStyledDocument();
-            
-            Style senderStyle = doc.addStyle("sender", null);
-            StyleConstants.setBold(senderStyle, true);
-            StyleConstants.setForeground(senderStyle, isUser ? Color.BLUE : Color.GREEN);
-            
-            Style messageStyle = doc.addStyle("message", null);
-            Color textColor = UIManager.getColor("TextArea.foreground");
-            StyleConstants.setForeground(messageStyle, textColor != null ? textColor : Color.BLACK);
-            
-            doc.insertString(doc.getLength(), sender + ": ", senderStyle);
-            doc.insertString(doc.getLength(), message, messageStyle);
-            doc.insertString(doc.getLength(), "\n\n", messageStyle);
-            
-            chatArea.setCaretPosition(doc.getLength());
+            renderPreservingScroll(() -> {
+                StyledDocument doc = chatArea.getStyledDocument();
+
+                Style senderStyle = doc.addStyle("sender", null);
+                StyleConstants.setBold(senderStyle, true);
+                StyleConstants.setForeground(senderStyle, isUser ? Color.BLUE : Color.GREEN);
+
+                Style messageStyle = doc.addStyle("message", null);
+                Color textColor = UIManager.getColor("TextArea.foreground");
+                StyleConstants.setForeground(messageStyle, textColor != null ? textColor : Color.BLACK);
+
+                try {
+                    doc.insertString(doc.getLength(), sender + ": ", senderStyle);
+                    doc.insertString(doc.getLength(), message, messageStyle);
+                    doc.insertString(doc.getLength(), "\n\n", messageStyle);
+                } catch (BadLocationException ex) {
+                    throw new RuntimeException(ex);
+                }
+            });
         } catch (Exception e) {
             api.logging().logToError("添加聊天消息失败: " + e.getMessage());
         }
@@ -561,6 +629,15 @@ public class ChatPanel extends JPanel {
     }
 
     private void clearContext() {
+        // 清空聊天记录不可撤销，先确认（若正在输出，提示会更明确）
+        String confirmMessage = currentWorker != null && !currentWorker.isDone()
+                ? "正在流式输出中。确定要停止输出并清空全部聊天记录吗？"
+                : "确定要清空全部聊天记录吗？此操作不可撤销。";
+        int choice = JOptionPane.showConfirmDialog(this, confirmMessage, "清空聊天记录",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (choice != JOptionPane.OK_OPTION) {
+            return;
+        }
         // 如果正在输出，先停止
         if (currentWorker != null && !currentWorker.isDone()) {
             // apiClient.clearContext() 内部会先调用 cancelStreaming()
@@ -585,9 +662,6 @@ public class ChatPanel extends JPanel {
         this.currentRequest = request;
         if (request == null) {
             lastSentRequestFingerprint = null;
-        }
-        if (request != null) {
-            appendToChatAndShare("系统", "已更新当前请求信息", false);
         }
     }
 
@@ -801,17 +875,26 @@ public class ChatPanel extends JPanel {
      */
     private void appendMarkdownToChat(String sender, String markdownContent) {
         try {
-            StyledDocument doc = chatArea.getStyledDocument();
-            Style senderStyle = doc.addStyle("sender", null);
-            StyleConstants.setBold(senderStyle, true);
-            StyleConstants.setForeground(senderStyle, Color.GREEN);
-            doc.insertString(doc.getLength(), sender + ": \n", senderStyle);
+            renderPreservingScroll(() -> {
+                StyledDocument doc = chatArea.getStyledDocument();
+                Style senderStyle = doc.addStyle("sender", null);
+                StyleConstants.setBold(senderStyle, true);
+                StyleConstants.setForeground(senderStyle, Color.GREEN);
+                try {
+                    doc.insertString(doc.getLength(), sender + ": \n", senderStyle);
+                } catch (BadLocationException e) {
+                    throw new RuntimeException(e);
+                }
 
-            MarkdownRenderer.appendMarkdown(chatArea, markdownContent);
+                MarkdownRenderer.appendMarkdown(chatArea, markdownContent);
 
-            Style spacing = doc.addStyle("spacing", null);
-            doc.insertString(doc.getLength(), "\n", spacing);
-            chatArea.setCaretPosition(doc.getLength());
+                Style spacing = doc.addStyle("spacing", null);
+                try {
+                    doc.insertString(doc.getLength(), "\n", spacing);
+                } catch (BadLocationException e) {
+                    throw new RuntimeException(e);
+                }
+            });
         } catch (Exception e) {
             appendToChat(sender, markdownContent, false);
         }
