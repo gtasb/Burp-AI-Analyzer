@@ -41,6 +41,9 @@ public class ChatPanel extends JPanel {
     private int lastSyncedHistorySize = 0;
     private javax.swing.Timer saveDebouncerTimer;
     private final Runnable sharedHistoryListener;
+    /** 模型行为订阅（add/remove 成对使用，避免覆盖其他订阅者） */
+    private final java.util.function.Consumer<String> modelBehaviorConsumer =
+            behavior -> SwingUtilities.invokeLater(() -> handleModelBehavior(behavior));
 
     public ChatPanel(MontoyaApi api, AgentApiClient apiClient) {
         this.api = api;
@@ -421,9 +424,7 @@ public class ChatPanel extends JPanel {
                     apiClient.setSystemNoticeConsumer(systemNotice ->
                         SwingUtilities.invokeLater(() -> appendToChat("系统", systemNotice, false))
                     );
-                    apiClient.setModelBehaviorConsumer(behavior ->
-                        SwingUtilities.invokeLater(() -> handleModelBehavior(behavior))
-                    );
+                    apiClient.addModelBehaviorConsumer(modelBehaviorConsumer);
 
                     java.util.function.Consumer<String> chunkHandler = chunk -> {
                         if (isCancelled() || !isStreaming || runId != streamRunId) return;
@@ -455,7 +456,7 @@ public class ChatPanel extends JPanel {
                         }
                     } finally {
                         apiClient.setSystemNoticeConsumer(null);
-                        apiClient.setModelBehaviorConsumer(null);
+                        apiClient.removeModelBehaviorConsumer(modelBehaviorConsumer);
                     }
                     
                     debugLog("AI API调用完成，fullResponse长度: " + fullResponse.length());

@@ -51,7 +51,9 @@ public class AgentApiClient {
     private AgentScopeAgentRuntime agentScopeRuntime;
     private Toolkit asToolkit;
     private volatile Consumer<String> systemNoticeConsumer;
-    private volatile Consumer<String> modelBehaviorConsumer;
+    /** 模型行为消费者（thinking/工具调用流），支持多订阅者（侧栏 ChatPanel 与主动分析页可同时显示） */
+    private final java.util.concurrent.CopyOnWriteArrayList<Consumer<String>> modelBehaviorConsumers =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
     private volatile com.ai.analyzer.agent.runtime.RequireConfirmHandler confirmHandler;
 
     // ========== 共享聊天 UI 历史（供多个 ChatPanel 实例同步显示） ==========
@@ -166,16 +168,32 @@ public class AgentApiClient {
      * 与 {@link #setSystemNoticeConsumer} 一样由 UI 在流式会话期间设置、结束后清除。
      */
     public void setModelBehaviorConsumer(Consumer<String> modelBehaviorConsumer) {
-        this.modelBehaviorConsumer = modelBehaviorConsumer;
+        modelBehaviorConsumers.clear();
+        if (modelBehaviorConsumer != null) {
+            modelBehaviorConsumers.add(modelBehaviorConsumer);
+        }
+    }
+
+    /** 追加一个模型行为订阅者（不覆盖已有订阅，供多个 UI 面板同时监听） */
+    public void addModelBehaviorConsumer(Consumer<String> consumer) {
+        if (consumer != null) {
+            modelBehaviorConsumers.add(consumer);
+        }
+    }
+
+    /** 移除之前添加的模型行为订阅者 */
+    public void removeModelBehaviorConsumer(Consumer<String> consumer) {
+        modelBehaviorConsumers.remove(consumer);
     }
 
     private void emitModelBehavior(String type, String detail) {
-        Consumer<String> consumer = this.modelBehaviorConsumer;
-        if (consumer == null || detail == null) return;
-        try {
-            consumer.accept(type + "|" + detail);
-        } catch (Exception e) {
-            logDebug("模型行为回调失败: " + e.getMessage());
+        if (detail == null) return;
+        for (Consumer<String> consumer : modelBehaviorConsumers) {
+            try {
+                consumer.accept(type + "|" + detail);
+            } catch (Exception e) {
+                logDebug("模型行为回调失败: " + e.getMessage());
+            }
         }
     }
 
