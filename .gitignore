@@ -100,3 +100,6 @@ test_env.txt
 .env
 *.env
 secrets.txt
+
+# Burp runtime debug output
+burp-debug-log.txt
