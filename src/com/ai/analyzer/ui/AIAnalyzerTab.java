@@ -16,6 +16,8 @@ import com.ai.analyzer.util.MarkdownRenderer;
 import com.ai.analyzer.agent.skills.Skill;
 import com.ai.analyzer.agent.skills.SkillManager;
 import com.ai.analyzer.scan.rulesmatch.PreScanFilterManager;
+import com.ai.analyzer.ui.active.ActiveAnalysisPanel;
+import com.ai.analyzer.ui.active.PassiveDataSource;
 // import com.example.ai.analyzer.Tools.ToolDefinitions;
 // import com.example.ai.analyzer.Tools.ToolExecutor;
 
@@ -119,6 +121,7 @@ public class AIAnalyzerTab extends JPanel {
     private HttpResponseEditor responseEditor;
     private JTextArea userPromptArea;
     private JTextPane resultTextPane;
+    private JScrollPane resultScrollPane;
     private JButton analyzeButton;
     private JButton clearButton;
     private JButton deleteRequestButton;
@@ -130,18 +133,64 @@ public class AIAnalyzerTab extends JPanel {
     private CardLayout centerModeCardLayout;
     private JPanel centerModeCardPanel;
     private JPanel passiveControlDetailsPanel;
-    private JTextPane activeModeResultTextPane;
-    private JTextArea activeModePromptArea;
     private JTextPane passiveModeResultTextPane;
     private JTextArea passiveModePromptArea;
     private boolean activeModeSelected = false;
-    
+    private ActiveAnalysisPanel activeAnalysisPanel;
+
+    /** 被动扫描数据源：供 ActiveAnalysisPanel 读取请求列表选中项 */
+    private final PassiveDataSource passiveDataSource = new PassiveDataSource() {
+        @Override
+        public int getSelectedViewRow() {
+            return (passiveScanTable == null) ? -1 : passiveScanTable.getSelectedRow();
+        }
+
+        @Override
+        public Object selectionForViewRow(int viewRow) {
+            if (passiveScanTable == null || viewRow < 0) return null;
+            int modelRow = passiveScanTable.convertRowIndexToModel(viewRow);
+            Integer id = (Integer) passiveScanTableModel.getValueAt(modelRow, 0);
+            if (id != null && passiveScanManager != null) {
+                ScanResult sr = passiveScanManager.getResultById(id);
+                if (sr != null) return sr;
+            }
+            if (modelRow < requestList.size()) {
+                return requestList.get(modelRow);
+            }
+            return null;
+        }
+
+        @Override
+        public List<Object> getSelectedSelections() {
+            List<Object> out = new ArrayList<>();
+            if (passiveScanTable == null) return out;
+            for (int viewRow : passiveScanTable.getSelectedRows()) {
+                Object sel = selectionForViewRow(viewRow);
+                if (sel != null) out.add(sel);
+            }
+            return out;
+        }
+
+        @Override
+        public burp.api.montoya.http.message.HttpRequestResponse selectedRequestResponse() {
+            Object sel = selectionForViewRow(getSelectedViewRow());
+            if (sel instanceof ScanResult sr && sr.getRequestResponse() != null) {
+                return sr.getRequestResponse();
+            }
+            if (sel instanceof RequestData rd && rd.getRequest() != null && !rd.getRequest().isEmpty()) {
+                try {
+                    HttpRequest httpRequest = HttpRequest.httpRequest(rd.getRequest());
+                    return burp.api.montoya.http.message.HttpRequestResponse.httpRequestResponse(httpRequest, HttpResponse.httpResponse());
+                } catch (Exception ignored) {
+                }
+            }
+            return null;
+        }
+    };
+
     // 数据
     private List<RequestData> requestList;
     private int nextRequestId = 1;
-    private boolean isAnalyzing = false;
-    private SwingWorker<Void, String> currentWorker;
-    private volatile int analysisRunId = 0;
     // private ToolExecutor toolExecutor;
     
     // 被动扫描相关组件
@@ -498,12 +547,13 @@ public class AIAnalyzerTab extends JPanel {
         passiveMainSplitPane.setRightComponent(rightSplitPane);
 
         // 主动模式内容：独立的聊天面板
-        JPanel activeModePanel = createActiveModePanel();
+        activeAnalysisPanel = new ActiveAnalysisPanel(api);
+        activeAnalysisPanel.bind(apiClient, this::updateApiClientConfigForAnalysis, this::onAnalysisStateChanged, passiveDataSource);
 
         centerModeCardLayout = new CardLayout();
         centerModeCardPanel = new JPanel(centerModeCardLayout);
         centerModeCardPanel.add(passiveMainSplitPane, CARD_PASSIVE);
-        centerModeCardPanel.add(activeModePanel, CARD_ACTIVE);
+        centerModeCardPanel.add(activeAnalysisPanel, CARD_ACTIVE);
         centerModeCardLayout.show(centerModeCardPanel, CARD_PASSIVE);
         mainPanel.add(centerModeCardPanel, BorderLayout.CENTER);
 
@@ -532,8 +582,11 @@ public class AIAnalyzerTab extends JPanel {
         topModePanel.add(analysisModeComboBox);
         panel.add(topModePanel, BorderLayout.NORTH);
 
-        // 左侧：控制选项（仅被动模式显示）
-        JPanel controlPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
+        // 左侧：控制选项（仅被动模式显示），按钮分两行避免单行溢出
+        JPanel controlPanel = new JPanel();
+        controlPanel.setLayout(new BoxLayout(controlPanel, BoxLayout.Y_AXIS));
+        JPanel controlRow1 = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 3));
+        JPanel controlRow2 = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 3));
         
         enablePassiveScanCheckBox = new JCheckBox("启用被动扫描", false);
         enablePassiveScanCheckBox.setToolTipText("启用后可以自动从HTTP History获取流量进行AI安全扫描");
@@ -543,9 +596,9 @@ public class AIAnalyzerTab extends JPanel {
             startPassiveScanButton.setEnabled(enabled && !passiveScanManager.isRunning());
             stopPassiveScanButton.setEnabled(enabled && passiveScanManager.isRunning());
         });
-        controlPanel.add(enablePassiveScanCheckBox);
+        controlRow1.add(enablePassiveScanCheckBox);
         
-        controlPanel.add(new JLabel("线程数:"));
+        controlRow1.add(new JLabel("线程数:"));
         SpinnerModel spinnerModel = new SpinnerNumberModel(10, 1, 50, 1);
         threadCountSpinner = new JSpinner(spinnerModel);
         threadCountSpinner.setEnabled(false);
@@ -555,38 +608,41 @@ public class AIAnalyzerTab extends JPanel {
                 passiveScanManager.setThreadCount((Integer) threadCountSpinner.getValue());
             }
         });
-        controlPanel.add(threadCountSpinner);
+        controlRow1.add(threadCountSpinner);
         
         startPassiveScanButton = new JButton("开始扫描");
         startPassiveScanButton.setEnabled(false);
         startPassiveScanButton.addActionListener(e -> startPassiveScan());
-        controlPanel.add(startPassiveScanButton);
+        controlRow1.add(startPassiveScanButton);
         
         stopPassiveScanButton = new JButton("停止扫描");
         stopPassiveScanButton.setEnabled(false);
         stopPassiveScanButton.addActionListener(e -> stopPassiveScan());
-        controlPanel.add(stopPassiveScanButton);
+        controlRow1.add(stopPassiveScanButton);
         
         JButton clearPassiveScanButton = new JButton("清空结果");
         clearPassiveScanButton.addActionListener(e -> clearPassiveScanResults());
-        controlPanel.add(clearPassiveScanButton);
+        controlRow2.add(clearPassiveScanButton);
 
         JButton resetTokenButton = new JButton("重置Token统计");
         resetTokenButton.setToolTipText("清零累计 Token 用量与预算状态（预算值本身保留）");
         resetTokenButton.addActionListener(e ->
                 com.ai.analyzer.util.TokenUsageTracker.instance().reset());
-        controlPanel.add(resetTokenButton);
+        controlRow2.add(resetTokenButton);
 
         JButton activeAuditButton = new JButton("主动审计选中");
         activeAuditButton.setToolTipText("对结果列表中选中的请求发起 Burp Scanner 主动审计，完成后问题自动合并回列表");
         activeAuditButton.addActionListener(e -> startActiveAuditForSelection());
-        controlPanel.add(activeAuditButton);
+        controlRow2.add(activeAuditButton);
 
         auditQueueButton = new JButton("审计队列(0)");
         auditQueueButton.setToolTipText("被动扫描判定的高危结果自动进入待审计队列；点击一键对队列内全部目标发起 Burp 主动审计");
         auditQueueButton.setEnabled(false);
         auditQueueButton.addActionListener(e -> auditPendingQueue());
-        controlPanel.add(auditQueueButton);
+        controlRow2.add(auditQueueButton);
+
+        controlPanel.add(controlRow1);
+        controlPanel.add(controlRow2);
 
         JPanel statusPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 5));
         passiveScanStatusLabel = new JLabel("就绪");
@@ -700,7 +756,9 @@ public class AIAnalyzerTab extends JPanel {
                     String snapshot = passiveScanStreamBuffer.toString();
                     try {
                         MarkdownRenderer.appendMarkdownStreaming(passiveScanResultPane, snapshot, 0);
-                        passiveScanResultPane.setCaretPosition(passiveScanResultPane.getStyledDocument().getLength());
+                        if (isResultPaneAtBottom()) {
+                            passiveScanResultPane.setCaretPosition(passiveScanResultPane.getStyledDocument().getLength());
+                        }
                     } catch (Exception e) {
                         passiveScanResultPane.setText(snapshot);
                     }
@@ -725,7 +783,9 @@ public class AIAnalyzerTab extends JPanel {
                         if (fg != null) javax.swing.text.StyleConstants.setForeground(plain, fg);
                     }
                     doc.insertString(doc.getLength(), newText, plain);
-                    passiveScanResultPane.setCaretPosition(doc.getLength());
+                    if (isResultPaneAtBottom()) {
+                        passiveScanResultPane.setCaretPosition(doc.getLength());
+                    }
                 } catch (Exception e) {
                     try {
                         passiveScanResultPane.setText(passiveScanStreamBuffer.toString());
@@ -807,14 +867,41 @@ public class AIAnalyzerTab extends JPanel {
     /**
      * 开始被动扫描
      */
+    /**
+     * 是否位于结果区底部（用户未向上滚动阅读时返回 true，流式输出才会自动滚到底部）
+     */
+    private boolean isResultPaneAtBottom() {
+        if (resultScrollPane == null) return false;
+        JScrollBar vbar = resultScrollPane.getVerticalScrollBar();
+        return vbar.getMaximum() - vbar.getValue() - vbar.getVisibleAmount() < 80;
+    }
+
+    /**
+     * 在结果区底部追加内容后，仅当用户位于底部时才滚动到末尾。
+     */
+    private void scrollResultToEndIfAtBottom() {
+        if (isResultPaneAtBottom()) {
+            resultTextPane.setCaretPosition(resultTextPane.getDocument().getLength());
+        }
+    }
+
     private void startPassiveScan() {
         if (!enablePassiveScanCheckBox.isSelected()) {
+            // 按钮静默失效是最常见的"反人类"点：给出明确原因提示
+            passiveScanStatusLabel.setText("请先勾选「启用被动扫描」");
+            new javax.swing.Timer(3000, e -> {
+                ((javax.swing.Timer) e.getSource()).stop();
+                passiveScanStatusLabel.setText("就绪");
+            }).start();
             return;
         }
         
         // 同步最新的API配置
         syncApiConfigToPassiveScan();
-        
+
+        // 应用过滤规则（避免用户修改后未点「立即应用」直接开扫导致不生效）
+        applyPassiveScanFilters();
+
         // 开始扫描（生产者-消费者模型）
         passiveScanManager.startPassiveScan();
     }
@@ -2062,7 +2149,7 @@ public class AIAnalyzerTab extends JPanel {
         panel.add(domainLabel, gbc);
         
         gbc.gridy = 3; gbc.weighty = 0.4; gbc.fill = GridBagConstraints.BOTH;
-        passiveScanDomainBlacklistArea = new JTextArea("");
+        passiveScanDomainBlacklistArea = new JTextArea(PassiveScanTask.getDefaultDomainBlacklistText());
         passiveScanDomainBlacklistArea.setLineWrap(true);
         passiveScanDomainBlacklistArea.setWrapStyleWord(true);
         passiveScanDomainBlacklistArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
@@ -2074,9 +2161,11 @@ public class AIAnalyzerTab extends JPanel {
         gbc.gridy = 4; gbc.weighty = 0; gbc.fill = GridBagConstraints.NONE;
         gbc.anchor = GridBagConstraints.EAST;
         JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
-        JButton resetFiltersButton = new JButton("恢复默认扩展名");
+        JButton resetFiltersButton = new JButton("恢复默认过滤配置");
+        resetFiltersButton.setToolTipText("扩展名与域名黑名单均恢复为内置默认值");
         resetFiltersButton.addActionListener(e -> {
             passiveScanSkipExtensionsArea.setText(PassiveScanTask.getDefaultSkipExtensionsText());
+            passiveScanDomainBlacklistArea.setText(PassiveScanTask.getDefaultDomainBlacklistText());
         });
         JButton applyFiltersButton = new JButton("立即应用过滤规则");
         applyFiltersButton.addActionListener(e -> applyPassiveScanFilters());
@@ -2475,6 +2564,7 @@ public class AIAnalyzerTab extends JPanel {
         applyEditorTheme(localResultTextPane);
         JScrollPane resultScrollPane = new JScrollPane(localResultTextPane);
         resultScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        this.resultScrollPane = resultScrollPane;
         panel.add(resultScrollPane, BorderLayout.CENTER);
 
         JPanel promptPanel = new JPanel(new BorderLayout());
@@ -2495,61 +2585,6 @@ public class AIAnalyzerTab extends JPanel {
         passiveModePromptArea = localPromptArea;
         resultTextPane = localResultTextPane;
         userPromptArea = localPromptArea;
-
-        return panel;
-    }
-
-    /**
-     * 创建主动模式面板 - 聊天式布局，独立组件
-     * 结果区保留上下文（追加式），输入框动态高度、提交后清空
-     * 底部按钮复用 createButtonPanel()，不在此处重复创建
-     */
-    private JPanel createActiveModePanel() {
-        JPanel panel = new JPanel(new BorderLayout(0, 5));
-
-        // ---- 结果区域 ----
-        activeModeResultTextPane = new JTextPane() {
-            @Override
-            public boolean getScrollableTracksViewportWidth() {
-                return true;
-            }
-        };
-        activeModeResultTextPane.setEditable(false);
-        activeModeResultTextPane.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
-        activeModeResultTextPane.setContentType("text/plain");
-        applyEditorTheme(activeModeResultTextPane);
-        JScrollPane resultScrollPane = new JScrollPane(activeModeResultTextPane);
-        resultScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-        resultScrollPane.setBorder(BorderFactory.createTitledBorder("AI分析结果"));
-        panel.add(resultScrollPane, BorderLayout.CENTER);
-
-        // ---- 底部：输入区域 ----
-        JPanel promptPanel = new JPanel(new BorderLayout());
-        promptPanel.setBorder(BorderFactory.createTitledBorder("输入"));
-
-        activeModePromptArea = new JTextArea(5, 50);
-        activeModePromptArea.setLineWrap(true);
-        activeModePromptArea.setWrapStyleWord(true);
-        activeModePromptArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 13));
-        applyEditorTheme(activeModePromptArea);
-
-        JScrollPane promptScroll = new JScrollPane(activeModePromptArea);
-        promptScroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
-        promptScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-
-        // Enter 发送，Shift+Enter 换行（与 ChatPanel 一致）
-        activeModePromptArea.addKeyListener(new java.awt.event.KeyAdapter() {
-            @Override
-            public void keyPressed(java.awt.event.KeyEvent e) {
-                if (e.getKeyCode() == java.awt.event.KeyEvent.VK_ENTER && !e.isShiftDown()) {
-                    e.consume();
-                    performAnalysis();
-                }
-            }
-        });
-
-        promptPanel.add(promptScroll, BorderLayout.CENTER);
-        panel.add(promptPanel, BorderLayout.SOUTH);
 
         return panel;
     }
@@ -2588,14 +2623,40 @@ public class AIAnalyzerTab extends JPanel {
             ((CardLayout) passiveControlDetailsPanel.getLayout()).show(passiveControlDetailsPanel, active ? CARD_ACTIVE : CARD_PASSIVE);
         }
         if (active) {
-            resultTextPane = activeModeResultTextPane;
-            userPromptArea = activeModePromptArea;
+            resultTextPane = activeAnalysisPanel.getResultPane();
+            userPromptArea = activeAnalysisPanel.getPromptArea();
+            activeAnalysisPanel.setActiveMode(true, activeAnalysisPanel.getResultPane(), activeAnalysisPanel.getPromptArea());
         } else {
             resultTextPane = passiveModeResultTextPane;
             userPromptArea = passiveModePromptArea;
+            activeAnalysisPanel.setActiveMode(false, passiveModeResultTextPane, passiveModePromptArea);
         }
         revalidate();
         repaint();
+    }
+
+    /** 分析前同步 API 客户端配置（由 ActiveAnalysisPanel 调用） */
+    private void updateApiClientConfigForAnalysis() {
+        apiClient.setApiProvider((String) apiProviderComboBox.getSelectedItem());
+        apiClient.setApiUrl(apiUrlField.getText().trim());
+        apiClient.setApiKey(getEffectiveApiKeyFromField());
+        apiClient.setModel(modelField.getText().trim());
+        apiClient.setCustomParameters(customParametersField.getText().trim());
+        apiClient.setMaxTokens(maxTokensField.getText().trim());
+        com.ai.analyzer.util.TokenUsageTracker.instance().setBudget(parseTokenBudget(tokenBudgetField.getText()));
+        apiClient.setEnableThinking(false);
+        apiClient.setEnableSearch(enableSearchCheckBox.isSelected());
+    }
+
+    /** 分析状态变化回调：同步底部"开始分析/停止"按钮 */
+    private void onAnalysisStateChanged(boolean analyzing) {
+        if (analyzeButton != null) {
+            analyzeButton.setEnabled(!analyzing);
+            analyzeButton.setText(analyzing ? "分析中..." : "开始分析");
+        }
+        if (stopButton != null) {
+            stopButton.setEnabled(analyzing);
+        }
     }
 
     private void applyEditorTheme(JTextComponent component) {
@@ -2662,294 +2723,20 @@ public class AIAnalyzerTab extends JPanel {
     }
 
     private void performAnalysis() {
-        if (isAnalyzing) {
-            return;
-        }
-
-        // 允许没有选择请求时也能进行分析（自由对话模式）
-        RequestData requestData = null;
-        ScanResult scanResult = null;
-        int viewRow = (activeModeSelected || passiveScanTable == null) ? -1 : passiveScanTable.getSelectedRow();
-        if (viewRow >= 0) {
-            int modelRow = passiveScanTable.convertRowIndexToModel(viewRow);
-            Integer id = (Integer) passiveScanTableModel.getValueAt(modelRow, 0);
-            if (id != null && passiveScanManager != null) {
-                scanResult = passiveScanManager.getResultById(id);
-            }
-            // 如果是手动添加的请求，尝试从 requestList 获取
-            if (scanResult == null && modelRow < requestList.size()) {
-                requestData = requestList.get(modelRow);
-            }
-        }
-
-        String userPrompt = userPromptArea.getText().trim();
-        if (userPrompt.isEmpty()) {
-            if (requestData != null || scanResult != null) {
-                userPrompt = "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议";
-            } else {
-                userPrompt = "";
-            }
-        }
-
-        // 更新API客户端配置
-        apiClient.setApiProvider((String) apiProviderComboBox.getSelectedItem());
-        apiClient.setApiUrl(apiUrlField.getText().trim());
-        apiClient.setApiKey(getEffectiveApiKeyFromField());
-        apiClient.setModel(modelField.getText().trim());
-        apiClient.setCustomParameters(customParametersField.getText().trim());
-        apiClient.setMaxTokens(maxTokensField.getText().trim());
-        com.ai.analyzer.util.TokenUsageTracker.instance().setBudget(
-                parseTokenBudget(tokenBudgetField.getText()));
-        apiClient.setEnableThinking(false);
-        apiClient.setEnableSearch(enableSearchCheckBox.isSelected());
-        
-        // 如果没有选择请求，提示用户
-        if (requestData == null && scanResult == null) {
-            api.logging().logToOutput("当前没有选择请求，将以自由对话模式进行分析");
-        }
-
-        isAnalyzing = true;
-        final int runId = ++analysisRunId;
-        analyzeButton.setEnabled(false);
-        analyzeButton.setText("分析中...");
-        stopButton.setEnabled(true);
-
-        // 主动模式：提交后立即清空输入框
-        final boolean isActiveMode = activeModeSelected;
-        if (isActiveMode && activeModePromptArea != null) {
-            activeModePromptArea.setText("");
-        }
-        
-        String finalUserPrompt = userPrompt;
-        final RequestData finalRequestData = requestData;
-        final ScanResult finalScanResult = scanResult;
-        final JTextPane targetResultPane = resultTextPane;
-        currentWorker = new SwingWorker<Void, String>() {
-            private StringBuilder fullResponse = new StringBuilder();
-            private int aiMessageStartPos = 0;
-
-            @Override
-            protected Void doInBackground() throws Exception {
-                try {
-                    String httpContent = "";
-                    if (finalScanResult != null && finalScanResult.getRequestResponse() != null) {
-                        httpContent = com.ai.analyzer.util.HttpFormatter.formatHttpRequestResponse(
-                            finalScanResult.getRequestResponse());
-                    } else if (finalRequestData != null) {
-                        httpContent = finalRequestData.getFullRequestResponse();
-                    }
-                    
-                    final boolean httpTooLong = !httpContent.isEmpty() 
-                        && httpContent.length() > com.ai.analyzer.util.HttpFormatter.DEFAULT_MAX_LENGTH;
-                    final int httpOrigLen = httpContent.length();
-                    
-                    try {
-                        SwingUtilities.invokeAndWait(() -> {
-                            if (isActiveMode) {
-                                try {
-                                    StyledDocument doc = targetResultPane.getStyledDocument();
-                                    if (doc.getLength() > 0) {
-                                        doc.insertString(doc.getLength(), "\n", doc.getStyle("regular"));
-                                    }
-                                    // "你:" 蓝色加粗
-                                    javax.swing.text.Style senderStyle = doc.addStyle("userSender", null);
-                                    javax.swing.text.StyleConstants.setBold(senderStyle, true);
-                                    javax.swing.text.StyleConstants.setForeground(senderStyle, Color.BLUE);
-                                    doc.insertString(doc.getLength(), "你: ", senderStyle);
-                                    // 消息文本
-                                    javax.swing.text.Style msgStyle = doc.addStyle("userMsg", null);
-                                    Color textColor = UIManager.getColor("TextArea.foreground");
-                                    javax.swing.text.StyleConstants.setForeground(msgStyle, textColor != null ? textColor : Color.BLACK);
-                                    doc.insertString(doc.getLength(), finalUserPrompt + "\n\n", msgStyle);
-                                    // "AI助手:" 绿色加粗
-                                    javax.swing.text.Style aiSenderStyle = doc.addStyle("aiSender", null);
-                                    javax.swing.text.StyleConstants.setBold(aiSenderStyle, true);
-                                    javax.swing.text.StyleConstants.setForeground(aiSenderStyle, Color.GREEN);
-                                    doc.insertString(doc.getLength(), "AI助手: \n", aiSenderStyle);
-                                } catch (Exception ignored) {}
-                            } else {
-                                targetResultPane.setText("");
-                            }
-                            if (httpTooLong) {
-                                try {
-                                    StyledDocument doc = targetResultPane.getStyledDocument();
-                                    javax.swing.text.Style warnStyle = doc.addStyle("httpWarning", null);
-                                    javax.swing.text.StyleConstants.setForeground(warnStyle, new Color(255, 140, 0));
-                                    javax.swing.text.StyleConstants.setItalic(warnStyle, true);
-                                    javax.swing.text.StyleConstants.setFontFamily(warnStyle, "Microsoft YaHei");
-                                    javax.swing.text.StyleConstants.setFontSize(warnStyle, 12);
-                                    doc.insertString(doc.getLength(), 
-                                        "HTTP内容过长（" + httpOrigLen + " 字符），完整报文已缓存，提示词仅含预览与 fileId\n\n", warnStyle);
-                                } catch (Exception ignored) {}
-                            }
-                            aiMessageStartPos = targetResultPane.getStyledDocument().getLength();
-                        });
-                    } catch (Exception e) {
-                        aiMessageStartPos = 0;
-                    }
-                    
-                    final long[] lastRenderTime = {0L};
-                    final long RENDER_INTERVAL_MS = 120;
-
-                    apiClient.analyzeRequestStream(
-                        httpContent,
-                        finalUserPrompt,
-                        chunk -> {
-                            if (isCancelled() || !isAnalyzing || runId != analysisRunId) return;
-
-                            fullResponse.append(chunk);
-
-                            long now = System.currentTimeMillis();
-
-                            if (now - lastRenderTime[0] < RENDER_INTERVAL_MS) return;
-                            lastRenderTime[0] = now;
-                            String snapshot = fullResponse.toString();
-
-                            SwingUtilities.invokeLater(() -> {
-                                if (isCancelled() || !isAnalyzing || runId != analysisRunId) return;
-                                try {
-                                    MarkdownRenderer.appendMarkdownStreaming(targetResultPane, snapshot, aiMessageStartPos);
-                                    targetResultPane.setCaretPosition(targetResultPane.getStyledDocument().getLength());
-                                } catch (Exception e) {
-                                    api.logging().logToError("流式Markdown渲染失败: " + e.getMessage());
-                                }
-                            });
-                        }
-                    );
-                    
-                    String finalContent = fullResponse.toString();
-                    if (!finalContent.isEmpty() && !isCancelled() && isAnalyzing && runId == analysisRunId) {
-                        SwingUtilities.invokeLater(() -> {
-                            if (isCancelled() || !isAnalyzing || runId != analysisRunId) return;
-                            try {
-                                StyledDocument doc = targetResultPane.getStyledDocument();
-                                int currentLength = doc.getLength();
-                                if (currentLength > aiMessageStartPos) {
-                                    doc.remove(aiMessageStartPos, currentLength - aiMessageStartPos);
-                                }
-                                MarkdownRenderer.appendMarkdown(targetResultPane, finalContent);
-                                targetResultPane.setCaretPosition(doc.getLength());
-                            } catch (Exception e) {
-                                api.logging().logToError("最终Markdown渲染失败: " + e.getMessage());
-                            }
-                        });
-                    }
-                } catch (Exception e) {
-                    if (isCancelled() || runId != analysisRunId) return null;
-                    SwingUtilities.invokeLater(() -> {
-                        appendToResult("分析过程中出现错误: " + e.getMessage());
-                    });
-                }
-                return null;
-            }
-
-            @Override
-            protected void done() {
-                try {
-                    get(); // 检查是否有异常
-                    if (runId != analysisRunId) return;
-                    
-                    // 流式输出已完成，在doInBackground()中已经完成了完整渲染，这里不需要再渲染
-                } catch (Exception e) {
-                    if (!isCancelled() && runId == analysisRunId) {
-                        SwingUtilities.invokeLater(() -> {
-                            appendToResult("分析过程中出现错误: " + e.getMessage());
-                        });
-                    }
-                } finally {
-                    if (runId == analysisRunId) {
-                        analyzeButton.setEnabled(true);
-                        analyzeButton.setText("开始分析");
-                        stopButton.setEnabled(false); // 禁用停止按钮
-                        isAnalyzing = false;
-                    }
-                }
-            }
-        };
-
-        currentWorker.execute();
-    }
-
-    private void appendStreamChunk(String chunk) {
-        try {
-            StyledDocument doc = resultTextPane.getStyledDocument();
-            javax.swing.text.Style regularStyle = doc.addStyle("regular", null);
-            javax.swing.text.StyleConstants.setFontFamily(regularStyle, "Microsoft YaHei");
-            javax.swing.text.StyleConstants.setFontSize(regularStyle, 12);
-            Color textColor = UIManager.getColor("TextArea.foreground");
-            javax.swing.text.StyleConstants.setForeground(regularStyle, textColor != null ? textColor : Color.BLACK);
-            doc.insertString(doc.getLength(), chunk, regularStyle);
-            resultTextPane.setCaretPosition(doc.getLength());
-        } catch (Exception e) {
-            e.printStackTrace();
+        if (activeAnalysisPanel != null) {
+            activeAnalysisPanel.performAnalysis();
         }
     }
-
-    private void appendToResult(String text) {
-        try {
-            StyledDocument doc = resultTextPane.getStyledDocument();
-            javax.swing.text.Style regularStyle = doc.addStyle("regular", null);
-            javax.swing.text.StyleConstants.setFontFamily(regularStyle, "Microsoft YaHei");
-            javax.swing.text.StyleConstants.setFontSize(regularStyle, 12);
-            Color textColor = UIManager.getColor("TextArea.foreground");
-            javax.swing.text.StyleConstants.setForeground(regularStyle, textColor != null ? textColor : Color.BLACK);
-            doc.insertString(doc.getLength(), text + "\n", regularStyle);
-            resultTextPane.setCaretPosition(doc.getLength());
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-    
     private void stopAnalysis() {
-        if (currentWorker != null && !currentWorker.isDone()) {
-            // 先取消流式输出连接（使用 StreamingHandle.cancel()）
-            if (apiClient != null) {
-                apiClient.cancelStreaming();
-            }
-            analysisRunId++;
-            // 然后取消 SwingWorker
-            currentWorker.cancel(true);
-            isAnalyzing = false;
-            stopButton.setEnabled(false);
-            analyzeButton.setEnabled(true);
-            analyzeButton.setText("开始分析");
-            
-            // 添加中断提示
-            try {
-                StyledDocument doc = resultTextPane.getStyledDocument();
-                javax.swing.text.Style stopStyle = doc.addStyle("stop", null);
-                javax.swing.text.StyleConstants.setForeground(stopStyle, java.awt.Color.ORANGE);
-                javax.swing.text.StyleConstants.setBold(stopStyle, true);
-                javax.swing.text.StyleConstants.setItalic(stopStyle, true);
-                doc.insertString(doc.getLength(), "\n\n[输出已中断]", stopStyle);
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-            
-            api.logging().logToOutput("用户中断了AI分析");
+        if (activeAnalysisPanel != null) {
+            activeAnalysisPanel.stopAnalysis();
         }
     }
-    
     private void clearResults() {
-        if (currentWorker != null && !currentWorker.isDone()) {
-            if (apiClient != null) {
-                apiClient.cancelStreaming();
-            }
-            analysisRunId++;
-            currentWorker.cancel(true);
-            isAnalyzing = false;
-            stopButton.setEnabled(false);
-            analyzeButton.setEnabled(true);
-            analyzeButton.setText("开始分析");
+        if (activeAnalysisPanel != null) {
+            activeAnalysisPanel.clearResults();
         }
-        
-        resultTextPane.setText("");
-        if (activeModeResultTextPane != null && activeModeResultTextPane != resultTextPane) {
-            activeModeResultTextPane.setText("");
-        }
-        apiClient.clearContext();
     }
-
     private void deleteSelectedRequest() {
         // 已被 deleteSelectedPassiveScanResult() 替代
         deleteSelectedPassiveScanResult();
@@ -3016,6 +2803,10 @@ public class AIAnalyzerTab extends JPanel {
             
             settings.setWorkplaceDirectoryPath(workplaceDirectoryField != null ? workplaceDirectoryField.getText().trim() : "");
 
+            // Plan Mode 配置
+            if (activeAnalysisPanel != null) {
+                settings.setEnablePlanMode(activeAnalysisPanel.getPlanModeSelected());
+            }
             // Skills 配置
             if (enableSkillsCheckBox != null) {
                 settings.setEnableSkills(enableSkillsCheckBox.isSelected());
@@ -3080,10 +2871,15 @@ public class AIAnalyzerTab extends JPanel {
                 settings.setPassiveScanSkipExtensions(
                     extText.strip().equals(com.ai.analyzer.scan.pscan.PassiveScanTask.getDefaultSkipExtensionsText().strip()) ? "" : extText);
             }
-            if (passiveScanDomainBlacklistArea != null) settings.setPassiveScanDomainBlacklist(passiveScanDomainBlacklistArea.getText());
+            if (passiveScanDomainBlacklistArea != null) {
+                String blacklist = passiveScanDomainBlacklistArea.getText();
+                settings.setPassiveScanDomainBlacklist(
+                    blacklist.isBlank() ? com.ai.analyzer.scan.pscan.PassiveScanTask.getDefaultDomainBlacklistText() : blacklist);
+            }
             
             // 应用系统提示词到 API 客户端
             apiClient.setCustomSystemPrompt(settings.getCustomActiveSystemPrompt());
+            apiClient.setEnablePlanMode(settings.isEnablePlanMode());
             if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
                 passiveScanManager.getApiClient().setCustomSystemPrompt(settings.getCustomPassiveSystemPrompt());
                 // Skills 配置同步到被动扫描客户端
@@ -3099,10 +2895,29 @@ public class AIAnalyzerTab extends JPanel {
             setApiKeySecretAndMask(effectiveApiKey);
 
             api.logging().logToOutput("设置已保存");
+            flashStatusMessage("设置已保存 ✔");
         } catch (Exception e) {
-            //JOptionPane.showMessageDialog(this, "保存设置失败: " + e.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
+            flashStatusMessage("保存设置失败: " + e.getMessage());
             api.logging().logToError("保存设置失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * 在被动扫描状态标签上短暂显示一条提示（3 秒后恢复"就绪"）。
+     * 用于保存设置等操作的轻量反馈，避免弹窗打断。
+     */
+    private void flashStatusMessage(String message) {
+        SwingUtilities.invokeLater(() -> {
+            passiveScanStatusLabel.setText(message);
+            javax.swing.Timer timer = new javax.swing.Timer(3000, ev -> {
+                ((javax.swing.Timer) ev.getSource()).stop();
+                if (passiveScanStatusLabel.getText().equals(message)) {
+                    passiveScanStatusLabel.setText("就绪");
+                }
+            });
+            timer.setRepeats(false);
+            timer.start();
+        });
     }
 
     /**
@@ -3169,6 +2984,9 @@ public class AIAnalyzerTab extends JPanel {
         refreshApiProfileCombo();
         if (workplaceDirectoryField != null) {
             workplaceDirectoryField.setText(settings.getWorkplaceDirectoryPath());
+        }
+        if (activeAnalysisPanel != null) {
+            activeAnalysisPanel.setPlanModeSelected(settings.isEnablePlanMode());
         }
         setPromptTextForAllModes(settings.getUserPrompt());
         enableSearchCheckBox.setSelected(settings.isEnableSearch());
@@ -3379,7 +3197,13 @@ public class AIAnalyzerTab extends JPanel {
 
         // 被动扫描过滤配置
         if (passiveScanSkipExtensionsArea != null) passiveScanSkipExtensionsArea.setText(settings.getPassiveScanSkipExtensions());
-        if (passiveScanDomainBlacklistArea != null) passiveScanDomainBlacklistArea.setText(settings.getPassiveScanDomainBlacklist());
+        if (passiveScanDomainBlacklistArea != null) {
+            String savedBlacklist = settings.getPassiveScanDomainBlacklist();
+            passiveScanDomainBlacklistArea.setText(
+                savedBlacklist.isBlank()
+                    ? com.ai.analyzer.scan.pscan.PassiveScanTask.getDefaultDomainBlacklistText()
+                    : savedBlacklist);
+        }
         applyPassiveScanFilters();
     }
 
@@ -3480,6 +3304,21 @@ public class AIAnalyzerTab extends JPanel {
     
     public boolean isEnableSearch() {
         return enableSearchCheckBox != null && enableSearchCheckBox.isSelected();
+    }
+
+    /**
+     * 获取工作区目录（侧栏同步记忆/技能时使用）
+     */
+    public String getWorkplaceDirectoryPath() {
+        return workplaceDirectoryField != null ? workplaceDirectoryField.getText().trim() : "";
+    }
+
+    public boolean isEnableSkills() {
+        return enableSkillsCheckBox != null && enableSkillsCheckBox.isSelected();
+    }
+
+    public String getSkillsDirectoryPath() {
+        return skillsDirectoryField != null ? skillsDirectoryField.getText().trim() : "";
     }
     
     /**
