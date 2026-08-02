@@ -408,7 +408,8 @@ public class PassiveScanApiClient {
                     List<String> args = command.size() > 1 ? command.subList(1, command.size()) : List.of();
                     java.util.Map<String, String> headers = new java.util.HashMap<>();
                     if (customConfig.getAuthorization() != null && !customConfig.getAuthorization().isEmpty()) {
-                        headers.put("Authorization", "Bearer " + customConfig.getAuthorization());
+                        headers.put("Authorization",
+                                AgentScopeMcpManager.normalizeBearer(customConfig.getAuthorization()));
                     }
                     AgentScopeMcpManager.registerCustomMcp(asToolkit,
                             customConfig.getName(),

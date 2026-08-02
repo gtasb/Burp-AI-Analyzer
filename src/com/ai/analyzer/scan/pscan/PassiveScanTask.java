@@ -125,6 +125,33 @@ public class PassiveScanTask implements Callable<ScanResult> {
     private static final String[] DEFAULT_STATIC_PATHS = {
         "/images/", "/img/", "/css/", "/js/", "/fonts/", "/static/", "/assets/"
     };
+
+    /** 默认域名黑名单（统计/广告/遥测等对安全测试无价值的域名，可自行增删） */
+    private static final String DEFAULT_DOMAIN_BLACKLIST_TEXT = String.join("\n", new String[] {
+        "# 统计/分析",
+        "*.google-analytics.com",
+        "*.googletagmanager.com",
+        "*.googleadservices.com",
+        "*.doubleclick.net",
+        "*.analytics.qq.com",
+        "*.hm.baidu.com",
+        "*.cnzz.com",
+        "*.umeng.com",
+        "# 广告",
+        "*.adservice.google.com",
+        "# 公共静态/遥测",
+        "*.gstatic.com",
+        "*.cloudflareinsights.com",
+        "fonts.googleapis.com",
+        "recaptcha.net"
+    });
+
+    /**
+     * 获取默认的域名黑名单文本（供 UI 显示）
+     */
+    public static String getDefaultDomainBlacklistText() {
+        return DEFAULT_DOMAIN_BLACKLIST_TEXT;
+    }
     
     private static volatile Set<String> customExtensions = null;
     private static volatile String[] customStaticPaths = null;
