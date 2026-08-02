@@ -328,11 +328,12 @@ public class ActiveAnalysisPanel extends JPanel {
         String detail;
         if (scanResult != null) {
             targetDesc = scanResult.getMethod() + " " + scanResult.getShortUrl();
-            detail = "Host: " + scanResult.getHost();
+            detail = "Host: " + scanResult.getHost() + " · 报文 " + httpContent.length() + " 字节";
         } else if (requestData != null) {
             String url = requestData.getUrl();
             targetDesc = requestData.getMethod() + " " + (url.length() > 100 ? url.substring(0, 100) + "..." : url);
-            detail = "";
+            String host = extractHost(url);
+            detail = (host.isEmpty() ? "" : "Host: " + host + " · ") + "报文 " + httpContent.length() + " 字节";
         } else {
             targetDesc = "自由对话模式";
             detail = "未选择请求";
@@ -559,6 +560,19 @@ public class ActiveAnalysisPanel extends JPanel {
         }
         sb.append(" · ").append(TokenUsageTracker.instance().snapshot().summary());
         return sb.toString();
+    }
+
+    /** 从 URL 提取 host（去掉协议与端口，失败返回空串） */
+    private static String extractHost(String url) {
+        if (url == null || url.isBlank()) {
+            return "";
+        }
+        try {
+            java.net.URI uri = java.net.URI.create(url);
+            return uri.getHost() != null ? uri.getHost() : "";
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     public void stopAnalysis() {
