@@ -1879,7 +1879,10 @@ public class AIAnalyzerTab extends JPanel {
         JPanel customMcpButtonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         JButton validateCustomMcpButton = new JButton("验证配置");
         JButton restoreCustomMcpButton = new JButton("恢复默认");
-        validateCustomMcpButton.addActionListener(e -> validateCustomMcpConfig());
+        validateCustomMcpButton.addActionListener(e -> {
+            validateCustomMcpConfig();
+            testCustomMcpConnections();
+        });
         restoreCustomMcpButton.addActionListener(e -> customMcpConfigArea.setText(
                 com.ai.analyzer.agent.mcpclient.CustomMcpConfigParser.defaultConfigJson()));
         customMcpButtonPanel.add(validateCustomMcpButton);
@@ -1927,6 +1930,104 @@ public class AIAnalyzerTab extends JPanel {
             customMcpSummaryLabel.setText(result.getSummaryText());
             customMcpSummaryLabel.setForeground(result.isSuccess() ? new Color(34, 139, 34) : Color.RED);
         }
+    }
+
+    /**
+     * 对配置文件中每个已启用且格式合法的自定义 MCP 服务器做实际连通测试
+     * （解析配置 → 逐个建立连接并完成 initialize 握手），在后台线程执行避免 UI 卡死。
+     * 结果汇总显示在状态/摘要标签上。
+     */
+    private void testCustomMcpConnections() {
+        if (customMcpConfigArea == null) return;
+        final String json = customMcpConfigArea.getText();
+        final java.util.List<com.ai.analyzer.agent.mcpclient.CustomMcpConfig> configs;
+        try {
+            configs = com.ai.analyzer.agent.mcpclient.CustomMcpConfigParser.parse(json);
+        } catch (Exception e) {
+            if (customMcpStatusLabel != null) {
+                customMcpStatusLabel.setText("状态：JSON 解析失败，无法测试连通性");
+                customMcpStatusLabel.setForeground(Color.RED);
+            }
+            return;
+        }
+
+        final java.util.List<com.ai.analyzer.agent.mcpclient.CustomMcpConfig> targets = new ArrayList<>();
+        for (com.ai.analyzer.agent.mcpclient.CustomMcpConfig config : configs) {
+            if (config.isEnabled() && config.isValid()) {
+                targets.add(config);
+            }
+        }
+        if (targets.isEmpty()) {
+            if (customMcpStatusLabel != null) {
+                customMcpStatusLabel.setText("状态：没有可测试的已启用配置（请先填写并启用服务器）");
+                customMcpStatusLabel.setForeground(Color.RED);
+            }
+            return;
+        }
+
+        if (customMcpStatusLabel != null) {
+            customMcpStatusLabel.setText("状态：正在测试 " + targets.size() + " 个服务器连通性...");
+            customMcpStatusLabel.setForeground(new Color(255, 140, 0));
+        }
+
+        final javax.swing.SwingWorker<Void, String> worker = new javax.swing.SwingWorker<>() {
+            @Override
+            protected Void doInBackground() {
+                for (com.ai.analyzer.agent.mcpclient.CustomMcpConfig config : targets) {
+                    publish(config.getName() + "\u0000" + com.ai.analyzer.agent.mcpclient.AgentScopeMcpManager.testConnection(config));
+                }
+                return null;
+            }
+
+            @Override
+            protected void process(java.util.List<String> chunks) {
+                StringBuilder ok = new StringBuilder();
+                StringBuilder fail = new StringBuilder();
+                int okCount = 0;
+                int failCount = 0;
+                for (String chunk : chunks) {
+                    int sep = chunk.indexOf('\u0000');
+                    String name = sep >= 0 ? chunk.substring(0, sep) : "?";
+                    String detail = sep >= 0 ? chunk.substring(sep + 1) : chunk;
+                    if (detail.isEmpty()) {
+                        okCount++;
+                        ok.append(name).append("、");
+                    } else {
+                        failCount++;
+                        fail.append(name).append("：").append(detail).append("\n");
+                    }
+                }
+                if (customMcpStatusLabel != null) {
+                    if (failCount == 0) {
+                        customMcpStatusLabel.setText("状态：连通性测试通过 " + okCount + " 项");
+                        customMcpStatusLabel.setForeground(new Color(34, 139, 34));
+                    } else if (okCount == 0) {
+                        customMcpStatusLabel.setText("状态：全部 " + failCount + " 项连接失败");
+                        customMcpStatusLabel.setForeground(Color.RED);
+                    } else {
+                        customMcpStatusLabel.setText("状态：" + okCount + " 项正常，" + failCount + " 项失败");
+                        customMcpStatusLabel.setForeground(new Color(255, 140, 0));
+                    }
+                }
+                if (customMcpSummaryLabel != null) {
+                    String text = "";
+                    if (okCount > 0) {
+                        text += "✓ " + ok.substring(0, ok.length() - 1) + "\n";
+                    }
+                    if (failCount > 0) {
+                        text += "✗ " + fail.substring(0, fail.length() - 1);
+                    }
+                    customMcpSummaryLabel.setText(text);
+                    customMcpSummaryLabel.setToolTipText(text);
+                }
+            }
+
+            @Override
+            protected void done() {
+                if (isCancelled()) return;
+            }
+        };
+        worker.execute();
     }
 
     private boolean confirmSaveWithInvalidMcpConfig() {

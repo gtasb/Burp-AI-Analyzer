@@ -264,4 +264,40 @@ public class AgentScopeMcpManager {
         if (chromeMcpUrl == null || chromeMcpUrl.trim().isEmpty()) return null;
         return registerCustomMcp(toolkit, "chrome-mcp", "streamableHttp", chromeMcpUrl.trim(), null, null);
     }
+
+    /**
+     * 对单个自定义 MCP 配置做连通性测试：构建客户端并完成 initialize 握手，
+     * 成功后立即关闭，不注册到 Toolkit。用于 UI「验证配置」按钮。
+     *
+     * @return 空串表示连通正常；否则返回失败原因（含模式与原因链）
+     */
+    public static String testConnection(CustomMcpConfig config) {
+        if (config == null) return "配置为空";
+        if (!config.isValid()) return "配置字段不完整（type 所需的 url 或 command 缺失）";
+
+        String transportType = config.getRawType();
+        String url = config.getUrl();
+        List<String> command = config.getCommand();
+        String urlOrCommand = url != null && !url.isEmpty() ? url
+                : (!command.isEmpty() ? command.get(0) : "");
+        List<String> args = command.size() > 1 ? command.subList(1, command.size()) : List.of();
+
+        try {
+            McpClientWrapper client = withExtensionClassLoader(() ->
+                    buildTransportClient(config.getName(), urlOrCommand, transportType, args, null));
+            try {
+                if (client.isInitialized()) {
+                    return "";
+                }
+                return "客户端已构建但未完成初始化";
+            } finally {
+                try {
+                    client.close();
+                } catch (Exception ignored) {
+                }
+            }
+        } catch (Exception e) {
+            return describeFailure(e);
+        }
+    }
 }

@@ -183,4 +183,28 @@ class ChromeMcpConnectionTest {
                 .isInstanceOf(Exception.class)
                 .satisfies(e -> assertThat(((Throwable) e).getMessage()).contains("模式[streamable]连接失败"));
     }
+
+    @Test
+    @DisplayName("testConnection：streamableHttp 配置连通成功返回空串")
+    void test_connection_succeeds() {
+        CustomMcpConfig config = new CustomMcpConfig();
+        config.setName("chrome-test");
+        config.setEnabled(true);
+        config.setType(CustomMcpConfig.TransportType.STREAMABLE_HTTP);
+        config.setUrl(mcpUrl());
+        assertThat(AgentScopeMcpManager.testConnection(config)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("testConnection：服务器拒绝时返回含原因链的失败信息")
+    void test_connection_failure_returns_cause() {
+        rejectWithStatus = 404;
+        CustomMcpConfig config = new CustomMcpConfig();
+        config.setName("chrome-test");
+        config.setEnabled(true);
+        config.setType(CustomMcpConfig.TransportType.STREAMABLE_HTTP);
+        config.setUrl(mcpUrl());
+        String result = AgentScopeMcpManager.testConnection(config);
+        assertThat(result).contains("模式[streamable]连接失败");
+    }
 }
