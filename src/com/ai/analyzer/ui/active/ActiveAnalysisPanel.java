@@ -53,6 +53,10 @@ public class ActiveAnalysisPanel extends JPanel {
     /** 模型行为订阅（add/remove 成对使用，避免覆盖侧栏 ChatPanel 的订阅） */
     private final java.util.function.Consumer<String> modelBehaviorConsumer =
             behavior -> SwingUtilities.invokeLater(() -> handleModelBehavior(behavior));
+    /** 进行中的思考增量缓冲（THINKING 为流式增量块，累积后整行重写，避免每块一行刷屏） */
+    private final StringBuilder currentThinking = new StringBuilder();
+    /** 当前"思考"行在文档中的起始偏移，-1 表示当前没有进行中的思考行 */
+    private int thinkingLineStart = -1;
 
     // ========== 分析状态 ==========
     private boolean isAnalyzing = false;
@@ -704,12 +708,15 @@ public class ActiveAnalysisPanel extends JPanel {
     private void appendBehaviorLog(String line) {
         if (behaviorTextArea == null) return;
         behaviorTextArea.append(line + "\n");
-        if (behaviorScrollPane != null) {
-            JScrollBar vbar = behaviorScrollPane.getVerticalScrollBar();
-            boolean atBottom = vbar.getMaximum() - vbar.getValue() - vbar.getVisibleAmount() < 80;
-            if (atBottom) {
-                behaviorTextArea.setCaretPosition(behaviorTextArea.getDocument().getLength());
-            }
+        scrollBehaviorToBottom();
+    }
+
+    private void scrollBehaviorToBottom() {
+        if (behaviorScrollPane == null) return;
+        JScrollBar vbar = behaviorScrollPane.getVerticalScrollBar();
+        boolean atBottom = vbar.getMaximum() - vbar.getValue() - vbar.getVisibleAmount() < 80;
+        if (atBottom) {
+            behaviorTextArea.setCaretPosition(behaviorTextArea.getDocument().getLength());
         }
     }
 
@@ -721,24 +728,58 @@ public class ActiveAnalysisPanel extends JPanel {
         String detail = sep >= 0 ? message.substring(sep + 1) : message;
         String timestamp = java.time.LocalDateTime.now().format(
                 java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
-        String line;
         switch (type) {
             case "THINKING" -> {
-                String compact = detail.replaceAll("\\s+", " ").trim();
-                if (compact.length() > 60) {
-                    compact = compact.substring(0, 60) + "...";
+                // 流式增量块：累积到当前"思考"行并整行重写，而不是每块新起一行
+                if (detail != null && !detail.isEmpty()) {
+                    currentThinking.append(detail);
+                    renderThinkingLine(timestamp);
                 }
-                line = "[" + timestamp + "] 思考: " + compact;
             }
-            case "TOOL_START" -> line = "[" + timestamp + "] 调用工具: " + detail;
+            case "TOOL_START" -> {
+                flushThinking();
+                appendBehaviorLog("[" + timestamp + "] 调用工具: " + detail);
+            }
             case "TOOL_END" -> {
+                flushThinking();
                 boolean failed = detail.endsWith("|failed");
                 String tool = failed ? detail.substring(0, detail.length() - 7) : detail;
-                line = "[" + timestamp + "] " + (failed ? "工具失败: " : "工具完成: ") + tool;
+                appendBehaviorLog("[" + timestamp + "] " + (failed ? "工具失败: " : "工具完成: ") + tool);
             }
-            default -> line = "[" + timestamp + "] " + detail;
+            default -> {
+                flushThinking();
+                appendBehaviorLog("[" + timestamp + "] " + detail);
+            }
         }
-        appendBehaviorLog(line);
+    }
+
+    /** 把累积的思考缓冲渲染为一行（首次追加，后续整行重写） */
+    private void renderThinkingLine(String timestamp) {
+        if (behaviorTextArea == null) return;
+        String compact = currentThinking.toString().replaceAll("\\s+", " ").trim();
+        if (compact.length() > 200) {
+            compact = compact.substring(0, 200) + "...";
+        }
+        String line = "[" + timestamp + "] 思考: " + compact;
+        try {
+            javax.swing.text.Document doc = behaviorTextArea.getDocument();
+            if (thinkingLineStart < 0) {
+                thinkingLineStart = doc.getLength();
+                doc.insertString(doc.getLength(), line + "\n", null);
+            } else {
+                doc.remove(thinkingLineStart, doc.getLength() - thinkingLineStart);
+                doc.insertString(thinkingLineStart, line + "\n", null);
+            }
+        } catch (Exception e) {
+            thinkingLineStart = -1;
+        }
+        scrollBehaviorToBottom();
+    }
+
+    /** 思考段落结束：固化当前行，重置缓冲 */
+    private void flushThinking() {
+        currentThinking.setLength(0);
+        thinkingLineStart = -1;
     }
 
     // ========== 粘贴报文分析 ==========

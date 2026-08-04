@@ -44,6 +44,10 @@ public class ChatPanel extends JPanel {
     /** 模型行为订阅（add/remove 成对使用，避免覆盖其他订阅者） */
     private final java.util.function.Consumer<String> modelBehaviorConsumer =
             behavior -> SwingUtilities.invokeLater(() -> handleModelBehavior(behavior));
+    /** 进行中的思考增量缓冲（THINKING 为流式增量块，累积后整行重写，避免每块一行刷屏） */
+    private final StringBuilder currentThinking = new StringBuilder();
+    /** 当前"思考"行在 debugLogArea 文档中的起始偏移，-1 表示当前没有进行中的思考行 */
+    private int thinkingLineStart = -1;
 
     public ChatPanel(MontoyaApi api, AgentApiClient apiClient) {
         this.api = api;
@@ -254,14 +258,17 @@ public class ChatPanel extends JPanel {
     }
 
     /**
-     * 添加debug日志
+     * 添加debug日志（内部使用当前时间戳）
      */
     private void debugLog(String message) {
+        debugLog(java.time.LocalDateTime.now().format(
+                java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss.SSS")), message);
+    }
+
+    private void debugLog(String timestamp, String message) {
         if (debugEnabled) {
-            String timestamp = java.time.LocalDateTime.now().format(
-                java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss.SSS"));
             String logMessage = "[" + timestamp + "] " + message + "\n";
-            
+
             SwingUtilities.invokeLater(() -> {
                 debugLogArea.append(logMessage);
                 debugLogArea.setCaretPosition(debugLogArea.getDocument().getLength());
@@ -291,24 +298,65 @@ public class ChatPanel extends JPanel {
         String detail = sep >= 0 ? message.substring(sep + 1) : message;
         String timestamp = java.time.LocalDateTime.now().format(
                 java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
-        String line;
         switch (type) {
             case "THINKING" -> {
-                String compact = detail.replaceAll("\\s+", " ").trim();
-                if (compact.length() > 60) {
-                    compact = compact.substring(0, 60) + "...";
+                // 流式增量块：累积到当前"思考"行并整行重写，而不是每块新起一行
+                if (detail != null && !detail.isEmpty()) {
+                    currentThinking.append(detail);
+                    renderThinkingLine(timestamp);
                 }
-                line = "[" + timestamp + "] 🧠 " + compact;
             }
-            case "TOOL_START" -> line = "[" + timestamp + "] 🔧 调用工具: " + detail;
+            case "TOOL_START" -> {
+                flushThinking();
+                debugLog(timestamp, "🔧 调用工具: " + detail);
+            }
             case "TOOL_END" -> {
+                flushThinking();
                 boolean failed = detail.endsWith("|failed");
                 String tool = failed ? detail.substring(0, detail.length() - 7) : detail;
-                line = "[" + timestamp + "] " + (failed ? "⚠️ 工具失败: " : "✅ 工具完成: ") + tool;
+                debugLog(timestamp, (failed ? "⚠️ 工具失败: " : "✅ 工具完成: ") + tool);
             }
-            default -> line = "[" + timestamp + "] " + detail;
+            default -> {
+                flushThinking();
+                debugLog(timestamp, detail);
+            }
         }
-        debugLog(line);
+    }
+
+    /** 把累积的思考缓冲渲染为一行（首次追加，后续整行重写），不刷 Burp Output */
+    private void renderThinkingLine(String timestamp) {
+        if (!debugEnabled) return;
+        String compact = currentThinking.toString().replaceAll("\\s+", " ").trim();
+        if (compact.length() > 200) {
+            compact = compact.substring(0, 200) + "...";
+        }
+        String line = "[" + timestamp + "] 🧠 思考: " + compact;
+        try {
+            javax.swing.text.Document doc = debugLogArea.getDocument();
+            if (thinkingLineStart < 0) {
+                thinkingLineStart = doc.getLength();
+                doc.insertString(doc.getLength(), line + "\n", null);
+            } else {
+                doc.remove(thinkingLineStart, doc.getLength() - thinkingLineStart);
+                doc.insertString(thinkingLineStart, line + "\n", null);
+            }
+        } catch (Exception e) {
+            thinkingLineStart = -1;
+        }
+        debugLogArea.setCaretPosition(debugLogArea.getDocument().getLength());
+    }
+
+    /** 思考段落结束：固化当前行，重置缓冲 */
+    private void flushThinking() {
+        if (thinkingLineStart >= 0) {
+            // 固化最终思考内容到 Burp Output（仅一次，避免逐块刷屏）
+            String compact = currentThinking.toString().replaceAll("\\s+", " ").trim();
+            if (debugEnabled && !compact.isEmpty()) {
+                api.logging().logToOutput("[AI助手-Debug] 🧠 思考: " + compact);
+            }
+        }
+        currentThinking.setLength(0);
+        thinkingLineStart = -1;
     }
 
     private void sendMessage() {
