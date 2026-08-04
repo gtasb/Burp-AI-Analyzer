@@ -46,6 +46,7 @@ public class ActiveAnalysisPanel extends JPanel {
     private JTextArea activeModePromptArea;
     private JComboBox<String> planModeComboBox;
     private JLabel targetInfoLabel;
+    private JLabel targetDetailLabel;
     private JList<AnalysisHistoryStore.AnalysisHistoryEntry> analysisHistoryList;
     private DefaultListModel<AnalysisHistoryStore.AnalysisHistoryEntry> analysisHistoryModel;
     private JTextArea behaviorTextArea;
@@ -156,8 +157,13 @@ public class ActiveAnalysisPanel extends JPanel {
         // ---- 目标上下文速览条 ----
         JPanel infoBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 3));
         targetInfoLabel = new JLabel("未选择请求 — 自由对话模式");
-        targetInfoLabel.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        targetInfoLabel.setFont(new Font("Microsoft YaHei", Font.BOLD, 12));
+        targetInfoLabel.setForeground(new Color(0x2a7de1));
+        targetDetailLabel = new JLabel("");
+        targetDetailLabel.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
+        targetDetailLabel.setForeground(new Color(0x666666));
         infoBar.add(targetInfoLabel);
+        infoBar.add(targetDetailLabel);
         topArea.add(infoBar);
 
         add(topArea, BorderLayout.NORTH);
@@ -187,8 +193,8 @@ public class ActiveAnalysisPanel extends JPanel {
                                                           boolean isSelected, boolean cellHasFocus) {
                 super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
                 if (value instanceof AnalysisHistoryStore.AnalysisHistoryEntry entry) {
-                    setText("<html>" + escapeHtml(entry.timestamp()) + " — " + escapeHtml(entry.targetDesc()) + "</html>");
-                    setToolTipText(escapeHtml(entry.prompt()));
+                    setText(entry.timestamp() + " — " + entry.targetDesc());
+                    setToolTipText(entry.prompt());
                 }
                 return this;
             }
@@ -693,14 +699,12 @@ public class ActiveAnalysisPanel extends JPanel {
     }
 
     private void updateTargetInfo(String targetDesc, String detail) {
-        if (targetInfoLabel == null) return;
-        StringBuilder sb = new StringBuilder("<html>");
-        sb.append("<b style='color:#2a7de1'>").append(escapeHtml(targetDesc)).append("</b>");
-        if (detail != null && !detail.isEmpty()) {
-            sb.append(" &nbsp;<span style='color:#666;font-size:11px'>").append(escapeHtml(detail)).append("</span>");
+        if (targetInfoLabel != null) {
+            targetInfoLabel.setText(targetDesc == null || targetDesc.isEmpty() ? "自由对话模式" : targetDesc);
         }
-        sb.append("</html>");
-        targetInfoLabel.setText(sb.toString());
+        if (targetDetailLabel != null) {
+            targetDetailLabel.setText(detail == null ? "" : detail);
+        }
     }
 
     // ========== 模型行为可观测（thinking / 工具调用实时流） ==========
