@@ -1,6 +1,5 @@
 package com.ai.analyzer.tools;
 
-import com.ai.analyzer.util.ArtifactCache;
 import com.ai.analyzer.util.PromptInjectionGuard;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -357,12 +356,13 @@ public class WebSearchTools {
                 return header + "（页面正文为空）";
             }
             if (fullLen > MAX_FETCH_INLINE_CHARS) {
-                ArtifactCache.ArtifactRef ref = ArtifactCache.saveText(header + text, "fetch-url");
+                // 正文过长：直接截断返回（AgentScope 框架已配置 toolResultEviction 自动处理超大工具结果，
+                // 无需再手动落盘缓存）
                 String preview = text.substring(0, Math.min(FETCH_PREVIEW_CHARS, text.length()));
                 return header
                         + preview
-                        + "\n\n...[网页正文较长，完整内容未直接进入上下文，可通过缓存读取]...\n\n"
-                        + ref.toPromptText();
+                        + "\n\n...[网页正文较长，已截断至 " + MAX_FETCH_INLINE_CHARS
+                        + " 字符，完整内容未进入上下文。如需更多内容，请缩小搜索范围或使用更具体的查询]...";
             }
             return header + text;
         } catch (Exception e) {
