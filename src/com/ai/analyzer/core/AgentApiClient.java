@@ -684,6 +684,18 @@ public class AgentApiClient {
         logInfo("聊天上下文已清空");
     }
 
+    /**
+     * 新开一个会话：销毁当前 Agent（会话状态/记忆随之丢弃），下次请求重新初始化。
+     * 用于 UI 的「+ 新会话」按钮。
+     */
+    public void startNewSession() {
+        cancelStreaming();
+        if (agentScopeRuntime != null) {
+            agentScopeRuntime.resetSession();
+        }
+        logInfo("已新开会话（旧 Agent 会话已销毁）");
+    }
+
     // ========== 配置加载 ==========
 
     private void loadSettingsFromFile() {

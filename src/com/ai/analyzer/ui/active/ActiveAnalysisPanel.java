@@ -118,6 +118,10 @@ public class ActiveAnalysisPanel extends JPanel {
         topArea.setLayout(new BoxLayout(topArea, BoxLayout.Y_AXIS));
 
         JPanel modeBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        JButton newSessionButton = new JButton("+");
+        newSessionButton.setToolTipText("新开一个会话：销毁当前 Agent 会话与记忆，从头开始（当前结果区清空）");
+        newSessionButton.addActionListener(e -> startNewSession());
+        modeBar.add(newSessionButton);
         modeBar.add(new JLabel("Agent模式:"));
         planModeComboBox = new JComboBox<>(new String[]{"普通模式", "计划模式(Plan Mode)"});
         planModeComboBox.setToolTipText("计划模式：Agent 先进行只读调查并写出计划，提交 plan_exit 时弹出批准确认框，您批准后才开始执行。适合复杂渗透测试任务；普通模式直接执行。");
@@ -648,6 +652,38 @@ public class ActiveAnalysisPanel extends JPanel {
         if (apiClient != null) {
             apiClient.clearContext();
         }
+    }
+
+    /** 新开一个会话：销毁当前 Agent 会话与记忆，清空结果区、历史与行为日志 */
+    public void startNewSession() {
+        if (currentWorker != null && !currentWorker.isDone()) {
+            if (apiClient != null) {
+                apiClient.cancelStreaming();
+                apiClient.removeModelBehaviorConsumer(modelBehaviorConsumer);
+            }
+            analysisRunId++;
+            currentWorker.cancel(true);
+            isAnalyzing = false;
+            notifyStateChanged();
+        }
+        if (apiClient != null) {
+            apiClient.startNewSession();
+        }
+        if (targetPane != null) {
+            targetPane.setText("");
+        }
+        if (activeModeResultTextPane != null && activeModeResultTextPane != targetPane) {
+            activeModeResultTextPane.setText("");
+        }
+        if (behaviorTextArea != null) {
+            behaviorTextArea.setText("");
+        }
+        flushThinking();
+        historyStore.clear();
+        if (analysisHistoryModel != null) {
+            analysisHistoryModel.clear();
+        }
+        api.logging().logToOutput("已新开会话");
     }
 
     // ========== 目标速览 / 分析历史 / 结果工具 ==========

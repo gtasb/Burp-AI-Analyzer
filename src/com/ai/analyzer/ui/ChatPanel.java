@@ -26,6 +26,7 @@ public class ChatPanel extends JPanel {
     private JTextArea inputField;
     private JButton sendButton;
     private JButton clearContextButton;
+    private JButton newSessionButton;
     private JButton stopButton;
     private JToggleButton behaviorToggleButton;
     private JScrollPane behaviorScrollPane;
@@ -142,7 +143,13 @@ public class ChatPanel extends JPanel {
         sendButton.addActionListener(e -> sendMessage());
         sendButton.setPreferredSize(new Dimension(60, 25));
         sendButton.setMargin(new Insets(2, 8, 2, 8));
-        
+
+        newSessionButton = new JButton("+");
+        newSessionButton.setToolTipText("新开一个会话：销毁当前 Agent 会话与记忆，从头开始（当前聊天记录会清空）");
+        newSessionButton.addActionListener(e -> newSession());
+        newSessionButton.setPreferredSize(new Dimension(30, 25));
+        newSessionButton.setMargin(new Insets(2, 4, 2, 4));
+
         clearContextButton = new JButton("清空");
         clearContextButton.addActionListener(e -> clearContext());
         clearContextButton.setPreferredSize(new Dimension(60, 25));
@@ -160,6 +167,7 @@ public class ChatPanel extends JPanel {
         behaviorToggleButton.setMargin(new Insets(2, 8, 2, 8));
         behaviorToggleButton.addActionListener(e -> toggleBehaviorPanel());
 
+        topPanel.add(newSessionButton);
         topPanel.add(sendButton);
         topPanel.add(clearContextButton);
         topPanel.add(stopButton);
@@ -705,6 +713,25 @@ public class ChatPanel extends JPanel {
         apiClient.clearContext();
         lastSentRequestFingerprint = null;
         api.logging().logToOutput("聊天上下文已清空");
+    }
+
+    /** 新开一个会话：销毁旧 Agent 会话，清空聊天记录与共享历史 */
+    private void newSession() {
+        if (currentWorker != null && !currentWorker.isDone()) {
+            streamRunId++;
+            currentWorker.cancel(true);
+            isStreaming = false;
+            sendButton.setEnabled(true);
+            stopButton.setEnabled(false);
+        }
+        apiClient.startNewSession();
+        apiClient.clearSharedChatUiHistory();
+        lastSyncedHistorySize = 0;
+        chatArea.setText("");
+        deleteChatHistoryFile();
+        if (saveDebouncerTimer != null) saveDebouncerTimer.stop();
+        lastSentRequestFingerprint = null;
+        api.logging().logToOutput("已新开会话");
     }
 
     public void setCurrentRequest(HttpRequestResponse request) {
