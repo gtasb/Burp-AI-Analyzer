@@ -302,31 +302,8 @@ public class ActiveAnalysisPanel extends JPanel {
     }
 
     private void setupAgentHITL() {
-        apiClient.setRequireConfirmHandler((toolName, summary) -> {
-            final boolean[] approved = {false};
-            try {
-                SwingUtilities.invokeAndWait(() -> {
-                    String html = "<html><body style='width:460px;font-family:Microsoft YaHei'>"
-                        + "<h3>Agent 请求批准</h3>"
-                        + "<p style='font-size:11px;color:#666'>Agent 在计划模式下暂停，等待您确认后再继续执行：</p>"
-                        + "<table cellpadding='2'>"
-                        + "<tr><td style='font-weight:bold'>工具</td><td>:</td><td style='word-break:break-all'>" + escapeHtml(toolName) + "</td></tr>"
-                        + "</table>"
-                        + "<p style='font-size:11px;color:#666'>计划摘要/待执行内容：</p>"
-                        + "<pre style='background:#f4f4f4;border:1px solid #ddd;padding:8px;white-space:pre-wrap;word-break:break-all'>" + escapeHtml(summary) + "</pre>"
-                        + "<p style='font-size:11px;color:#666'>批准：按计划继续执行；拒绝：Agent 回到计划阶段修改方案。</p>"
-                        + "</body></html>";
-                    int option = JOptionPane.showConfirmDialog(
-                        null, html, "计划批准确认", JOptionPane.YES_NO_OPTION,
-                        JOptionPane.QUESTION_MESSAGE);
-                    approved[0] = option == JOptionPane.YES_OPTION;
-                });
-            } catch (Exception ex) {
-                api.logging().logToError(ex);
-                approved[0] = false;
-            }
-            return approved[0];
-        });
+        // 计划模式下不再弹窗逐次确认：自动批准，Agent 按计划直接执行
+        apiClient.setRequireConfirmHandler((toolName, summary) -> true);
     }
 
     // ========== 分析入口 ==========
@@ -960,10 +937,5 @@ public class ActiveAnalysisPanel extends JPanel {
         if (stateListener != null) {
             stateListener.onAnalysisStateChanged(isAnalyzing);
         }
-    }
-
-    static String escapeHtml(String s) {
-        if (s == null) return "";
-        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
     }
 }

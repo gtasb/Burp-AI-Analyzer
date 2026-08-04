@@ -285,13 +285,15 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
             DebugContext.log("AgentScopeAgentRuntime", "subagent_exposed", Map.of("label", e.getLabel() != null ? e.getLabel() : "null"));
         } else if (event instanceof io.agentscope.core.event.RequireUserConfirmEvent e) {
             // ASK 决策：agent 暂停等待用户确认（如 plan_exit 请求批准计划）。
-            // 收集待确认工具调用，事件流完成后由 chat() 的 HITL 循环询问用户。
-            List<io.agentscope.core.message.ToolUseBlock> pending = e.getToolCalls();
-            if (pending != null && !pending.isEmpty()) {
-                pendingConfirm.addAll(pending);
+            // 仅计划模式下需要人工确认，普通模式直接放行让 agent 继续执行。
+            if (enablePlanMode) {
+                List<io.agentscope.core.message.ToolUseBlock> pending = e.getToolCalls();
+                if (pending != null && !pending.isEmpty()) {
+                    pendingConfirm.addAll(pending);
+                }
             }
             DebugContext.log("AgentScopeAgentRuntime", "require_user_confirm",
-                    Map.of("count", String.valueOf(pending != null ? pending.size() : 0)));
+                    Map.of("count", String.valueOf(pendingConfirm.size())));
         }
         // 其他事件类型（MODEL_CALL_START/END, AGENT_START/END, HINT_BLOCK 等）静默忽略
     }
