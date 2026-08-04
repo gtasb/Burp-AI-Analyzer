@@ -225,6 +225,16 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         harnessAgent = null;
     }
 
+    /**
+     * 重置当前 Agent 会话上下文：释放并重建 agent（下一次请求会全新初始化），
+     * 从而清空对话历史、长期记忆与任何挂起状态。
+     */
+    public void resetSession() {
+        shutdown();
+        DebugContext.log("AgentScopeAgentRuntime", "session_reset",
+                java.util.Map.of("mode", mode != null ? mode.name() : ""));
+    }
+
     // ---- Event stream ----
 
     private reactor.core.publisher.Flux<AgentEvent> buildEventStream(
@@ -238,13 +248,6 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         switch (mode) {
             case ACTIVE, PASSIVE -> {
                 HarnessAgent agent = getOrCreateHarnessAgent();
-                // 权限模式设为 BYPASS：敏感工具（extension_info 等）直接执行，
-                // 不再进入 ASKING 等待确认，避免 "paused for human-in-the-loop confirmation"。
-                try {
-                    agent.setPermissionMode(ctx, io.agentscope.core.permission.PermissionMode.BYPASS);
-                } catch (Exception ignored) {
-                    // 权限模式设置失败不阻断执行
-                }
                 flux = agent.streamEvents(messages, ctx);
             }
             default -> throw new IllegalStateException("Unknown mode: " + mode);
@@ -358,6 +361,14 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
                             .build());
                     // 配置长期记忆（跨会话持久化）
                     builder.memory(MemoryConfig.defaults());
+                    // 权限模式设为 BYPASS：敏感工具（extension_info 等）直接执行，
+                    // 不再进入 ASKING 等待人工确认
+                    builder.permissionContext(io.agentscope.core.permission.PermissionContextState.builder()
+                            .mode(io.agentscope.core.permission.PermissionMode.BYPASS)
+                            .build());
+                    // 禁用会话持久化：每次请求都是新 sessionId，不残留上一轮的挂起确认状态，
+                    // 避免 "Agent is paused for human-in-the-loop confirmation" 跨请求复现
+                    builder.disableSessionPersistence();
                     // 配置大工具结果驱逐（pentest 场景常见）
                     builder.toolResultEviction(
                             io.agentscope.harness.agent.memory.compaction.ToolResultEvictionConfig.builder()
