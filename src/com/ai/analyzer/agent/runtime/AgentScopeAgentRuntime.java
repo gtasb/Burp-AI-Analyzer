@@ -128,6 +128,11 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         });
 
         try {
+            // 清理该会话残留的挂起确认状态：上一次运行若在 ASKING 状态中途结束，
+            // 状态会持久化到 (agentId, sessionId)，导致新请求启动即报
+            // "Agent is paused for human-in-the-loop confirmation"。
+            clearPendingConfirmationState(sessionId);
+
             // HITL 循环：agent 遇到 ASK 决策（如 plan_exit）时会暂停并发起确认，
             // 我们在收集到待确认工具调用后询问用户，用 ConfirmResult 恢复 agent，
             // 直到一次完整执行流程结束（或用户取消/出错）。
@@ -166,6 +171,30 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         }
 
         return session;
+    }
+
+    /**
+     * 清理指定会话残留的挂起确认状态（ASKING）。
+     *
+     * <p>AgentScope 会把 agent 的会话状态（含待确认的工具调用）持久化到 state store，
+     * 若上一次运行在 ASKING 状态中途结束（取消/出错），新请求启动时 agent 会直接继承
+     * 该挂起状态并立即报 "paused for human-in-the-loop confirmation"，导致无法继续。
+     * 这里在新会话开始前清掉 (agentId, sessionId) 的残留状态。
+     */
+    private void clearPendingConfirmationState(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) return;
+        try {
+            HarnessAgent agent = getOrCreateHarnessAgent();
+            io.agentscope.core.state.AgentStateStore store = agent.getStateStore();
+            if (store != null && store.exists(agent.getAgentId(), sessionId)) {
+                store.delete(agent.getAgentId(), sessionId);
+                DebugContext.log("AgentScopeAgentRuntime", "cleared_stale_confirm_state",
+                        java.util.Map.of("session", sessionId));
+            }
+        } catch (Exception e) {
+            DebugContext.log("AgentScopeAgentRuntime", "clear_stale_confirm_state_failed",
+                    java.util.Map.of("error", e.getMessage() != null ? e.getMessage() : ""));
+        }
     }
 
     /**
@@ -209,6 +238,13 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         switch (mode) {
             case ACTIVE, PASSIVE -> {
                 HarnessAgent agent = getOrCreateHarnessAgent();
+                // 权限模式设为 BYPASS：敏感工具（extension_info 等）直接执行，
+                // 不再进入 ASKING 等待确认，避免 "paused for human-in-the-loop confirmation"。
+                try {
+                    agent.setPermissionMode(ctx, io.agentscope.core.permission.PermissionMode.BYPASS);
+                } catch (Exception ignored) {
+                    // 权限模式设置失败不阻断执行
+                }
                 flux = agent.streamEvents(messages, ctx);
             }
             default -> throw new IllegalStateException("Unknown mode: " + mode);
@@ -284,13 +320,12 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
                     e.getLabel() != null ? e.getLabel() : e.getSubagentId(), null));
             DebugContext.log("AgentScopeAgentRuntime", "subagent_exposed", Map.of("label", e.getLabel() != null ? e.getLabel() : "null"));
         } else if (event instanceof io.agentscope.core.event.RequireUserConfirmEvent e) {
-            // ASK 决策：agent 暂停等待用户确认（如 plan_exit 请求批准计划）。
-            // 仅计划模式下需要人工确认，普通模式直接放行让 agent 继续执行。
-            if (enablePlanMode) {
-                List<io.agentscope.core.message.ToolUseBlock> pending = e.getToolCalls();
-                if (pending != null && !pending.isEmpty()) {
-                    pendingConfirm.addAll(pending);
-                }
+            // ASK 决策：agent 暂停等待确认（如 plan_exit 或敏感工具调用）。
+            // 无论是否计划模式都要收集并回复 ConfirmResult，否则 agent 会卡在 ASKING 状态；
+            // 批准与否由 confirmHandler 决定（普通模式自动批准，计划模式也已改为自动批准）。
+            List<io.agentscope.core.message.ToolUseBlock> pending = e.getToolCalls();
+            if (pending != null && !pending.isEmpty()) {
+                pendingConfirm.addAll(pending);
             }
             DebugContext.log("AgentScopeAgentRuntime", "require_user_confirm",
                     Map.of("count", String.valueOf(pendingConfirm.size())));
