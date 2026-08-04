@@ -490,16 +490,6 @@ public class PassiveScanApiClient {
         return chromeMcpUrl != null && !chromeMcpUrl.trim().isEmpty();
     }
 
-    public boolean isEnablePythonScript() { return enablePythonScript; }
-    public boolean isEnableCliTool() { return enableCliTool; }
-    public boolean isEnableUnrestrictedCliTool() { return enableUnrestrictedCliTool; }
-    public String getCliWhitelist() { return cliWhitelist; }
-    public String getCliToolPrompt() { return cliToolPrompt; }
-    public boolean isEnableFileSystemAccess() { return enableFileSystemAccess; }
-    public boolean isEnableSkills() { return enableSkills; }
-    public String getCustomSystemPrompt() { return customSystemPrompt; }
-    public String getWorkplaceDirectoryPath() { return workplaceDirectoryPath; }
-    public String getRagMcpDocumentsPath() { return ragMcpDocumentsPath; }
     public String getEffectiveRagDocumentsPath() {
         if (workplaceDirectoryPath != null && !workplaceDirectoryPath.trim().isEmpty()) {
             return new File(workplaceDirectoryPath.trim(), "rag").getAbsolutePath();
@@ -508,9 +498,6 @@ public class PassiveScanApiClient {
     }
     public String getEffectiveBurpMcpUrl() { return BurpMcpUrl; }
     public String getEffectiveBurpMcpAuthorization() { return burpMcpAuthorization; }
-    public String getChromeMcpUrl() { return chromeMcpUrl; }
-    public String getRagMcpUrl() { return ragMcpUrl; }
-    public String getCustomMcpConfigJson() { return customMcpConfigJson; }
     public List<CustomMcpConfig> getCustomMcpConfigs() { return customMcpConfigs; }
 
     // ========== 配置加载 ==========

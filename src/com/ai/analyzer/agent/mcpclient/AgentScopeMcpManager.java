@@ -30,8 +30,8 @@ public class AgentScopeMcpManager {
 
     // 本地 MCP 服务器（127.0.0.1）响应应在秒级内；
     // 短超时让"SSE 失败 → 回退 Streamable HTTP"的尝试序列快速完成，避免每次失败干等 30s+
-    private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(8);
-    private static final Duration DEFAULT_INIT_TIMEOUT = Duration.ofSeconds(15);
+    private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(90);
+    private static final Duration DEFAULT_INIT_TIMEOUT = Duration.ofSeconds(20);
 
     private AgentScopeMcpManager() {}
 
@@ -262,6 +262,6 @@ public class AgentScopeMcpManager {
      */
     public static McpClientWrapper registerChromeMcp(Toolkit toolkit, String chromeMcpUrl) {
         if (chromeMcpUrl == null || chromeMcpUrl.trim().isEmpty()) return null;
-        return registerCustomMcp(toolkit, "chrome-mcp", "sse", chromeMcpUrl.trim(), null, null);
+        return registerCustomMcp(toolkit, "chrome-mcp", "streamableHttp", chromeMcpUrl.trim(), null, null);
     }
 }

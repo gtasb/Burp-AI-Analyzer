@@ -148,10 +148,6 @@ public class AgentApiClient {
         }
     }
 
-    public AgentConfig getConfig() {
-        return config;
-    }
-
     // ========== 配置 Getter/Setter（委托给 config）==========
 
     public void setApi(MontoyaApi api) {
