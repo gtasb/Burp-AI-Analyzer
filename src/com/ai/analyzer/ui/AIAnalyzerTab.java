@@ -1731,37 +1731,37 @@ public class AIAnalyzerTab extends JPanel {
         ragMcpDocumentsPathField.setEnabled(true);
         ragMcpDocumentsPathField.setEditable(false);
         
-        // Chrome MCP
-        row++;
-        gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
-        panel.add(new JLabel("Chrome MCP:"), gbc);
-        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
-        enableChromeMcpCheckBox = new JCheckBox("启用 Chrome MCP 工具调用", false);
-        enableChromeMcpCheckBox.addActionListener(e -> {
-            boolean enabled = enableChromeMcpCheckBox.isSelected();
-            chromeMcpUrlField.setEnabled(enabled);
-            apiClient.setEnableChromeMcp(enabled);
-            if (enabled && !chromeMcpUrlField.getText().trim().isEmpty())
-                apiClient.setChromeMcpUrl(chromeMcpUrlField.getText().trim());
-        });
-        panel.add(enableChromeMcpCheckBox, gbc);
-        
-        row++;
-        gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
-        panel.add(new JLabel("  Chrome 地址:"), gbc);
-        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
-        chromeMcpUrlField = new JTextField(" ", 30);
-        chromeMcpUrlField.setEnabled(false);
-        chromeMcpUrlField.getDocument().addDocumentListener(new DocumentListener() {
-            @Override public void insertUpdate(DocumentEvent e) { sync(); }
-            @Override public void removeUpdate(DocumentEvent e) { sync(); }
-            @Override public void changedUpdate(DocumentEvent e) { sync(); }
-            private void sync() {
-                if (enableChromeMcpCheckBox.isSelected() && !chromeMcpUrlField.getText().trim().isEmpty())
-                    apiClient.setChromeMcpUrl(chromeMcpUrlField.getText().trim());
-            }
-        });
-        panel.add(chromeMcpUrlField, gbc);
+        // Chrome MCP（配置已隐藏：此项改为由自定义 MCP 配置管理，控件不再创建）
+        // row++;
+        // gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        // panel.add(new JLabel("Chrome MCP:"), gbc);
+        // gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        // enableChromeMcpCheckBox = new JCheckBox("启用 Chrome MCP 工具调用", false);
+        // enableChromeMcpCheckBox.addActionListener(e -> {
+        //     boolean enabled = enableChromeMcpCheckBox.isSelected();
+        //     chromeMcpUrlField.setEnabled(enabled);
+        //     apiClient.setEnableChromeMcp(enabled);
+        //     if (enabled && !chromeMcpUrlField.getText().trim().isEmpty())
+        //         apiClient.setChromeMcpUrl(chromeMcpUrlField.getText().trim());
+        // });
+        // panel.add(enableChromeMcpCheckBox, gbc);
+        // 
+        // row++;
+        // gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        // panel.add(new JLabel("  Chrome 地址:"), gbc);
+        // gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        // chromeMcpUrlField = new JTextField(" ", 30);
+        // chromeMcpUrlField.setEnabled(false);
+        // chromeMcpUrlField.getDocument().addDocumentListener(new DocumentListener() {
+        //     @Override public void insertUpdate(DocumentEvent e) { sync(); }
+        //     @Override public void removeUpdate(DocumentEvent e) { sync(); }
+        //     @Override public void changedUpdate(DocumentEvent e) { sync(); }
+        //     private void sync() {
+        //         if (enableChromeMcpCheckBox.isSelected() && !chromeMcpUrlField.getText().trim().isEmpty())
+        //             apiClient.setChromeMcpUrl(chromeMcpUrlField.getText().trim());
+        //     }
+        // });
+        // panel.add(chromeMcpUrlField, gbc);
         
         // 分隔线
         row++;
@@ -2765,8 +2765,8 @@ public class AIAnalyzerTab extends JPanel {
                 enableRagMcpCheckBox.isSelected(),
                 "", // ragMcpUrlField.getText().trim(), // RAG MCP 地址暂时隐藏
                 ragMcpDocumentsPathField.getText().trim(),
-                enableChromeMcpCheckBox.isSelected(),
-                chromeMcpUrlField.getText().trim(),
+                false, // Chrome MCP 控件已隐藏，配置交给自定义 MCP 配置
+                "",
                 false, // enableRag 暂时禁用
                 ""    // ragDocumentsPath 暂时禁用
             );
@@ -3055,10 +3055,10 @@ public class AIAnalyzerTab extends JPanel {
         ragMcpDocumentsPathField.setText(settings.getRagMcpDocumentsPath());
         ragMcpDocumentsPathField.setEnabled(settings.isEnableRagMcp());
         
-        // Chrome MCP 配置
-        enableChromeMcpCheckBox.setSelected(settings.isEnableChromeMcp());
-        chromeMcpUrlField.setText(settings.getChromeMcpUrl());
-        chromeMcpUrlField.setEnabled(settings.isEnableChromeMcp());
+        // Chrome MCP 配置（控件已隐藏，配置交给自定义 MCP 配置；保留 settings 读写以兼容旧配置文件）
+        // enableChromeMcpCheckBox.setSelected(settings.isEnableChromeMcp());
+        // chromeMcpUrlField.setText(settings.getChromeMcpUrl());
+        // chromeMcpUrlField.setEnabled(settings.isEnableChromeMcp());
 
         // 自定义 MCP 配置
         boolean hasSavedCustomMcp = false;
@@ -3110,8 +3110,9 @@ public class AIAnalyzerTab extends JPanel {
         apiClient.setEnableRagMcp(settings.isEnableRagMcp());
         apiClient.setRagMcpUrl(settings.getRagMcpUrl());
         apiClient.setRagMcpDocumentsPath(settings.getRagMcpDocumentsPath());
-        apiClient.setEnableChromeMcp(settings.isEnableChromeMcp());
-        apiClient.setChromeMcpUrl(settings.getChromeMcpUrl());
+        // Chrome MCP 配置交给自定义 MCP 配置管理，不再从独立配置项启用
+        // apiClient.setEnableChromeMcp(settings.isEnableChromeMcp());
+        // apiClient.setChromeMcpUrl(settings.getChromeMcpUrl());
         apiClient.setCustomMcpConfigJson(settings.isEnableCustomMcp() ? settings.getCustomMcpConfigJson() : "");
         apiClient.setEnableFileSystemAccess(settings.isEnableFileSystemAccess());
         // apiClient.setEnableRag(settings.isEnableRag()); // 默认 RAG 暂时禁用
