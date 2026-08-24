@@ -20,7 +20,7 @@ class AgentScopeModelFactoryTest {
         void should_throw_when_api_key_is_null() {
             assertThatThrownBy(() ->
                     AgentScopeModelFactory.create(
-                            ApiProvider.DASHSCOPE, null, null, null, false, false, null))
+                            ApiProvider.DASHSCOPE, null, null, null, false, null))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("API Key");
         }
@@ -30,7 +30,7 @@ class AgentScopeModelFactoryTest {
         void should_throw_when_api_key_is_empty() {
             assertThatThrownBy(() ->
                     AgentScopeModelFactory.create(
-                            ApiProvider.DASHSCOPE, "   ", null, null, false, false, null))
+                            ApiProvider.DASHSCOPE, "   ", null, null, false, null))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("API Key");
         }
@@ -44,7 +44,7 @@ class AgentScopeModelFactoryTest {
         @DisplayName("should_create_DashScope_model_for_DASHSCOPE_provider")
         void should_create_DashScope_model_for_DASHSCOPE_provider() {
             var model = AgentScopeModelFactory.create(
-                    ApiProvider.DASHSCOPE, "sk-test", null, null, false, false, null);
+                    ApiProvider.DASHSCOPE, "sk-test", null, null, false, null);
             assertThat(model).isNotNull();
             assertThat(model.getClass().getSimpleName()).contains("DashScope");
         }
@@ -53,7 +53,7 @@ class AgentScopeModelFactoryTest {
         @DisplayName("should_create_OpenAI_model_for_OPENAI_COMPATIBLE_provider")
         void should_create_OpenAI_model_for_OPENAI_COMPATIBLE_provider() {
             var model = AgentScopeModelFactory.create(
-                    ApiProvider.OPENAI_COMPATIBLE, "sk-test", "https://api.openai.com/v1", null, false, false, null);
+                    ApiProvider.OPENAI_COMPATIBLE, "sk-test", "https://api.openai.com/v1", null, false, null);
             assertThat(model).isNotNull();
             assertThat(model.getClass().getSimpleName()).contains("OpenAI");
         }
@@ -62,7 +62,7 @@ class AgentScopeModelFactoryTest {
         @DisplayName("should_create_Anthropic_model_for_ANTHROPIC_provider")
         void should_create_Anthropic_model_for_ANTHROPIC_provider() {
             var model = AgentScopeModelFactory.create(
-                    ApiProvider.ANTHROPIC, "sk-ant-test", null, null, false, false, null);
+                    ApiProvider.ANTHROPIC, "sk-ant-test", null, null, false, null);
             assertThat(model).isNotNull();
             assertThat(model.getClass().getSimpleName()).contains("Anthropic");
         }
@@ -76,7 +76,7 @@ class AgentScopeModelFactoryTest {
         @DisplayName("should_return_non_empty_description")
         void should_return_non_empty_description() {
             String desc = AgentScopeModelFactory.describeConfig(
-                    ApiProvider.DASHSCOPE, null, "qwen-max", false, false);
+                    ApiProvider.DASHSCOPE, null, "qwen-max", false);
             assertThat(desc).isNotNull().isNotEmpty();
         }
     }

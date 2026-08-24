@@ -94,7 +94,8 @@ public class SystemPromptBuilder {
                 - Do NOT test for CORS misconfiguration vulnerabilities
 
                 # Output Format
-                - Use Markdown format, do NOT use table format
+                - Use Markdown format
+                - NEVER use markdown table syntax (|, ---, ||) in output
                 - Do NOT use # heading syntax
                 - Be concise and clear, only report Medium risk and above
 

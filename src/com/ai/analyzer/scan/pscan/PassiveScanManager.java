@@ -582,6 +582,17 @@ public class PassiveScanManager {
     /**
      * 手动添加单个请求到扫描队列
      */
+    /**
+     * 手动添加单个请求并立即异步分析（右键「发送到AI分析」入口）。
+     * 即使被动扫描未启动也能独立分析，结果通过 onResultUpdated 回调通知 UI。
+     */
+    public void analyzeSingleRequest(HttpRequestResponse requestResponse) {
+        ScanResult result = addRequest(requestResponse);
+        if (result != null) {
+            new Thread(() -> scanRequest(result), "pscan-direct-" + result.getId()).start();
+        }
+    }
+
     public ScanResult addRequest(HttpRequestResponse requestResponse) {
         ScanResult result = new ScanResult(nextId.getAndIncrement(), requestResponse);
         String dedupeKey = result.getDeduplicationKey();

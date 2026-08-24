@@ -26,7 +26,6 @@ public class PluginSettings implements Serializable {
     private List<ApiProfile> apiProfiles = new ArrayList<>(); // 常用 API 配置档案
     
     private String userPrompt;
-    private boolean enableThinking = true; // 默认启用思考过程
     private boolean enableSearch = true; // 默认启用搜索
     private boolean enableMcp = false; // 默认禁用 Burp MCP 工具调用
     private String BurpMcpUrl = "http://127.0.0.1:9876/"; // Burp MCP 服务器地址
@@ -47,9 +46,6 @@ public class PluginSettings implements Serializable {
     // Python 脚本执行配置
     private boolean enablePythonScript = false;
 
-    // AgentScope 运行时开关
-    private boolean useAgentScope = true; // AgentScope is now the default runtime
-    
     // Skills 配置
     private boolean enableSkills = false; // 默认禁用 Skills
     private String skillsDirectoryPath = ""; // Skills 目录路径
@@ -94,6 +90,7 @@ public class PluginSettings implements Serializable {
         if (maxTokens == null) maxTokens = "";
         if (apiProfiles == null) apiProfiles = new ArrayList<>();
         if (userPrompt == null) userPrompt = "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议";
+
 
         if (BurpMcpUrl == null) BurpMcpUrl = "http://127.0.0.1:9876/";
         if (burpMcpAuthorization == null) burpMcpAuthorization = "";
@@ -150,7 +147,6 @@ public class PluginSettings implements Serializable {
         this.apiKey = "";
         this.model = "qwen3-max";
         this.userPrompt = "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议";
-        this.enableThinking = true;
         this.enableSearch = true;
         this.enableMcp = false;
         this.BurpMcpUrl = "http://127.0.0.1:9876/";
@@ -208,15 +204,13 @@ public class PluginSettings implements Serializable {
         this.apiKey = apiKey;
         this.model = model;
         this.userPrompt = userPrompt;
-        this.enableThinking = true;
         this.enableSearch = true;
     }
-    public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt, boolean enableThinking, boolean enableSearch) {
+    public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt, boolean enableSearch) {
         this.apiUrl = apiUrl;
         this.apiKey = apiKey;
         this.model = model;
         this.userPrompt = userPrompt;
-        this.enableThinking = enableThinking;
         this.enableSearch = enableSearch;
         this.enableMcp = false;
         this.BurpMcpUrl = "http://127.0.0.1:9876/";
@@ -224,12 +218,11 @@ public class PluginSettings implements Serializable {
         this.ragDocumentsPath = "";
     }
     
-    public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt, boolean enableThinking, boolean enableSearch, boolean enableMcp, String mcpUrl) {
+    public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt, boolean enableSearch, boolean enableMcp, String mcpUrl) {
         this.apiUrl = apiUrl;
         this.apiKey = apiKey;
         this.model = model;
         this.userPrompt = userPrompt;
-        this.enableThinking = enableThinking;
         this.enableSearch = enableSearch;
         this.enableMcp = enableMcp;
         this.BurpMcpUrl = mcpUrl;
@@ -237,12 +230,11 @@ public class PluginSettings implements Serializable {
         this.ragDocumentsPath = "";
     }
     
-    public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt, boolean enableThinking, boolean enableSearch, boolean enableMcp, String mcpUrl, boolean enableRag, String ragDocumentsPath) {
+    public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt, boolean enableSearch, boolean enableMcp, String mcpUrl, boolean enableRag, String ragDocumentsPath) {
         this.apiUrl = apiUrl;
         this.apiKey = apiKey;
         this.model = model;
         this.userPrompt = userPrompt;
-        this.enableThinking = enableThinking;
         this.enableSearch = enableSearch;
         this.enableMcp = enableMcp;
         this.BurpMcpUrl = mcpUrl;
@@ -254,14 +246,13 @@ public class PluginSettings implements Serializable {
         this.ragDocumentsPath = ragDocumentsPath;
     }
     
-    public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt, boolean enableThinking, boolean enableSearch, 
+    public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt, boolean enableSearch, 
             boolean enableMcp, String mcpUrl, boolean enableRagMcp, String ragMcpUrl, boolean enableChromeMcp, String chromeMcpUrl, 
             boolean enableRag, String ragDocumentsPath) {
         this.apiUrl = apiUrl;
         this.apiKey = apiKey;
         this.model = model;
         this.userPrompt = userPrompt;
-        this.enableThinking = enableThinking;
         this.enableSearch = enableSearch;
         this.enableMcp = enableMcp;
         this.BurpMcpUrl = mcpUrl;
@@ -274,14 +265,13 @@ public class PluginSettings implements Serializable {
         this.ragDocumentsPath = ragDocumentsPath;
     }
     
-    public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt, boolean enableThinking, boolean enableSearch, 
+    public PluginSettings(String apiUrl, String apiKey, String model, String userPrompt, boolean enableSearch, 
             boolean enableMcp, String mcpUrl, boolean enableRagMcp, String ragMcpUrl, String ragMcpDocumentsPath, 
             boolean enableChromeMcp, String chromeMcpUrl, boolean enableRag, String ragDocumentsPath) {
         this.apiUrl = apiUrl;
         this.apiKey = apiKey;
         this.model = model;
         this.userPrompt = userPrompt;
-        this.enableThinking = enableThinking;
         this.enableSearch = enableSearch;
         this.enableMcp = enableMcp;
         this.BurpMcpUrl = mcpUrl;
@@ -366,14 +356,6 @@ public class PluginSettings implements Serializable {
     
     public void setUserPrompt(String userPrompt) {
         this.userPrompt = userPrompt;
-    }
-    
-    public boolean isEnableThinking() {
-        return enableThinking;
-    }
-    
-    public void setEnableThinking(boolean enableThinking) {
-        this.enableThinking = enableThinking;
     }
     
     public boolean isEnableSearch() {
@@ -545,14 +527,6 @@ public class PluginSettings implements Serializable {
     
     public void setEnablePythonScript(boolean enablePythonScript) {
         this.enablePythonScript = enablePythonScript;
-    }
-
-    public boolean isUseAgentScope() {
-        return useAgentScope;
-    }
-
-    public void setUseAgentScope(boolean useAgentScope) {
-        this.useAgentScope = useAgentScope;
     }
 
     // CLI 工具配置

@@ -98,7 +98,9 @@ public class ActiveAuditManager {
     }
 
     private void handleNewAuditIssue(AuditIssue issue) {
-        if (issue == null || onIssueFound == null) {
+        // 只有插件主动发起的审计（activeAudits 非空）才处理问题；
+        // 全局注册的 handler 可能在插件未发起的扫描期间收到问题，直接丢弃
+        if (issue == null || onIssueFound == null || activeAudits.isEmpty()) {
             return;
         }
         try {

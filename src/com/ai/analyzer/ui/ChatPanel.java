@@ -83,7 +83,6 @@ public class ChatPanel extends JPanel {
             apiClient.setApiUrl(analyzerTab.getApiUrl());
             apiClient.setApiKey(analyzerTab.getApiKey());
             apiClient.setModel(analyzerTab.getModel());
-            apiClient.setEnableThinking(false);
             apiClient.setEnableSearch(analyzerTab.isEnableSearch());
             // 与主标签页共享同一工作区目录与 Skills 配置：
             // HarnessAgent 的持久记忆（MEMORY.md 等）与技能均落盘到该目录，
@@ -93,7 +92,6 @@ public class ChatPanel extends JPanel {
             apiClient.setSkillsDirectoryPath(analyzerTab.getSkillsDirectoryPath());
         } else {
             // 如果没有analyzerTab，保留当前apiClient中的搜索配置
-            apiClient.setEnableThinking(false);
         }
     }
 
@@ -134,43 +132,27 @@ public class ChatPanel extends JPanel {
         mainSplitPane.setBottomComponent(debugLogScrollPane);
 
         // 创建输入区域
-        JPanel inputPanel = new JPanel(new BorderLayout(5, 5));
-        
-        // 顶部按钮面板
-        JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 5));
-        
-        sendButton = new JButton("发送");
-        sendButton.addActionListener(e -> sendMessage());
-        sendButton.setPreferredSize(new Dimension(60, 25));
-        sendButton.setMargin(new Insets(2, 8, 2, 8));
+        JPanel inputPanel = new JPanel(new BorderLayout(8, 5));
 
-        newSessionButton = new JButton("+");
+        // 顶部工具按钮面板（会话级操作；发送/停止在输入框右侧竖排）
+        JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+
+        newSessionButton = new JButton("＋ 新会话");
         newSessionButton.setToolTipText("新开一个会话：销毁当前 Agent 会话与记忆，从头开始（当前聊天记录会清空）");
         newSessionButton.addActionListener(e -> newSession());
-        newSessionButton.setPreferredSize(new Dimension(30, 25));
-        newSessionButton.setMargin(new Insets(2, 4, 2, 4));
+        UIStyles.styleSecondary(newSessionButton);
 
-        clearContextButton = new JButton("清空");
+        clearContextButton = new JButton("清空上下文");
         clearContextButton.addActionListener(e -> clearContext());
-        clearContextButton.setPreferredSize(new Dimension(60, 25));
-        clearContextButton.setMargin(new Insets(2, 8, 2, 8));
-        
-        stopButton = new JButton("停止");
-        stopButton.addActionListener(e -> stopStreaming());
-        stopButton.setEnabled(false); // 初始状态禁用
-        stopButton.setPreferredSize(new Dimension(60, 25));
-        stopButton.setMargin(new Insets(2, 8, 2, 8));
+        UIStyles.styleSecondary(clearContextButton);
 
         behaviorToggleButton = new JToggleButton("模型行为", true);
         behaviorToggleButton.setToolTipText("显示/隐藏模型思考与工具调用实时流");
-        behaviorToggleButton.setPreferredSize(new Dimension(80, 25));
-        behaviorToggleButton.setMargin(new Insets(2, 8, 2, 8));
+        UIStyles.styleToggle(behaviorToggleButton);
         behaviorToggleButton.addActionListener(e -> toggleBehaviorPanel());
 
         topPanel.add(newSessionButton);
-        topPanel.add(sendButton);
         topPanel.add(clearContextButton);
-        topPanel.add(stopButton);
         topPanel.add(behaviorToggleButton);
 
         inputPanel.add(topPanel, BorderLayout.NORTH);
@@ -200,6 +182,7 @@ public class ChatPanel extends JPanel {
         JScrollPane inputScrollPane = new JScrollPane(inputField);
         inputScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         inputScrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+        inputScrollPane.setBorder(UIStyles.scrollBorder());
         
         final JScrollPane finalInputScrollPane = inputScrollPane;
         final JPanel finalInputPanel = inputPanel;
@@ -223,6 +206,26 @@ public class ChatPanel extends JPanel {
         });
         
         inputPanel.add(inputScrollPane, BorderLayout.CENTER);
+
+        // 右侧竖排：停止（紧凑，置于上方）/ 发送（主按钮，占据主要空间）
+        JPanel sideButtons = new JPanel();
+        sideButtons.setLayout(new BoxLayout(sideButtons, BoxLayout.Y_AXIS));
+
+        stopButton = new JButton("■ 停止");
+        stopButton.addActionListener(e -> stopStreaming());
+        stopButton.setEnabled(false); // 初始状态禁用
+        stopButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
+        UIStyles.styleDanger(stopButton);
+        sideButtons.add(stopButton);
+        sideButtons.add(Box.createVerticalStrut(4));
+
+        sendButton = new JButton("发送");
+        sendButton.addActionListener(e -> sendMessage());
+        sendButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
+        UIStyles.stylePrimary(sendButton);
+        sideButtons.add(sendButton);
+
+        inputPanel.add(sideButtons, BorderLayout.EAST);
 
         add(mainSplitPane, BorderLayout.CENTER);
         add(inputPanel, BorderLayout.SOUTH);
@@ -464,17 +467,27 @@ public class ChatPanel extends JPanel {
                             StyledDocument doc = chatArea.getStyledDocument();
                             Style senderStyle = doc.addStyle("sender", null);
                             StyleConstants.setBold(senderStyle, true);
-                            StyleConstants.setForeground(senderStyle, Color.GREEN);
-                            
+                            StyleConstants.setForeground(senderStyle, new Color(45, 108, 223));
+                            StyleConstants.setBackground(senderStyle, UIStyles.AI_MSG_BG);
+
+                            int start = doc.getLength();
                             doc.insertString(doc.getLength(), "AI助手: \n", senderStyle);
                             aiMessageStartPos = doc.getLength(); // 记录AI消息内容开始位置
+                            Style para = doc.addStyle("aiMsgPara", null);
+                            StyleConstants.setAlignment(para, StyleConstants.ALIGN_LEFT);
+                            doc.setParagraphAttributes(start, doc.getLength() - start, para, true);
                         } catch (Exception e) {
                             api.logging().logToError("添加AI助手前缀失败: " + e.getMessage());
                         }
                     });
                     
                     final long[] lastRenderTime = {0L};
-                    final long RENDER_INTERVAL_MS = 120;
+                    final long RENDER_INTERVAL_MS = 60;
+
+                    // 行级增量渲染状态：renderedMarkdownLen 是已渲染进 doc 的 markdown 前缀长度；
+                    // 未以 '\n' 结尾的部分行不触发渲染，等换行或流结束后再整体渲染，
+                    // 避免 MarkdownRenderer 每一帧对全文删除+重解析+重插入（越长越卡）。
+                    final int[] renderedMarkdownLen = {0};
 
                     api.logging().logToOutput("[ChatPanel] 开始调用analyzeRequestStream");
                     apiClient.setSystemNoticeConsumer(systemNotice ->
@@ -492,11 +505,18 @@ public class ChatPanel extends JPanel {
                         lastRenderTime[0] = now;
                         String snapshot = fullResponse.toString();
 
+                        int lastNl = snapshot.lastIndexOf('\n');
+                        if (lastNl < 0) return;
+                        String renderable = snapshot.substring(0, lastNl + 1);
+                        if (renderable.length() <= renderedMarkdownLen[0]) return;
+                        final String deltaMd = renderable.substring(renderedMarkdownLen[0]);
+                        renderedMarkdownLen[0] = renderable.length();
+
                         SwingUtilities.invokeLater(() -> {
                             if (isCancelled() || !isStreaming || runId != streamRunId) return;
                             try {
                                 renderPreservingScroll(() ->
-                                        MarkdownRenderer.appendMarkdownStreaming(chatArea, snapshot, aiMessageStartPos));
+                                        MarkdownRenderer.appendMarkdown(chatArea, deltaMd));
                             } catch (Exception e) {
                                 api.logging().logToError("流式Markdown渲染失败: " + e.getMessage());
                             }
@@ -504,6 +524,7 @@ public class ChatPanel extends JPanel {
                     };
 
                     try {
+                        apiClient.setRequireConfirmHandler((toolName, summary) -> true);
                         if (shouldSendRequestPayload && currentRequest != null) {
                             apiClient.analyzeRequestStream(currentRequest, finalMessage, chunkHandler);
                             lastSentRequestFingerprint = currentFingerprint;
@@ -517,22 +538,15 @@ public class ChatPanel extends JPanel {
                     
                     debugLog("AI API调用完成，fullResponse长度: " + fullResponse.length());
                     
+                    // 渲染流结束后剩余的 tail（不含 \n 结尾的部分行），不做全文重渲染，避免闪烁
                     String finalContent = fullResponse.toString();
-                    if (!finalContent.isEmpty() && aiMessageStartPos >= 0
+                    if (!finalContent.isEmpty() && finalContent.length() > renderedMarkdownLen[0]
                             && !isCancelled() && isStreaming && runId == streamRunId) {
+                        final String tail = finalContent.substring(renderedMarkdownLen[0]);
                         SwingUtilities.invokeLater(() -> {
                             if (isCancelled() || !isStreaming || runId != streamRunId) return;
-                            try {
-                                StyledDocument doc = chatArea.getStyledDocument();
-                                int currentLength = doc.getLength();
-                                if (currentLength > aiMessageStartPos) {
-                                    doc.remove(aiMessageStartPos, currentLength - aiMessageStartPos);
-                                }
-                                renderPreservingScroll(() ->
-                                        MarkdownRenderer.appendMarkdown(chatArea, finalContent));
-                            } catch (Exception e) {
-                                api.logging().logToError("最终Markdown渲染失败: " + e.getMessage());
-                            }
+                            renderPreservingScroll(() ->
+                                    MarkdownRenderer.appendMarkdown(chatArea, tail));
                         });
                     }
                 } catch (Exception e) {
@@ -604,21 +618,53 @@ public class ChatPanel extends JPanel {
         try {
             renderPreservingScroll(() -> {
                 StyledDocument doc = chatArea.getStyledDocument();
+                boolean isSystem = sender != null && sender.contains("系统");
 
-                Style senderStyle = doc.addStyle("sender", null);
-                StyleConstants.setBold(senderStyle, true);
-                StyleConstants.setForeground(senderStyle, isUser ? Color.BLUE : Color.GREEN);
+                if (isUser) {
+                    // 用户消息：右对齐浅蓝色气泡块（浅色底 + 深色文字）
+                    Style bubble = doc.addStyle("userBubble", null);
+                    StyleConstants.setForeground(bubble, new Color(25, 48, 90));
+                    StyleConstants.setBackground(bubble, UIStyles.USER_MSG_BG);
+                    StyleConstants.setFontSize(bubble, 13);
+                    try {
+                        int start = doc.getLength();
+                        doc.insertString(start, message, bubble);
+                        doc.insertString(doc.getLength(), "\n", bubble);
+                        Style para = doc.addStyle("userBubblePara", null);
+                        StyleConstants.setAlignment(para, StyleConstants.ALIGN_RIGHT);
+                        doc.setParagraphAttributes(start, doc.getLength() - start, para, false);
+                    } catch (BadLocationException ex) {
+                        throw new RuntimeException(ex);
+                    }
+                } else {
+                    Style senderStyle = doc.addStyle("sender", null);
+                    StyleConstants.setBold(senderStyle, true);
+                    StyleConstants.setForeground(senderStyle,
+                            isSystem ? UIStyles.SYSTEM_MSG_FG : new Color(45, 108, 223));
+                    if (isSystem) {
+                        StyleConstants.setItalic(senderStyle, true);
+                    }
 
-                Style messageStyle = doc.addStyle("message", null);
-                Color textColor = UIManager.getColor("TextArea.foreground");
-                StyleConstants.setForeground(messageStyle, textColor != null ? textColor : Color.BLACK);
+                    Style messageStyle = doc.addStyle("message", null);
+                    Color textColor = UIManager.getColor("TextArea.foreground");
+                    StyleConstants.setForeground(messageStyle, textColor != null ? textColor : Color.BLACK);
+                    if (isSystem) {
+                        StyleConstants.setItalic(messageStyle, true);
+                        StyleConstants.setForeground(messageStyle, UIStyles.SYSTEM_MSG_FG);
+                    }
 
-                try {
-                    doc.insertString(doc.getLength(), sender + ": ", senderStyle);
-                    doc.insertString(doc.getLength(), message, messageStyle);
-                    doc.insertString(doc.getLength(), "\n\n", messageStyle);
-                } catch (BadLocationException ex) {
-                    throw new RuntimeException(ex);
+                    try {
+                        int start = doc.getLength();
+                        doc.insertString(start, sender + ": ", senderStyle);
+                        doc.insertString(doc.getLength(), message, messageStyle);
+                        doc.insertString(doc.getLength(), "\n\n", messageStyle);
+                        // 显式恢复左对齐，避免被上一条用户气泡的 ALIGN_RIGHT 段落属性继承
+                        Style aiPara = doc.addStyle("aiMsgPara", null);
+                        StyleConstants.setAlignment(aiPara, StyleConstants.ALIGN_LEFT);
+                        doc.setParagraphAttributes(start, doc.getLength() - start, aiPara, true);
+                    } catch (BadLocationException ex) {
+                        throw new RuntimeException(ex);
+                    }
                 }
             });
         } catch (Exception e) {
@@ -627,9 +673,21 @@ public class ChatPanel extends JPanel {
     }
 
     private void appendToChatAndShare(String sender, String message, boolean isUser) {
-        appendToChat(sender, message, isUser);
+        // 先入共享历史，再统一由 sync 渲染，避免手动渲染与异步 listener 重复/竞态（插件重载后首次发送曾被误清空）
         addToSharedHistory(sender, message, isUser);
+        syncChatAreaFromSharedHistory();
         debouncedSave();
+    }
+
+    /** 重置文档默认段落属性为左对齐（setText("") 不会清除段落属性残留，导致后续 AI 输出继承右对齐） */
+    private void resetDefaultParagraphAlignment() {
+        try {
+            StyledDocument doc = chatArea.getStyledDocument();
+            Style defPara = doc.addStyle("defLeftAligned", null);
+            StyleConstants.setAlignment(defPara, StyleConstants.ALIGN_LEFT);
+            doc.setParagraphAttributes(0, 0, defPara, false);
+            doc.setParagraphAttributes(0, doc.getLength(), defPara, true);
+        } catch (Exception ignored) { }
     }
 
     private void addToSharedHistory(String sender, String content, boolean isUser) {
@@ -652,11 +710,7 @@ public class ChatPanel extends JPanel {
 
     private void syncChatAreaFromSharedHistory() {
         int currentSize = apiClient.getSharedChatUiHistorySize();
-        if (currentSize == 0 && lastSyncedHistorySize > 0) {
-            chatArea.setText("");
-            lastSyncedHistorySize = 0;
-            return;
-        }
+        resetDefaultParagraphAlignment();
         if (currentSize <= lastSyncedHistorySize) return;
         for (int i = lastSyncedHistorySize; i < currentSize; i++) {
             Object[] entry = apiClient.getSharedChatUiHistoryEntry(i);
@@ -708,6 +762,7 @@ public class ChatPanel extends JPanel {
         apiClient.clearSharedChatUiHistory();
         lastSyncedHistorySize = 0;
         chatArea.setText("");
+        resetDefaultParagraphAlignment();
         deleteChatHistoryFile();
         if (saveDebouncerTimer != null) saveDebouncerTimer.stop();
         apiClient.clearContext();
@@ -728,6 +783,7 @@ public class ChatPanel extends JPanel {
         apiClient.clearSharedChatUiHistory();
         lastSyncedHistorySize = 0;
         chatArea.setText("");
+        resetDefaultParagraphAlignment();
         deleteChatHistoryFile();
         if (saveDebouncerTimer != null) saveDebouncerTimer.stop();
         lastSentRequestFingerprint = null;
@@ -938,6 +994,7 @@ public class ChatPanel extends JPanel {
                     }
                 }
                 lastSyncedHistorySize = apiClient.getSharedChatUiHistorySize();
+                resetDefaultParagraphAlignment();
                 api.logging().logToOutput("[ChatPanel] 已恢复 " + loaded.size() + " 条聊天历史");
             }
         } catch (Exception e) {
@@ -953,6 +1010,7 @@ public class ChatPanel extends JPanel {
         try {
             renderPreservingScroll(() -> {
                 StyledDocument doc = chatArea.getStyledDocument();
+                int start = doc.getLength();
                 Style senderStyle = doc.addStyle("sender", null);
                 StyleConstants.setBold(senderStyle, true);
                 StyleConstants.setForeground(senderStyle, Color.GREEN);
@@ -963,6 +1021,11 @@ public class ChatPanel extends JPanel {
                 }
 
                 MarkdownRenderer.appendMarkdown(chatArea, markdownContent);
+
+                // 显式恢复左对齐，避免被用户气泡的 ALIGN_RIGHT 段落属性继承
+                Style aiPara = doc.addStyle("aiMsgPara", null);
+                StyleConstants.setAlignment(aiPara, StyleConstants.ALIGN_LEFT);
+                doc.setParagraphAttributes(start, doc.getLength() - start, aiPara, true);
 
                 Style spacing = doc.addStyle("spacing", null);
                 try {

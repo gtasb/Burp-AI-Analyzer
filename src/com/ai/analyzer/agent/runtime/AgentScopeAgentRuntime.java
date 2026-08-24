@@ -25,7 +25,25 @@ import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
 
 import org.reactivestreams.Subscription;
 
+import java.io.IOException;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
+
+import java.io.IOException;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
+
+import java.io.IOException;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -59,6 +77,8 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public class AgentScopeAgentRuntime implements AgentRuntime {
 
+    private static final String AGENT_NAME = "burp-ai-analyzer";
+
     private final Mode mode;
     private final Model model;
     private final String systemPrompt;
@@ -75,6 +95,8 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
     private volatile HarnessAgent harnessAgent;
     private final AtomicReference<Subscription> currentSubscription = new AtomicReference<>();
     private volatile RequireConfirmHandler confirmHandler;
+    /** 累积 ToolCallDeltaEvent 的部分参数字符串，key=toolCallId，在 ToolCallEndEvent 或 ToolResultStartEvent 时取用 */
+    private final java.util.concurrent.ConcurrentHashMap<String, StringBuilder> toolCallArgBuffers = new java.util.concurrent.ConcurrentHashMap<>();
 
     private AgentScopeAgentRuntime(Builder builder) {
         this.mode = builder.mode;
@@ -231,8 +253,45 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
      */
     public void resetSession() {
         shutdown();
+        purgePersistentSessionData(workspacePath);
         DebugContext.log("AgentScopeAgentRuntime", "session_reset",
                 java.util.Map.of("mode", mode != null ? mode.name() : ""));
+    }
+
+    /**
+     * 清理 workspace 中由 HarnessAgent 写入的持久会话/记忆状态。
+     *
+     * <p>之前的「新会话」只重建了 Java 对象，但 workspace 下的
+     * {@code <user>/MEMORY.md}、{@code <user>/memory/}、{@code agents/burp-ai-analyzer/}
+     * 仍然保留，新的 agent 一初始化就把这些长期记忆重新加载回来，导致
+     * 用户点击「新会话」后依然带着旧上下文继续跑。
+     */
+    public static void purgePersistentSessionData(Path workspacePath) {
+        if (workspacePath == null) return;
+        String userId = System.getProperty("user.name", "burp-user");
+        deleteRecursivelyQuietly(workspacePath.resolve(userId));
+        deleteRecursivelyQuietly(workspacePath.resolve("agents").resolve(AGENT_NAME));
+    }
+
+    private static void deleteRecursivelyQuietly(Path path) {
+        if (path == null || !Files.exists(path)) return;
+        try {
+            Files.walkFileTree(path, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                    Files.deleteIfExists(file);
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+                    Files.deleteIfExists(dir);
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (Exception ignored) {
+            // 新会话应尽力清理，不因单个文件删除失败中断主流程
+        }
     }
 
     // ---- Event stream ----
@@ -289,6 +348,18 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
                 listener.onEvent(RuntimeEvent.thinking(delta));
             }
             DebugContext.log("AgentScopeAgentRuntime", "thinking_delta", Map.of("len", String.valueOf(delta != null ? delta.length() : 0)));
+        } else if (event instanceof io.agentscope.core.event.ToolCallDeltaEvent e) {
+            // 累积流式的工具调用参数
+            toolCallArgBuffers.computeIfAbsent(e.getToolCallId(), k -> new StringBuilder())
+                    .append(e.getDelta() != null ? e.getDelta() : "");
+        } else if (event instanceof io.agentscope.core.event.ToolCallEndEvent e) {
+            // 工具调用参数完成：从 buffer 取出并重置，以便 ToolResultStartEvent 取用
+            StringBuilder buf = toolCallArgBuffers.remove(e.getToolCallId());
+            String args = buf != null ? buf.toString() : "";
+            if (!args.isEmpty() && !"{}".equals(args)) {
+                String summary = args.length() > 200 ? args.substring(0, 200) + "…" : args;
+                listener.onEvent(RuntimeEvent.textDelta("\n📥 参数: " + summary + "\n"));
+            }
         } else if (event instanceof ToolCallStartEvent e) {
             listener.onEvent(RuntimeEvent.toolStart(e.getToolCallName(), null));
             DebugContext.log("AgentScopeAgentRuntime", "tool_start", Map.of("tool", e.getToolCallName()));
@@ -343,7 +414,7 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
             synchronized (this) {
                 if (harnessAgent == null) {
                     var builder = HarnessAgent.builder()
-                            .name("burp-ai-analyzer")
+                            .name(AGENT_NAME)
                             .model(model);
                     if (systemPrompt != null && !systemPrompt.isEmpty()) {
                         builder.sysPrompt(systemPrompt);
@@ -355,10 +426,21 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
                         builder.toolkit(toolkit);
                     }
                     // 配置上下文压缩（防止 token 超限）
-                    builder.compaction(CompactionConfig.builder()
+                    var compactionCfg = CompactionConfig.builder()
                             .triggerMessages(30)
                             .keepMessages(10)
-                            .build());
+                            .truncateArgs(CompactionConfig.TruncateArgsConfig.builder()
+                                    .maxArgLength(2000)
+                                    .truncationText("... [truncated] ...")
+                                    .build());
+                    if (maxContextTokens > 0) {
+                        // 按 token 预算的 70% 触发压缩，保留 30%
+                        int triggerTokens = (int) (maxContextTokens * 0.7);
+                        int keepTokens = (int) (maxContextTokens * 0.3);
+                        compactionCfg.triggerTokens(triggerTokens)
+                                .keepTokens(keepTokens);
+                    }
+                    builder.compaction(compactionCfg.build());
                     // 配置长期记忆（跨会话持久化）
                     builder.memory(MemoryConfig.defaults());
                     // 权限模式设为 BYPASS：敏感工具（extension_info 等）直接执行，
@@ -369,6 +451,17 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
                     // 禁用会话持久化：每次请求都是新 sessionId，不残留上一轮的挂起确认状态，
                     // 避免 "Agent is paused for human-in-the-loop confirmation" 跨请求复现
                     builder.disableSessionPersistence();
+                    // 启用挂起工具恢复：模型返回一批并发的工具调用时，若部分结果因超时/异常
+                    // 未收集到，允许 agent 自动跳过挂起工具而非直接崩溃报错
+                    // "Pending tool calls exist without results"
+                    builder.enablePendingToolRecovery(true);
+                    // 异步工具调用超时：防止单个工具挂死导致整个 Agent 阻塞
+                    builder.asyncToolTimeout(java.time.Duration.ofMinutes(3));
+                    // 单工具执行超时，避免 MCP 或外部工具长时间无响应
+                    builder.toolExecutionConfig(io.agentscope.core.model.ExecutionConfig.builder()
+                            .timeout(java.time.Duration.ofSeconds(120))
+                            .maxAttempts(2)
+                            .build());
                     // 配置大工具结果驱逐（pentest 场景常见）
                     builder.toolResultEviction(
                             io.agentscope.harness.agent.memory.compaction.ToolResultEvictionConfig.builder()

@@ -70,7 +70,8 @@ public class SystemPromptBuilder {
                 - Do NOT test for CORS misconfiguration vulnerabilities
 
                 # Output Format
-                - Use Markdown format, do NOT use table format
+                - Use Markdown format
+                - NEVER use markdown table syntax (|, ---, ||) in output
                 - Risk Level: [Critical/High/Medium/None]
                 - If findings exist, report: issue name, risk point, test result, verification method
                 - If no Medium or above issues: output "Risk Level: None, no obvious security issues found"

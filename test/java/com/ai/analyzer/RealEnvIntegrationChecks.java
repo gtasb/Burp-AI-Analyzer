@@ -115,7 +115,7 @@ class RealEnvIntegrationChecks {
             assumeTrue(deepseekUrl != null && deepseekKey != null, "缺少 DeepSeek 凭据");
             Model model = AgentScopeModelFactory.create(
                     ApiProvider.OPENAI_COMPATIBLE, deepseekKey, deepseekUrl,
-                    "deepseek-v4-pro", false, false, null);
+                    "deepseek-v4-pro", false, null);
             Msg system = Msg.builder().role(MsgRole.SYSTEM).textContent("你是测试助手，回答尽量简短").build();
             Msg user = Msg.builder().role(MsgRole.USER).textContent("用一句话回答：1+1 等于几？").build();
             List<ChatResponse> chunks = model.stream(List.of(system, user), List.of(), null)

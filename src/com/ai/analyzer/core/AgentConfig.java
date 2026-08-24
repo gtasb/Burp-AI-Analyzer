@@ -22,7 +22,6 @@ public class AgentConfig {
     private ApiProvider apiProvider = ApiProvider.DASHSCOPE;
     
     // ========== 模型功能配置 ==========
-    private boolean enableThinking = false;
     private boolean enableSearch = false;
     private String customParameters = "";
     private String maxTokens = "";
@@ -105,7 +104,6 @@ public class AgentConfig {
         this.apiUrl = other.apiUrl;
         this.model = other.model;
         this.apiProvider = other.apiProvider;
-        this.enableThinking = other.enableThinking;
         this.enableSearch = other.enableSearch;
         this.customParameters = other.customParameters;
         this.maxTokens = other.maxTokens;
@@ -248,8 +246,6 @@ public class AgentConfig {
     public void setModel(String model) { this.model = model != null ? model : ""; }
     public ApiProvider getApiProvider() { return apiProvider; }
     public void setApiProvider(ApiProvider apiProvider) { this.apiProvider = apiProvider != null ? apiProvider : ApiProvider.DASHSCOPE; }
-    public boolean isEnableThinking() { return enableThinking; }
-    public void setEnableThinking(boolean enableThinking) { this.enableThinking = enableThinking; }
     public boolean isEnableSearch() { return enableSearch; }
     public void setEnableSearch(boolean enableSearch) { this.enableSearch = enableSearch; }
     public String getCustomParameters() { return customParameters; }
@@ -311,7 +307,6 @@ public class AgentConfig {
         return "AgentConfig{" +
                 "apiProvider=" + apiProvider +
                 ", model='" + model + '\'' +
-                ", enableThinking=" + enableThinking +
                 ", enableSearch=" + enableSearch +
                 ", enableMcp=" + enableMcp +
                 ", enableRagMcp=" + enableRagMcp +

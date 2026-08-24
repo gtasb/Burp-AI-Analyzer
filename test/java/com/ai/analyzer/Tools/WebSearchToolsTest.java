@@ -25,13 +25,15 @@ class WebSearchToolsTest {
             if (ann != null) specs.add(ann);
         }
 
-        assertThat(specs).hasSize(2);
+        assertThat(specs).hasSize(3);
         assertThat(specs).extracting(Tool::name)
-                .containsExactlyInAnyOrder("web_search", "fetch_url");
+                .containsExactlyInAnyOrder("web_search", "fetch_url", "vulnerability_search");
         assertThat(specs.stream().filter(s -> "web_search".equals(s.name())).findFirst().orElseThrow().description())
                 .contains("搜索");
         assertThat(specs.stream().filter(s -> "fetch_url".equals(s.name())).findFirst().orElseThrow().description())
                 .contains("URL");
+        assertThat(specs.stream().filter(s -> "vulnerability_search".equals(s.name())).findFirst().orElseThrow().description())
+                .contains("漏洞");
     }
 
     @Test
@@ -40,7 +42,6 @@ class WebSearchToolsTest {
         assertThat(WebSearchTools.tavily("k", "https://proxy.tavily.com")).isNotNull();
         assertThat(WebSearchTools.google("k", "csi")).isNotNull();
         assertThat(WebSearchTools.duckDuckGo()).isNotNull();
-        assertThat(new WebSearchTools("k")).isNotNull();
     }
 
     @Test

@@ -25,7 +25,6 @@ class PluginSettingsTest {
             assertThat(settings.getApiUrl()).isEqualTo("https://dashscope.aliyuncs.com/api/v1");
             assertThat(settings.getApiKey()).isEmpty();
             assertThat(settings.getModel()).isEqualTo("qwen3-max");
-            assertThat(settings.isEnableThinking()).isTrue();
             assertThat(settings.isEnableSearch()).isTrue();
             assertThat(settings.isEnableMcp()).isFalse();
             assertThat(settings.isEnableRag()).isFalse();
@@ -74,17 +73,15 @@ class PluginSettingsTest {
             assertThat(settings.getApiKey()).isEqualTo("sk-test");
             assertThat(settings.getModel()).isEqualTo("gpt-4");
             assertThat(settings.getUserPrompt()).isEqualTo("Analyze this");
-            assertThat(settings.isEnableThinking()).isTrue();
             assertThat(settings.isEnableSearch()).isTrue();
         }
 
         @Test
-        @DisplayName("should_set_thinking_and_search_when_six_arg_constructor")
-        void should_set_thinking_and_search_when_six_arg_constructor() {
+        @DisplayName("should_set_search_when_five_arg_constructor")
+        void should_set_search_when_five_arg_constructor() {
             PluginSettings settings = new PluginSettings(
-                "url", "key", "model", "prompt", false, false);
+                "url", "key", "model", "prompt", false);
 
-            assertThat(settings.isEnableThinking()).isFalse();
             assertThat(settings.isEnableSearch()).isFalse();
         }
     }

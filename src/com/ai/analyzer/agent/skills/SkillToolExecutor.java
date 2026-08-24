@@ -106,20 +106,34 @@ public class SkillToolExecutor {
             Process process = pb.start();
 
             int timeout = tool.getTimeout() > 0 ? tool.getTimeout() : DEFAULT_TIMEOUT;
-            String output = readProcessOutput(process, timeout);
+            // 在单独线程中读取输出，避免 stdout 缓冲区满导致进程阻塞，
+            // 主线程同步等待进程结束（共用同一 timeout，不超过配置值）
+            java.util.concurrent.atomic.AtomicReference<String> outputRef = new java.util.concurrent.atomic.AtomicReference<>();
+            Thread reader = new Thread(() -> {
+                try {
+                    outputRef.set(readProcessOutput(process, timeout));
+                } catch (IOException e) {
+                    outputRef.set("[读取输出失败: " + e.getMessage() + "]");
+                }
+            }, "skill-stdout-reader");
+            reader.setDaemon(true);
+            reader.start();
 
             boolean finished = process.waitFor(timeout, TimeUnit.SECONDS);
 
             if (!finished) {
                 process.destroyForcibly();
+                reader.interrupt();
                 result.setSuccess(false);
                 result.setError("执行超时（超过 " + timeout + " 秒）");
-                result.setOutput(output + "\n[执行超时，进程已终止]");
+                result.setOutput((outputRef.get() != null ? outputRef.get() : "") + "\n[执行超时，进程已终止]");
             } else {
+                // 等读取线程完成
+                try { reader.join(5000); } catch (InterruptedException ignored) {}
                 int exitCode = process.exitValue();
                 result.setExitCode(exitCode);
                 result.setSuccess(exitCode == 0);
-                result.setOutput(output);
+                result.setOutput(outputRef.get() != null ? outputRef.get() : "");
                 if (exitCode != 0) {
                     result.setError("进程退出码: " + exitCode);
                 }
@@ -159,9 +173,12 @@ public class SkillToolExecutor {
         String args = tool.buildArgs(paramValues);
         String fullCommand = cmd + (args.isEmpty() ? "" : " " + args);
 
-        if (ExecutionPolicy.containsShellOperators(fullCommand)) {
+        boolean needsShell = ExecutionPolicy.containsShellOperators(fullCommand)
+                || (isWindows && (cmd.toLowerCase().endsWith(".bat") || cmd.toLowerCase().endsWith(".cmd")));
+
+        if (needsShell) {
             if (isWindows) {
-                command.add("cmd");
+                command.add("cmd.exe");
                 command.add("/c");
                 command.add(fullCommand);
             } else {
@@ -172,52 +189,114 @@ public class SkillToolExecutor {
         } else {
             command.add(cmd);
             if (!args.isEmpty()) {
-                String[] argParts = args.split("\\s+");
-                for (String arg : argParts) {
-                    if (!arg.isEmpty()) {
-                        command.add(arg);
-                    }
-                }
+                command.addAll(tokenizeArgs(args));
             }
         }
 
         return command;
     }
 
+    /**
+     * 引号感知的命令行拆词（支持单引号、双引号与反斜杠转义）。
+     * 这样带空格且被引号包裹的参数（如 Windows 带空格路径）不会在
+     * {@code split("\\s+")} 下被错误拆开 —— 之前的实现会导致
+     * curl 等命令写入带空格路径时报 "文件创建目录或语法不正确"。
+     *
+     * <p>Windows 路径中的反斜杠（如 {@code D:\My Folder\file.txt}）不会被误认为转义：
+     * 反斜杠仅在 {@code \"}、{@code \\}、{@code \'} 时作为转义处理，保留原反斜杠仅为路径分隔符。
+     */
+    private List<String> tokenizeArgs(String args) {
+        List<String> tokens = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        boolean inSingle = false;
+        boolean inDouble = false;
+        for (int i = 0; i < args.length(); i++) {
+            char c = args.charAt(i);
+            if (c == '\\' && i + 1 < args.length() && !inSingle) {
+                char next = args.charAt(i + 1);
+                if (next == '"' || next == '\\' || next == '\'') {
+                    cur.append(next);
+                    i++;
+                    continue;
+                }
+            }
+            if (c == '\'' && !inDouble) {
+                inSingle = !inSingle;
+                continue;
+            }
+            if (c == '"' && !inSingle) {
+                inDouble = !inDouble;
+                continue;
+            }
+            if (Character.isWhitespace(c) && !inSingle && !inDouble) {
+                if (cur.length() > 0) {
+                    tokens.add(cur.toString());
+                    cur.setLength(0);
+                }
+                continue;
+            }
+            cur.append(c);
+        }
+        if (cur.length() > 0) {
+            tokens.add(cur.toString());
+        }
+        return tokens;
+    }
+
     private String readProcessOutput(Process process, int timeoutSeconds) throws IOException {
-        StringBuilder output = new StringBuilder();
+        java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int totalRead = 0;
+        int read;
 
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+        long startTime = System.currentTimeMillis();
+        long timeoutMs = timeoutSeconds * 1000L;
 
-            char[] buffer = new char[4096];
-            int totalRead = 0;
-            int read;
-
-            long startTime = System.currentTimeMillis();
-            long timeoutMs = timeoutSeconds * 1000L;
-
-            while ((read = reader.read(buffer)) != -1) {
+        try (InputStream in = process.getInputStream()) {
+            while ((read = in.read(buffer)) != -1) {
+                if (Thread.currentThread().isInterrupted()) {
+                    return decodeOutput(buf.toByteArray()) + "\n[输出读取被中断]";
+                }
                 if (System.currentTimeMillis() - startTime > timeoutMs) {
-                    output.append("\n[输出读取超时]");
-                    break;
+                    return decodeOutput(buf.toByteArray()) + "\n[输出读取超时]";
                 }
 
                 if (totalRead + read > MAX_OUTPUT_SIZE) {
                     int remaining = MAX_OUTPUT_SIZE - totalRead;
                     if (remaining > 0) {
-                        output.append(buffer, 0, remaining);
+                        buf.write(buffer, 0, remaining);
                     }
-                    output.append("\n[输出已截断，超过最大限制 " + (MAX_OUTPUT_SIZE / 1024) + "KB]");
-                    break;
+                    return decodeOutput(buf.toByteArray()) + "\n[输出已截断，超过最大限制 " + (MAX_OUTPUT_SIZE / 1024) + "KB]";
                 }
 
-                output.append(buffer, 0, read);
+                buf.write(buffer, 0, read);
                 totalRead += read;
             }
         }
 
-        return output.toString();
+        return decodeOutput(buf.toByteArray());
+    }
+
+    /**
+     * 子进程输出解码：优先 UTF-8，若检测到大量替换字符（U+FFFD）则说明是
+     * Windows 中文系统的 GBK/GB18030 输出（cmd/curl 默认 GBK 代码页），
+     * 自动回退用 GBK 解码 —— 之前固定 UTF-8 导致中文错误信息全部乱码。
+     */
+    private String decodeOutput(byte[] bytes) {
+        if (bytes.length == 0) return "";
+        String utf8 = new String(bytes, StandardCharsets.UTF_8);
+        int replaced = 0;
+        for (int i = 0; i < utf8.length(); i++) {
+            if (utf8.charAt(i) == '\uFFFD') replaced++;
+        }
+        if (replaced > 0 && replaced * 100.0 / utf8.length() > 2.0) {
+            try {
+                return new String(bytes, java.nio.charset.Charset.forName("GBK"));
+            } catch (Exception ignored) {
+                return utf8;
+            }
+        }
+        return utf8;
     }
 
     private void logInfo(String message) {

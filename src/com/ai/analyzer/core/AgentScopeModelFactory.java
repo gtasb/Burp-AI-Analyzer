@@ -28,7 +28,6 @@ public class AgentScopeModelFactory {
      * @param apiUrl         API URL（可选，为空则使用默认值）
      * @param model          模型名称（可选，为空则使用默认值）
      * @param enableSearch   是否启用联网搜索（仅 DashScope 有效）
-     * @param enableThinking 是否启用深度思考
      * @param customParameters JSON 格式自定义参数（可为 null）
      * @return AgentScope Model 实例
      */
@@ -38,7 +37,6 @@ public class AgentScopeModelFactory {
             String apiUrl,
             String model,
             boolean enableSearch,
-            boolean enableThinking,
             String customParameters) {
 
         if (apiKey == null || apiKey.trim().isEmpty()) {
@@ -49,16 +47,16 @@ public class AgentScopeModelFactory {
             return createOpenAIModel(apiKey, apiUrl, model);
         }
         if (provider == ApiProvider.ANTHROPIC) {
-            return createAnthropicModel(apiKey, apiUrl, model, enableThinking);
+            return createAnthropicModel(apiKey, apiUrl, model);
         }
-        return createDashScopeModel(apiKey, apiUrl, model, enableSearch, enableThinking);
+        return createDashScopeModel(apiKey, apiUrl, model, enableSearch);
     }
 
     // ========== DashScope ==========
 
     private static Model createDashScopeModel(
             String apiKey, String apiUrl, String model,
-            boolean enableSearch, boolean enableThinking) {
+            boolean enableSearch) {
 
         String baseUrl = normalizeUrl(apiUrl, "https://dashscope.aliyuncs.com/api/v1");
         String modelName = isBlank(model) ? "qwen-max" : model.trim();
@@ -72,7 +70,6 @@ public class AgentScopeModelFactory {
                 .baseUrl(baseUrl)
                 .modelName(modelName)
                 .stream(true)
-                .enableThinking(enableThinking)
                 .enableSearch(enableSearch)
                 .endpointType(EndpointType.AUTO)
                 .defaultOptions(defaultOptions)
@@ -103,25 +100,20 @@ public class AgentScopeModelFactory {
     // ========== Anthropic ==========
 
     private static Model createAnthropicModel(
-            String apiKey, String apiUrl, String model,
-            boolean enableThinking) {
+            String apiKey, String apiUrl, String model) {
 
         String modelName = isBlank(model) ? "claude-sonnet-4-5-20250514" : model.trim();
 
-        GenerateOptions.Builder optionsBuilder = GenerateOptions.builder()
+        GenerateOptions defaultOptions = GenerateOptions.builder()
                 .temperature(0.7)
-                .maxTokens(4096);
-
-        if (enableThinking) {
-            optionsBuilder.thinkingBudget(2048)
-                    .maxTokens(2048 + 4096);
-        }
+                .maxTokens(4096)
+                .build();
 
         var builder = AnthropicChatModel.builder()
                 .apiKey(apiKey)
                 .modelName(modelName)
                 .stream(true)
-                .defaultOptions(optionsBuilder.build());
+                .defaultOptions(defaultOptions);
 
         if (!isBlank(apiUrl)) {
             builder.baseUrl(apiUrl.trim());
@@ -136,9 +128,9 @@ public class AgentScopeModelFactory {
      * 返回模型创建时的摘要描述，供调用方打日志。
      */
     public static String describeConfig(ApiProvider provider, String apiUrl, String model,
-                                        boolean enableSearch, boolean enableThinking) {
-        return String.format("AgentScope[provider=%s, model=%s, url=%s, search=%s, thinking=%s]",
-                provider.getDisplayName(), model, apiUrl, enableSearch, enableThinking);
+                                        boolean enableSearch) {
+        return String.format("AgentScope[provider=%s, model=%s, url=%s, search=%s]",
+                provider.getDisplayName(), model, apiUrl, enableSearch);
     }
 
     private static boolean isBlank(String s) {

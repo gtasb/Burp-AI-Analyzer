@@ -3,7 +3,8 @@ package com.ai.analyzer.scan.pscan;
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.http.message.HttpRequestResponse;
 import com.ai.analyzer.core.AgentConfig.ApiProvider;
-import com.ai.analyzer.tools.BurpExtTools;
+import com.ai.analyzer.tools.BatchFuzzTool;
+import com.ai.analyzer.tools.CurlTools;
 import com.ai.analyzer.tools.WebSearchTools;
 import com.ai.analyzer.agent.mcpclient.CustomMcpConfig;
 import com.ai.analyzer.agent.mcpclient.CustomMcpConfigParser;
@@ -63,8 +64,6 @@ public class PassiveScanApiClient {
     private PreScanFilterManager preScanFilterManager;
 
     // 功能开关
-    @Getter
-    private boolean enableThinking = false;
     @Getter
     private boolean enableSearch = false;
     @Getter
@@ -204,10 +203,6 @@ public class PassiveScanApiClient {
         setApiProvider(ApiProvider.fromDisplayName(providerName));
     }
 
-    public void setEnableThinking(boolean v) {
-        if (v != this.enableThinking) { this.enableThinking = v; invalidateAgentScopeRuntime(); }
-    }
-
     public void setEnableSearch(boolean v) {
         if (v != this.enableSearch) { this.enableSearch = v; invalidateAgentScopeRuntime(); }
     }
@@ -311,11 +306,9 @@ public class PassiveScanApiClient {
 
     public void setWorkplaceDirectoryPath(String workplaceDirectoryPath) {
         String normalized = workplaceDirectoryPath == null ? "" : workplaceDirectoryPath.trim();
+        normalized = normalizePath(normalized);
         com.ai.analyzer.util.HttpFormatter.setWorkplaceDirectory(normalized);
-        if (!java.util.Objects.equals(this.workplaceDirectoryPath, normalized)) {
-            this.workplaceDirectoryPath = normalized;
-            invalidateAgentScopeRuntime();
-        }
+        this.workplaceDirectoryPath = normalized;
     }
 
     public void setCustomMcpConfigJson(String v) {
@@ -357,10 +350,9 @@ public class PassiveScanApiClient {
                     apiUrl,
                     model,
                     isModelSearchEnabled(),
-                    enableThinking,
-                    ""); // custom parameters from config
+                    ""); // custom parameters - TODO: add field
             logInfo("AgentScope Model 已创建: " + AgentScopeModelFactory.describeConfig(
-                    apiProvider, apiUrl, model, isModelSearchEnabled(), enableThinking));
+                    apiProvider, apiUrl, model, isModelSearchEnabled()));
 
             // 2. 创建 Toolkit 并注册所有工具
             asToolkit = new Toolkit();
@@ -382,10 +374,14 @@ public class PassiveScanApiClient {
                 logInfo("AgentScope WebSearchTools (DuckDuckGo) 已注册");
             }
 
-            // 注册 Burp 扩展工具
+            // 注册浏览器渲染工具
+            asToolkit.registerTool(new com.ai.analyzer.tools.BrowserRenderTool());
+
+            // 注册 Burp 扩展工具（Intruder 发送 + 批量爆破）
             if (api != null) {
-                asToolkit.registerTool(new BurpExtTools(api));
-                logInfo("AgentScope BurpExtTools 已注册");
+                asToolkit.registerTool(new BatchFuzzTool(api));
+                asToolkit.registerTool(new CurlTools(api));
+                logInfo("AgentScope BatchFuzzTool + CurlTools 已注册");
             }
 
             // 3. 注册 MCP 客户端
@@ -439,8 +435,15 @@ public class PassiveScanApiClient {
             if (!enableFileSystemAccess) {
                 runtimeBuilder.disableFilesystemTools();
             }
-            if (!enableCliTool && !enablePythonScript) {
+            if (!enableCliTool) {
                 runtimeBuilder.disableShellTool();
+            } else {
+                boolean isWindows = System.getProperty("os.name").toLowerCase().contains("win");
+                if (isWindows) {
+                    runtimeBuilder.disableShellTool();
+                    asToolkit.registerTool(new com.ai.analyzer.tools.ShellExecTool(
+                            workplaceDirectoryPath, workplaceDirectoryPath, true, enableUnrestrictedCliTool));
+                }
             }
             // Skills：启用时注入技能仓库，Harness 自动将 SKILL.md 提示注入上下文
             if (enableSkills && skillsDirectoryPath != null && !skillsDirectoryPath.trim().isEmpty()) {
@@ -452,6 +455,15 @@ public class PassiveScanApiClient {
                 } catch (Exception e) {
                     logError("Skills 技能仓库注入失败: " + e.getMessage());
                 }
+            }
+            // 上下文 Token 预算：通过 maxTokens 配置传给 HarnessAgent 和 CompactionConfig
+            if (maxTokens != null && !maxTokens.isBlank()) {
+                try {
+                    int tokens = Integer.parseInt(maxTokens);
+                    if (tokens > 0) {
+                        runtimeBuilder.maxContextTokens(tokens);
+                    }
+                } catch (NumberFormatException ignored) { }
             }
             agentScopeRuntime = runtimeBuilder.build();
             logInfo("AgentScopeAgentRuntime 已创建 (PASSIVE mode)");
@@ -535,7 +547,7 @@ public class PassiveScanApiClient {
         this.apiKey = settings.getApiKey() != null ? settings.getApiKey() : "";
         this.model = settings.getModel() != null && !settings.getModel().isEmpty()
             ? settings.getModel() : defaultModel;
-        this.enableThinking = settings.isEnableThinking();
+        this.apiProvider = ApiProvider.fromDisplayName(settings.getApiProvider());
         this.enableSearch = settings.isEnableSearch();
         this.searchMode = settings.getSearchMode();
         this.tavilyApiKey = settings.getTavilyApiKey();
@@ -558,8 +570,7 @@ public class PassiveScanApiClient {
         this.cliToolPrompt = settings.getCliToolPrompt();
         this.enableSkills = settings.isEnableSkills();
         this.skillsDirectoryPath = settings.getSkillsDirectoryPath();
-        this.workplaceDirectoryPath = settings.getWorkplaceDirectoryPath();
-        com.ai.analyzer.util.HttpFormatter.setWorkplaceDirectory(settings.getWorkplaceDirectoryPath());
+        setWorkplaceDirectoryPath(settings.getWorkplaceDirectoryPath());
         this.customMcpConfigJson = settings.getCustomMcpConfigJson();
         this.customMcpConfigs = CustomMcpConfigParser.parse(this.customMcpConfigJson);
         this.customSystemPrompt = settings.getCustomPassiveSystemPrompt();
@@ -702,7 +713,7 @@ public class PassiveScanApiClient {
                                 if (toolName != null && !toolName.isEmpty()) {
                                     AppLogBuffer.tool("PassiveScanApiClient", toolName);
                                     if (onChunk != null) {
-                                        onChunk.accept("\n🔧 <b>调用工具: " + escapeHtml(toolName) + "</b>\n");
+                                        onChunk.accept("\n[TOOL_BLOCK]" + escapeHtml(toolName) + "[/TOOL_BLOCK]\n");
                                     }
                                 }
                             }
@@ -712,7 +723,7 @@ public class PassiveScanApiClient {
                                 AppLogBuffer.tool("PassiveScanApiClient", "executed: " + (toolName != null ? toolName : "unknown")
                                         + (toolFailed ? " (failed)" : " (ok)"));
                                 if (toolFailed && onChunk != null) {
-                                    onChunk.accept("\n⚠️ <b>工具执行失败: " + escapeHtml(toolName != null ? toolName : "unknown") + "</b>\n");
+                                    onChunk.accept("\n⚠️ 工具执行失败: " + escapeHtml(toolName != null ? toolName : "unknown") + "\n");
                                 }
                             }
                             case REPLY_END -> {
@@ -728,8 +739,11 @@ public class PassiveScanApiClient {
                                 Throwable err = event.error();
                                 futureResult.completeExceptionally(err != null ? err : new Exception("AgentScope unknown error"));
                             }
+                            case THINKING -> {
+                                // 被动扫描场景下 THINKING 无 UI 展示，仅用于日志
+                            }
                             default -> {
-                                // THINKING, SUBAGENT, MEMORY — 静默处理
+                                // SUBAGENT, MEMORY — 静默处理
                             }
                         }
                     }
@@ -763,7 +777,8 @@ public class PassiveScanApiClient {
      */
     private String buildSystemPrompt() {
         int hash = java.util.Objects.hash(
-                enableSearch, enableSkills,
+                enableSearch, enableMcp, enableRagMcp, enableChromeMcp,
+                enableFileSystemAccess, enableSkills, ragMcpDocumentsPath,
                 customSystemPrompt);
         String cached = cachedSystemPrompt;
         if (cached != null && hash == cachedPromptConfigHash) return cached;
@@ -871,5 +886,22 @@ public class PassiveScanApiClient {
         if (s == null) return "";
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 .replace("\"", "&quot;").replace("'", "&#39;");
+    }
+
+    private static String normalizePath(String path) {
+        if (path == null || path.isEmpty()) return path;
+        if (!System.getProperty("os.name").toLowerCase().contains("win")) return path;
+        if (!path.contains(" ")) return path;
+        try {
+            new java.io.File(path).mkdirs();
+            Process p = new ProcessBuilder("cmd.exe", "/c", "for %I in (\"" + path + "\") do @echo %~sI")
+                    .redirectErrorStream(true)
+                    .start();
+            String shortPath = new String(p.getInputStream().readAllBytes(),
+                    java.nio.charset.StandardCharsets.UTF_8).trim();
+            p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+            if (!shortPath.isEmpty() && !shortPath.contains(" ")) return shortPath;
+        } catch (Exception ignored) { }
+        return path;
     }
 }

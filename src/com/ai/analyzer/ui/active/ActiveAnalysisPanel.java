@@ -7,6 +7,7 @@ import burp.api.montoya.http.message.requests.HttpRequest;
 import com.ai.analyzer.core.AgentApiClient;
 import com.ai.analyzer.core.RequestData;
 import com.ai.analyzer.scan.pscan.ScanResult;
+import com.ai.analyzer.ui.UIStyles;
 import com.ai.analyzer.util.HttpFormatter;
 import com.ai.analyzer.util.MarkdownRenderer;
 import com.ai.analyzer.util.TokenUsageTracker;
@@ -38,6 +39,8 @@ public class ActiveAnalysisPanel extends JPanel {
 
     // ========== 渲染目标（由 AIAnalyzerTab 随模式切换） ==========
     private boolean activeModeSelected = true;
+    /** 外部右键发送的直接分析请求：设置后 performAnalysis 优先分析该请求，与表格选中项解耦 */
+    private volatile HttpRequestResponse pendingDirectRequest;
     private JTextPane targetPane;
     private JTextArea promptArea;
 
@@ -64,7 +67,7 @@ public class ActiveAnalysisPanel extends JPanel {
     private SwingWorker<Void, String> currentWorker;
     private volatile int analysisRunId = 0;
 
-    private final AnalysisHistoryStore historyStore = new AnalysisHistoryStore();
+    private AnalysisHistoryStore historyStore;
 
     public ActiveAnalysisPanel(MontoyaApi api) {
         this.api = api;
@@ -76,6 +79,11 @@ public class ActiveAnalysisPanel extends JPanel {
         this.apiClientConfigUpdater = configUpdater;
         this.stateListener = listener;
         this.dataSource = ds;
+        if (client != null) {
+            this.historyStore = client.getAnalysisHistoryStore();
+        } else {
+            this.historyStore = new AnalysisHistoryStore();
+        }
         setupAgentHITL();
     }
 
@@ -117,44 +125,60 @@ public class ActiveAnalysisPanel extends JPanel {
         JPanel topArea = new JPanel();
         topArea.setLayout(new BoxLayout(topArea, BoxLayout.Y_AXIS));
 
-        JPanel modeBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
-        JButton newSessionButton = new JButton("+");
-        newSessionButton.setToolTipText("新开一个会话：销毁当前 Agent 会话与记忆，从头开始（当前结果区清空）");
-        newSessionButton.addActionListener(e -> startNewSession());
-        modeBar.add(newSessionButton);
-        modeBar.add(new JLabel("Agent模式:"));
+        JPanel modeBar = new JPanel(new BorderLayout(8, 0));
+
+        // 左侧：模式选择
+        JPanel modeSelect = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
+        JLabel modeLabel = new JLabel("Agent模式:");
+        UIStyles.setFont(modeLabel, 13f, Font.BOLD);
+        modeSelect.add(modeLabel);
         planModeComboBox = new JComboBox<>(new String[]{"普通模式", "计划模式(Plan Mode)"});
         planModeComboBox.setToolTipText("计划模式：Agent 先进行只读调查并写出计划，提交 plan_exit 时弹出批准确认框，您批准后才开始执行。适合复杂渗透测试任务；普通模式直接执行。");
         planModeComboBox.addActionListener(e -> handlePlanModeChanged());
-        modeBar.add(planModeComboBox);
+        modeSelect.add(planModeComboBox);
+        modeBar.add(modeSelect, BorderLayout.WEST);
 
+        // 右侧：操作按钮组
+        JPanel actionGroup = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 4));
         JButton copyResultButton = new JButton("复制结果");
         copyResultButton.setToolTipText("将当前 AI 分析结果全文复制到剪贴板");
         copyResultButton.addActionListener(e -> copyAnalysisResult());
-        modeBar.add(copyResultButton);
+        UIStyles.styleSecondary(copyResultButton);
+        actionGroup.add(copyResultButton);
+
         JButton copyRequestButton = new JButton("复制请求");
         copyRequestButton.setToolTipText("将当前选中的请求/响应报文复制到剪贴板");
         copyRequestButton.addActionListener(e -> copyCurrentRequest());
-        modeBar.add(copyRequestButton);
+        UIStyles.styleSecondary(copyRequestButton);
+        actionGroup.add(copyRequestButton);
+
         JButton sendIntruderButton = new JButton("发送到 Intruder");
         sendIntruderButton.setToolTipText("将当前选中的请求发送到 Intruder 进行自动化测试");
         sendIntruderButton.addActionListener(e -> sendSelectedToIntruder());
-        modeBar.add(sendIntruderButton);
+        UIStyles.styleSecondary(sendIntruderButton);
+        actionGroup.add(sendIntruderButton);
+
         JButton batchAnalyzeButton = new JButton("批量分析");
         batchAnalyzeButton.setToolTipText("将请求列表中选中的多个请求一次性提交给 Agent 归纳分析");
         batchAnalyzeButton.addActionListener(e -> performBatchAnalysis());
-        modeBar.add(batchAnalyzeButton);
+        UIStyles.styleSecondary(batchAnalyzeButton);
+        actionGroup.add(batchAnalyzeButton);
+
         JButton pasteMessageButton = new JButton("粘贴报文");
         pasteMessageButton.setToolTipText("粘贴原始 HTTP 请求/响应报文进行分析（无需先在请求列表中选中）");
         pasteMessageButton.addActionListener(e -> showPasteMessageDialog());
-        modeBar.add(pasteMessageButton);
+        UIStyles.styleSecondary(pasteMessageButton);
+        actionGroup.add(pasteMessageButton);
+        modeBar.add(actionGroup, BorderLayout.EAST);
         topArea.add(modeBar);
 
         // ---- 快捷任务行：常见渗透测试任务一键填充提示词并执行 ----
-        JPanel quickBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
-        quickBar.setBorder(BorderFactory.createTitledBorder("快捷任务"));
+        JPanel quickBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
+        quickBar.setBorder(UIStyles.titledBorder("快捷任务"));
         for (QuickTaskPresets.QuickTask task : QuickTaskPresets.defaults()) {
-            quickBar.add(createQuickTaskButton(task.label(), task.prompt()));
+            JButton qb = createQuickTaskButton(task.label(), task.prompt());
+            UIStyles.styleSecondary(qb);
+            quickBar.add(qb);
         }
         topArea.add(quickBar);
 
@@ -185,7 +209,7 @@ public class ActiveAnalysisPanel extends JPanel {
         applyEditorTheme(activeModeResultTextPane);
         JScrollPane resultScrollPane = new JScrollPane(activeModeResultTextPane);
         resultScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-        resultScrollPane.setBorder(BorderFactory.createTitledBorder("AI分析结果"));
+        resultScrollPane.setBorder(UIStyles.titledBorder("AI分析结果"));
 
         // ---- 右侧：分析历史列表 ----
         analysisHistoryModel = new DefaultListModel<>();
@@ -212,7 +236,7 @@ public class ActiveAnalysisPanel extends JPanel {
             }
         });
         JScrollPane historyScroll = new JScrollPane(analysisHistoryList);
-        historyScroll.setBorder(BorderFactory.createTitledBorder("分析历史（双击回看）"));
+        historyScroll.setBorder(UIStyles.titledBorder("分析历史（双击回看）"));
         JButton clearHistoryButton = new JButton("清空历史");
         clearHistoryButton.addActionListener(e -> {
             historyStore.clear();
@@ -230,7 +254,7 @@ public class ActiveAnalysisPanel extends JPanel {
         behaviorTextArea.setWrapStyleWord(true);
         applyEditorTheme(behaviorTextArea);
         behaviorScrollPane = new JScrollPane(behaviorTextArea);
-        behaviorScrollPane.setBorder(BorderFactory.createTitledBorder("模型行为（思考/工具调用）"));
+        behaviorScrollPane.setBorder(UIStyles.titledBorder("模型行为（思考/工具调用）"));
         behaviorScrollPane.setVisible(true);
         JPanel behaviorPanel = new JPanel(new BorderLayout());
         behaviorPanel.add(behaviorScrollPane, BorderLayout.CENTER);
@@ -241,13 +265,13 @@ public class ActiveAnalysisPanel extends JPanel {
 
         JSplitPane resultSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, resultScrollPane, rightTabs);
         resultSplit.setDividerLocation(680);
-        resultSplit.setResizeWeight(1.0);
+        resultSplit.setResizeWeight(0.75);
         resultSplit.setContinuousLayout(true);
         add(resultSplit, BorderLayout.CENTER);
 
         // ---- 底部：输入区域 ----
         JPanel promptPanel = new JPanel(new BorderLayout());
-        promptPanel.setBorder(BorderFactory.createTitledBorder("输入"));
+        promptPanel.setBorder(UIStyles.titledBorder("输入"));
 
         activeModePromptArea = new JTextArea(5, 50);
         activeModePromptArea.setLineWrap(true);
@@ -318,6 +342,27 @@ public class ActiveAnalysisPanel extends JPanel {
             return;
         }
         if (apiClient == null) {
+            return;
+        }
+
+        // 外部直接分析的请求优先（右键发送到AI分析），与表格选中项解耦
+        HttpRequestResponse direct = pendingDirectRequest;
+        pendingDirectRequest = null;
+        if (direct != null) {
+            String prompt = (promptArea != null ? promptArea.getText().trim() : "");
+            String httpContent = HttpFormatter.formatHttpRequestResponse(direct);
+            String targetDesc = "";
+            try {
+                String method = direct.request() != null ? direct.request().method() : "";
+                String url = "";
+                try { url = direct.request().url(); } catch (Exception ignored) {}
+                targetDesc = method + " " + (url.length() > 100 ? url.substring(0, 100) + "..." : url);
+            } catch (Exception ignored) {}
+            String detail = "报文 " + httpContent.length() + " 字节";
+            updateTargetInfo(targetDesc, detail);
+            if (isEmpty(prompt)) prompt = "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议";
+            if (apiClientConfigUpdater != null) apiClientConfigUpdater.run();
+            startAnalysisWorker(httpContent, prompt, targetDesc, detail);
             return;
         }
 
@@ -595,6 +640,17 @@ public class ActiveAnalysisPanel extends JPanel {
     }
 
     /** 从 URL 提取 host（去掉协议与端口，失败返回空串） */
+    private static boolean isEmpty(String s) {
+        return s == null || s.isBlank();
+    }
+
+    /** 外部右键「发送到AI分析」入口：直接分析指定请求，不依赖表格选中项 */
+    public void analyzeDirectRequest(HttpRequestResponse requestResponse) {
+        if (requestResponse == null || requestResponse.request() == null) return;
+        this.pendingDirectRequest = requestResponse;
+        performAnalysis();
+    }
+
     private static String extractHost(String url) {
         if (url == null || url.isBlank()) {
             return "";

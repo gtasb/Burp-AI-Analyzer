@@ -85,12 +85,21 @@
         <version>${agentscope.version}</version>
     </dependency>
 
-    <!-- 用于 JSON 处理（推荐使用）-->
+    <!-- Jackson 2 序列化（AgentScope / 搜索引擎等使用）-->
     <dependency>
         <groupId>com.fasterxml.jackson.core</groupId>
         <artifactId>jackson-databind</artifactId>
         <version>2.22.1</version>
     </dependency>
+
+    <!-- MCP JSON Jackson3 SPI 实现：解决与 Burp MCP 扩展（Kotlin SDK）共享类加载器的 SPI 冲突 -->
+    <dependency>
+        <groupId>io.modelcontextprotocol.sdk</groupId>
+        <artifactId>mcp-json-jackson3</artifactId>
+        <version>0.18.4</version>
+    </dependency>
+
+    
 
     <!-- Lombok 用于自动生成 getter/setter (兼容 Java 21) -->
     <dependency>

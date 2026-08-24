@@ -21,7 +21,8 @@ import com.google.gson.JsonObject;
 import com.ai.analyzer.core.PluginSettings;
 
 import burp.api.montoya.MontoyaApi;
-import com.ai.analyzer.tools.BurpExtTools;
+import com.ai.analyzer.tools.BatchFuzzTool;
+import com.ai.analyzer.tools.CurlTools;
 import com.ai.analyzer.tools.WebSearchTools;
 import com.ai.analyzer.util.AppLogBuffer;
 import com.ai.analyzer.util.DebugContext;
@@ -104,6 +105,23 @@ public class AgentApiClient {
 
     // ========== 状态标志 ==========
     private final AtomicLong streamGeneration = new AtomicLong(0);
+    /** 当前正在进行的流式会话（可能为 null），供 cancelStreaming 真正取消底层 agent 执行 */
+    private volatile com.ai.analyzer.agent.runtime.StreamSession currentSession;
+    /**
+     * 当前对话的稳定 sessionId。一次「新会话」周期内保持不变，
+     * 撤销后重新生成，让暂停→继续可在同一会话上下文内恢复。
+     * 值格式：agent-session-<UUID>，UUID 在 startNewSession 时刷新。
+     */
+    private volatile String currentSessionId;
+
+    // ========== 主动分析历史（共享，面板重建不丢失） ==========
+    private final com.ai.analyzer.ui.active.AnalysisHistoryStore analysisHistoryStore =
+            new com.ai.analyzer.ui.active.AnalysisHistoryStore();
+
+    /** 返回主动分析历史存储（同一 apiClient 实例内的所有面板共享，重建不丢失） */
+    public com.ai.analyzer.ui.active.AnalysisHistoryStore getAnalysisHistoryStore() {
+        return analysisHistoryStore;
+    }
 
     // ========== 系统提示词缓存 ==========
     private volatile String cachedSystemPrompt;
@@ -117,6 +135,11 @@ public class AgentApiClient {
     public AgentApiClient() {
         this.config = new AgentConfig();
         loadSettingsFromFile();
+        generateNewSessionId();
+    }
+
+    private void generateNewSessionId() {
+        currentSessionId = "agent-session-" + java.util.UUID.randomUUID();
     }
 
     /**
@@ -197,7 +220,6 @@ public class AgentApiClient {
     public String getApiUrl() { return config.getApiUrl(); }
     public String getModel() { return config.getModel(); }
     public ApiProvider getApiProvider() { return config.getApiProvider(); }
-    public boolean isEnableThinking() { return config.isEnableThinking(); }
     public boolean isEnableSearch() { return config.isEnableSearch(); }
     public boolean isEnableMcp() { return config.isEnableMcp(); }
     public String getBurpMcpUrl() { return config.getBurpMcpUrl(); }
@@ -245,13 +267,6 @@ public class AgentApiClient {
 
     public void setApiProvider(String providerName) {
         setApiProvider(ApiProvider.fromDisplayName(providerName));
-    }
-
-    public void setEnableThinking(boolean enableThinking) {
-        if (config.isEnableThinking() != enableThinking) {
-            config.setEnableThinking(enableThinking);
-            invalidateAgentScopeRuntime();
-        }
     }
 
     public void setEnableSearch(boolean enableSearch) {
@@ -509,6 +524,7 @@ public class AgentApiClient {
 
     public void setWorkplaceDirectoryPath(String workplaceDirectoryPath) {
         String normalized = workplaceDirectoryPath == null ? "" : workplaceDirectoryPath.trim();
+        normalized = normalizePath(normalized);
         com.ai.analyzer.util.HttpFormatter.setWorkplaceDirectory(normalized);
         if (!java.util.Objects.equals(config.getWorkplaceDirectoryPath(), normalized)) {
             config.setWorkplaceDirectoryPath(normalized);
@@ -548,11 +564,10 @@ public class AgentApiClient {
                     config.getApiUrl(),
                     config.getModel(),
                     config.isModelSearchEnabled(),
-                    config.isEnableThinking(),
                     config.getCustomParameters());
             logInfo("AgentScope Model 已创建: " + AgentScopeModelFactory.describeConfig(
                     config.getApiProvider(), config.getApiUrl(), config.getModel(),
-                    config.isModelSearchEnabled(), config.isEnableThinking()));
+                    config.isModelSearchEnabled()));
 
             // 2. 创建 Toolkit 并注册所有工具
             asToolkit = new Toolkit();
@@ -574,10 +589,14 @@ public class AgentApiClient {
                 logInfo("AgentScope WebSearchTools (DuckDuckGo) 已注册");
             }
 
-            // 注册 Burp 扩展工具
+            // 注册浏览器渲染工具
+            asToolkit.registerTool(new com.ai.analyzer.tools.BrowserRenderTool());
+
+            // 注册 Burp 扩展工具（Intruder 发送等基础功能）
             if (api != null) {
-                asToolkit.registerTool(new BurpExtTools(api));
-                logInfo("AgentScope BurpExtTools 已注册");
+                asToolkit.registerTool(new BatchFuzzTool(api));
+                asToolkit.registerTool(new CurlTools(api));
+                logInfo("AgentScope BatchFuzzTool + CurlTools 已注册");
             }
 
             // 3. 注册 MCP 客户端
@@ -636,8 +655,35 @@ public class AgentApiClient {
             if (!config.isEnableFileSystemAccess()) {
                 runtimeBuilder.disableFilesystemTools();
             }
-            if (!config.isEnableCliTool() && !config.isEnablePythonScript()) {
+            if (!config.isEnableCliTool()) {
                 runtimeBuilder.disableShellTool();
+            } else {
+                boolean isWindows = System.getProperty("os.name").toLowerCase().contains("win");
+                if (isWindows) {
+                    // Windows：禁用 AgentScope 内置 shell，注册自定义 PowerShell 工具
+                    // 自定义工具处理 GBK 编码、路径空格、输出解码
+                    runtimeBuilder.disableShellTool();
+                    asToolkit.registerTool(new com.ai.analyzer.tools.ShellExecTool(
+                            config.getWorkplaceDirectoryPath(),
+                            config.getWorkplaceDirectoryPath(),
+                            true,
+                            config.isEnableUnrestrictedCliTool()));
+                    logInfo("Windows 平台：已注册自定义 PowerShell 执行工具");
+                } else {
+                    // Linux/macOS：使用 AgentScope 内置 execute_shell_command
+                    // 内置工具支持工作区隔离、ToolResultEviction、沙箱
+                    logInfo("Unix 平台：使用 AgentScope 内置 shell 工具");
+                }
+            }
+            // 上下文 Token 预算：通过 maxTokens 配置传给 HarnessAgent 和 CompactionConfig
+            String maxTokens = config.getMaxTokens();
+            if (maxTokens != null && !maxTokens.isBlank()) {
+                try {
+                    int tokens = Integer.parseInt(maxTokens);
+                    if (tokens > 0) {
+                        runtimeBuilder.maxContextTokens(tokens);
+                    }
+                } catch (NumberFormatException ignored) { }
             }
             // Plan Mode：允许 Agent 先计划（只读调查 → 写 PLAN.md → 请求批准）再执行
             runtimeBuilder.enablePlanMode(config.isEnablePlanMode());
@@ -676,6 +722,10 @@ public class AgentApiClient {
 
     public void cancelStreaming() {
         streamGeneration.incrementAndGet();
+        com.ai.analyzer.agent.runtime.StreamSession sess = currentSession;
+        if (sess != null) {
+            sess.cancel();
+        }
         logInfo("流式输出已取消");
     }
 
@@ -693,6 +743,7 @@ public class AgentApiClient {
         if (agentScopeRuntime != null) {
             agentScopeRuntime.resetSession();
         }
+        generateNewSessionId();
         logInfo("已新开会话（旧 Agent 会话已销毁）");
     }
 
@@ -734,7 +785,6 @@ public class AgentApiClient {
         config.setApiKey(settings.getApiKey() != null ? settings.getApiKey() : "");
         config.setModel(settings.getModel() != null && !settings.getModel().isEmpty()
             ? settings.getModel() : defaultModel);
-        config.setEnableThinking(settings.isEnableThinking());
         config.setEnableSearch(settings.isEnableSearch());
         config.setSearchMode(settings.getSearchMode());
         config.setTavilyApiKey(settings.getTavilyApiKey());
@@ -746,8 +796,7 @@ public class AgentApiClient {
         config.setBurpMcpAuthorization(settings.getBurpMcpAuthorization());
         config.setCliWhitelist(settings.getCliWhitelist());
         config.setCliToolPrompt(settings.getCliToolPrompt());
-        config.setWorkplaceDirectoryPath(settings.getWorkplaceDirectoryPath());
-        com.ai.analyzer.util.HttpFormatter.setWorkplaceDirectory(settings.getWorkplaceDirectoryPath());
+        setWorkplaceDirectoryPath(settings.getWorkplaceDirectoryPath());
         if (settings.getRagMcpDocumentsPath() != null && !settings.getRagMcpDocumentsPath().isEmpty()) {
             config.setRagMcpDocumentsPath(settings.getRagMcpDocumentsPath());
         }
@@ -849,7 +898,7 @@ public class AgentApiClient {
 
         com.ai.analyzer.agent.runtime.StreamSession session = agentScopeRuntime.chat(
                 userContent,
-                "agent-session-" + streamId,
+                currentSessionId,
                 new RuntimeEventListener() {
                     @Override
                     public void onEvent(RuntimeEvent event) {
@@ -879,7 +928,7 @@ public class AgentApiClient {
                                 AppLogBuffer.tool("AgentApiClient", event.toolName() != null ? event.toolName() : "");
                                 String toolName = event.toolName();
                                 if (toolName != null && !toolName.isEmpty()) {
-                                    onChunk.accept("\n🔧 <b>调用工具: " + escapeHtml(toolName) + "</b>\n");
+                                    onChunk.accept("\n[TOOL_BLOCK]" + escapeHtml(toolName) + "[/TOOL_BLOCK]\n");
                                     emitModelBehavior("TOOL_START", toolName);
                                 }
                                 DebugContext.log("AgentApiClient", "tool_start",
@@ -891,7 +940,7 @@ public class AgentApiClient {
                                 AppLogBuffer.tool("AgentApiClient", "executed: " + (toolName != null ? toolName : "unknown")
                                         + (toolFailed ? " (failed)" : " (ok)"));
                                 if (toolFailed) {
-                                    onChunk.accept("\n⚠️ <b>工具执行失败: " + escapeHtml(toolName != null ? toolName : "unknown") + "</b>\n");
+                                    onChunk.accept("\n⚠️ 工具执行失败: " + escapeHtml(toolName != null ? toolName : "unknown") + "\n");
                                 }
                                 emitModelBehavior("TOOL_END", (toolName != null ? toolName : "unknown")
                                         + (toolFailed ? "|failed" : "|ok"));
@@ -936,7 +985,12 @@ public class AgentApiClient {
                 });
 
         // 等待流式输出完成
-        session.awaitCompletion();
+        currentSession = session;
+        try {
+            session.awaitCompletion();
+        } finally {
+            currentSession = null;
+        }
     }
 
     private boolean isCurrentStream(long streamId) {
@@ -1058,5 +1112,27 @@ public class AgentApiClient {
         if (s == null) return "";
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 .replace("\"", "&quot;").replace("'", "&#39;");
+    }
+
+    /**
+     * Windows 路径含空格时转换为短路径（8.3 格式），避免 ProcessBuilder/HarnessAgent 传参问题。
+     * 非 Windows 或路径无空格时原样返回。
+     */
+    static String normalizePath(String path) {
+        if (path == null || path.isEmpty()) return path;
+        if (!System.getProperty("os.name").toLowerCase().contains("win")) return path;
+        if (!path.contains(" ")) return path;
+        try {
+            // 确保目录存在，否则 %~sI 无法解析短路径
+            new File(path).mkdirs();
+            Process p = new ProcessBuilder("cmd.exe", "/c", "for %I in (\"" + path + "\") do @echo %~sI")
+                    .redirectErrorStream(true)
+                    .start();
+            String shortPath = new String(p.getInputStream().readAllBytes(),
+                    java.nio.charset.StandardCharsets.UTF_8).trim();
+            p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+            if (!shortPath.isEmpty() && !shortPath.contains(" ")) return shortPath;
+        } catch (Exception ignored) { }
+        return path;
     }
 }
