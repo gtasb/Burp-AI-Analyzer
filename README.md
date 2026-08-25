@@ -182,17 +182,7 @@ src/com/ai/analyzer/
 ### 最新（开发中）
 - ✅ 主动扫描页面增强：目标速览条、快捷任务（SQLi/XSS/SSRF/越权/文件读取/Payload）、分析历史回看、复制结果/请求、发送到 Intruder、批量分析
 - ✅ Plan Mode：普通/计划模式切换，Agent 先写计划并经 HITL 批准确认后执行（计划文件在 workspace）
-- ✅ 代码拆分：主动分析面板独立为 `ui/active/` 包，AIAnalyzerTab 从 ~4000 行减至 ~3000 行
-- ✅ MCP 注册根因修复：Authorization 头透传（先 transport 后 configure），端到端测试保障
 - ✅ 模型行为可视化：思考过程 + 工具调用流实时面板（可开关）
-- ✅ UI 反人类操作修复：误操作确认、明确失败提示、状态栏反馈、按钮防溢出
-- ✅ 智能滚动：流式输出不再打断向上阅读的用户
-- ✅ 侧栏分栏可自由拖动；移除冗长的 URL 常驻显示
-- ✅ 被动扫描过滤默认值（静态扩展名 + 域名黑名单）；开始扫描自动应用过滤规则
-- ✅ 延迟优化：MCP 连接超时 30s → 8s、两级流式渲染节流
-- ✅ 真实环境集成测试（test_env.txt，凭据不入库）
-
-### v2.0.0
 - ✅ AgentScope Java 2.0 全面替换 LangChain4j
 - ✅ HarnessAgent — 持久会话、workspace、memory、compaction、skills 自动注入
 - ✅ 动态子代理 — `spawn_subagent` 并行处理
