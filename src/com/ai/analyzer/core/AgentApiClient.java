@@ -51,6 +51,10 @@ public class AgentApiClient {
     // ========== AgentScope 运行时 ==========
     private AgentScopeAgentRuntime agentScopeRuntime;
     private Toolkit asToolkit;
+    /** 共享 Notebook 工具（知识黑板）。主动与被动 Agent 指向同一 {@link com.ai.analyzer.tools.NotebookUtils.NotebookStore} 单例 */
+    private com.ai.analyzer.tools.NotebookTool notebookTool;
+    /** Notebook 广播订阅是否已注册（避免运行时重建导致重复订阅） */
+    private volatile boolean notebookBroadcastSubscribed;
     private volatile Consumer<String> systemNoticeConsumer;
     /** 模型行为消费者（thinking/工具调用流），支持多订阅者（侧栏 ChatPanel 与主动分析页可同时显示） */
     private final java.util.concurrent.CopyOnWriteArrayList<Consumer<String>> modelBehaviorConsumers =
@@ -526,6 +530,7 @@ public class AgentApiClient {
         String normalized = workplaceDirectoryPath == null ? "" : workplaceDirectoryPath.trim();
         normalized = normalizePath(normalized);
         com.ai.analyzer.util.HttpFormatter.setWorkplaceDirectory(normalized);
+        com.ai.analyzer.tools.NotebookUtils.NotebookStore.getInstance().setWorkplaceDirectory(normalized);
         if (!java.util.Objects.equals(config.getWorkplaceDirectoryPath(), normalized)) {
             config.setWorkplaceDirectoryPath(normalized);
             if (!normalized.isEmpty()) {
@@ -591,6 +596,15 @@ public class AgentApiClient {
 
             // 注册浏览器渲染工具
             asToolkit.registerTool(new com.ai.analyzer.tools.BrowserRenderTool());
+
+            // 注册共享 Notebook 知识黑板：主动/被动 Agent 通过同一 NotebookStore 单例共享关键发现
+            if (notebookTool == null) {
+                notebookTool = new com.ai.analyzer.tools.NotebookTool(
+                        com.ai.analyzer.tools.NotebookUtils.NotebookStore.getInstance(), "active-agent");
+            }
+            asToolkit.registerTool(notebookTool);
+            ensureNotebookBroadcastSubscribed();
+            logInfo("AgentScope NotebookTool（共享知识黑板）已注册");
 
             // 注册 Burp 扩展工具（Intruder 发送等基础功能）
             if (api != null) {
@@ -1020,6 +1034,23 @@ public class AgentApiClient {
             consumer.accept(message.trim());
         } catch (Exception e) {
             logDebug("系统提示回调失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 订阅共享 Notebook 的广播通知（只提醒，不承载数据）。
+     * 被动 Agent 写入某域名后，这里把「该域名 Notebook 有新内容」作为系统提示展示，
+     * 让正在工作的主动分析 Agent / 用户意识到有更新；增量内容由 agent 自行 notebook_get_updates 拉取。
+     */
+    private void ensureNotebookBroadcastSubscribed() {
+        if (notebookBroadcastSubscribed) return;
+        notebookBroadcastSubscribed = true;
+        try {
+            com.ai.analyzer.tools.NotebookUtils.NotebookStore.getInstance().subscribe(update ->
+                    emitSystemNotice("📓 Notebook 有新内容: " + update.domain()
+                            + " → v" + update.version() + "（" + update.sourceAgent() + "）"));
+        } catch (Exception e) {
+            logDebug("Notebook 广播订阅失败: " + e.getMessage());
         }
     }
 

@@ -145,6 +145,21 @@ public class SystemPromptBuilder {
         // Note: Skills are auto-injected by HarnessAgent as <available_skills> block
         // from workspace/skills/ — no manual injection needed here.
 
+        // 共享 Notebook 协作工具说明：被动扫描 Agent 与主动分析 Agent 通过按域名隔离的知识黑板共享关键发现
+        p.append("""
+                \n# Shared Notebook (多 Agent 协作知识黑板)
+                你与主动分析 Agent 共享一个按域名隔离的 Notebook 知识库（每个域名一个 .md 文件）：
+                - `notebook_read(domain)`：读取某域名的全部关键发现（攻击面/接口/参数/漏洞线索/验证结论）
+                - `notebook_write(domain, type, content)`：追加一条关键发现（自动去重、版本+1、并广播其他 Agent）
+                - `notebook_get_updates(domain, since_version)`：按版本号拉取增量，补齐错过的广播或重启前的更新
+                - `notebook_list()`：列出所有已有 Notebook 的域名
+
+                使用原则：
+                - 分析某域名前先 `notebook_read` 查看已知信息，避免重复劳动
+                - 发现的攻击面、接口、参数、漏洞线索、验证结论及时 `notebook_write` 到对应域名，供其他 Agent 复用
+                - 其他 Agent 的新写入通过广播提醒；用 `notebook_get_updates` 按版本增量获取
+                """);
+
         return p.toString();
     }
 }

@@ -121,6 +121,10 @@ public class PassiveScanApiClient {
     // ========== AgentScope 运行时 ==========
     private AgentScopeAgentRuntime agentScopeRuntime;
     private Toolkit asToolkit;
+    /** 共享 Notebook 工具（知识黑板）。主动与被动 Agent 指向同一 {@link com.ai.analyzer.tools.NotebookUtils.NotebookStore} 单例 */
+    private com.ai.analyzer.tools.NotebookTool notebookTool;
+    /** Notebook 广播订阅是否已注册（避免运行时重建导致重复订阅） */
+    private volatile boolean notebookBroadcastSubscribed;
 
     // 系统提示词缓存
     private volatile String cachedSystemPrompt;
@@ -308,6 +312,7 @@ public class PassiveScanApiClient {
         String normalized = workplaceDirectoryPath == null ? "" : workplaceDirectoryPath.trim();
         normalized = normalizePath(normalized);
         com.ai.analyzer.util.HttpFormatter.setWorkplaceDirectory(normalized);
+        com.ai.analyzer.tools.NotebookUtils.NotebookStore.getInstance().setWorkplaceDirectory(normalized);
         this.workplaceDirectoryPath = normalized;
     }
 
@@ -376,6 +381,15 @@ public class PassiveScanApiClient {
 
             // 注册浏览器渲染工具
             asToolkit.registerTool(new com.ai.analyzer.tools.BrowserRenderTool());
+
+            // 注册共享 Notebook 知识黑板：被动扫描 Agent 与主动分析 Agent 共享关键发现
+            if (notebookTool == null) {
+                notebookTool = new com.ai.analyzer.tools.NotebookTool(
+                        com.ai.analyzer.tools.NotebookUtils.NotebookStore.getInstance(), "passive-agent");
+            }
+            asToolkit.registerTool(notebookTool);
+            ensureNotebookBroadcastSubscribed();
+            logInfo("AgentScope NotebookTool（共享知识黑板）已注册");
 
             // 注册 Burp 扩展工具（Intruder 发送 + 批量爆破）
             if (api != null) {
@@ -770,6 +784,23 @@ public class PassiveScanApiClient {
     public void clearContext() {
         invalidateAgentScopeRuntime();
         logInfo("共享聊天上下文已清空");
+    }
+
+    /**
+     * 订阅共享 Notebook 的广播通知（只提醒，不承载数据）。
+     * 被动扫描 agent 收到其他 agent（含主动分析 agent）写入的域名更新后会在此记录一条日志，
+     * 实际的增量内容由 agent 自行 notebook_get_updates 拉取。
+     */
+    private void ensureNotebookBroadcastSubscribed() {
+        if (notebookBroadcastSubscribed) return;
+        notebookBroadcastSubscribed = true;
+        try {
+            com.ai.analyzer.tools.NotebookUtils.NotebookStore.getInstance().subscribe(update ->
+                    logInfo("Notebook 有新内容: domain=" + update.domain()
+                            + " v" + update.version() + " source=" + update.sourceAgent()));
+        } catch (Exception e) {
+            logDebug("Notebook 广播订阅失败: " + e.getMessage());
+        }
     }
 
     /**

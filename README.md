@@ -200,7 +200,7 @@ src/com/ai/analyzer/
 ## 📋 环境要求
 
 - **Java 21** 或更高版本
-- **Burp Suite Professional**
+- **Burp Suite Professional 2026 or later（过低的版本可能导致奇怪的项目文件过度膨胀问题）**
 - **API Key** — DashScope / OpenAI / Anthropic 任一
 
 ---
