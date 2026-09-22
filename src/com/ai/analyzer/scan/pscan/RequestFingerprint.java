@@ -165,12 +165,27 @@ public final class RequestFingerprint {
                 }
                 if (!pairs.isEmpty()) {
                     Collections.sort(pairs);
-                    return "d" + Integer.toHexString(String.join("&", pairs).hashCode());
+                    return "d" + digest16(String.join("&", pairs));
                 }
             }
-            return "d" + Integer.toHexString(text.hashCode());
+            return "d" + digest16(text);
         } catch (Exception e) {
             return "";
+        }
+    }
+
+    /** 内容摘要：SHA-256 前 8 字节的十六进制（16 字符），避免 String.hashCode 的 32 位碰撞。 */
+    private static String digest16(String s) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] d = md.digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(16);
+            for (int i = 0; i < 8; i++) {
+                sb.append(String.format("%02x", d[i]));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return Integer.toHexString(s.hashCode());
         }
     }
 

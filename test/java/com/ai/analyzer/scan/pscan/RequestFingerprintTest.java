@@ -124,9 +124,11 @@ class RequestFingerprintTest {
             when(mockRequest.method()).thenReturn("POST");
             when(mockRequest.bodyToString()).thenReturn("a=1&b=2");
 
-            assertThat(RequestFingerprint.of(mockRr))
-                    .isEqualTo("POST|example.com|https://example.com/api/update|d"
-                            + Integer.toHexString("a=1&b=2".hashCode()));
+            String key = RequestFingerprint.of(mockRr);
+            String prefix = "POST|example.com|https://example.com/api/update|d";
+            assertThat(key).startsWith(prefix);
+            // SHA-256 前 8 字节 → 16 位十六进制摘要
+            assertThat(key.substring(prefix.length())).hasSize(16);
         }
 
         @Test

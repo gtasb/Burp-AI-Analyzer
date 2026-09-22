@@ -114,9 +114,9 @@ public class PluginSettings implements Serializable {
         if (passiveScanSkipExtensions == null) passiveScanSkipExtensions = "";
         if (passiveScanDomainBlacklist == null) passiveScanDomainBlacklist = "";
         if (customMcpConfigJson == null) customMcpConfigJson = "";
-        if (!enableCustomMcp && customMcpConfigJson != null && !customMcpConfigJson.trim().isEmpty()) {
-            enableCustomMcp = true;
-        }
+        // 注意：不再根据 customMcpConfigJson 非空强制 enableCustomMcp=true。
+        // 该兜底会导致用户显式关闭自定义 MCP 后重启回弹为启用（“关掉不保存” bug）。
+        // 启用状态只认显式保存的 enableCustomMcp 标志。
     }
 
     /**

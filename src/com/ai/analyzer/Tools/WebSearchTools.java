@@ -25,7 +25,6 @@ import java.util.regex.Pattern;
 public class WebSearchTools {
     private static final int MAX_FETCH_BYTES = 512 * 1024;
     private static final int MAX_FETCH_INLINE_CHARS = 18_000;
-    private static final int FETCH_PREVIEW_CHARS = 2_000;
 
     private static final String FETCH_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -353,7 +352,7 @@ public class WebSearchTools {
         return fetchUrl(url, null);
     }
 
-    @Tool(name = "fetch_url", description = "抓取指定 URL 的内容并提取可读文本。自动过滤非公开/内网地址。返回页面标题与正文，超长内容会缓存。")
+    @Tool(name = "fetch_url", description = "抓取指定 URL 的内容并提取可读文本。自动过滤非公开/内网地址。返回页面标题与正文，超长内容会截断。")
     public String fetchUrl(
             @ToolParam(name = "url", description = "完整的 http 或 https URL") String url,
             @ToolParam(name = "maxChars", description = "可选：返回内容最大字符数，默认 18000，最大 50000", required = false) Integer maxChars) {
@@ -432,8 +431,8 @@ public class WebSearchTools {
                 return header + "（页面正文为空）";
             }
             String display = text.length() > maxFetchChars
-                    ? text.substring(0, Math.min(FETCH_PREVIEW_CHARS, text.length()))
-                        + "\n\n...[网页正文较长，完整内容已截断]..."
+                    ? text.substring(0, maxFetchChars)
+                        + "\n\n...[网页正文较长，剩余内容已截断]..."
                     : text;
             return header + display;
         } catch (Exception e) {
@@ -586,21 +585,6 @@ public class WebSearchTools {
             }
         }
         return StandardCharsets.UTF_8;
-    }
-
-    private static String htmlToPlainText(String html) {
-        if (html == null) return "";
-        String s = html.replaceAll("(?is)<script[^>]*>.*?</script>", " ");
-        s = s.replaceAll("(?is)<style[^>]*>.*?</style>", " ");
-        s = s.replaceAll("(?is)<noscript[^>]*>.*?</noscript>", " ");
-        s = s.replaceAll("(?i)<br\\s*/?>", "\n");
-        s = s.replaceAll("(?i)</p>", "\n");
-        s = s.replaceAll("(?i)</div>", "\n");
-        s = s.replaceAll("(?i)</tr>", "\n");
-        s = s.replaceAll("(?i)</li>", "\n");
-        s = s.replaceAll("<[^>]+>", " ");
-        s = decodeBasicEntities(s);
-        return s;
     }
 
     private static String decodeBasicEntities(String s) {

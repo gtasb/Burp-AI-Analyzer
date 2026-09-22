@@ -68,6 +68,13 @@ public final class DebugContext {
      * @param details   key-value pairs with contextual data (may be null)
      */
     public static void log(String category, String summary, Map<String, String> details) {
+        // 始终镜像到 AppLogBuffer（调试页/导出立即可见），排查问题不要求先开启“调试模式”。
+        StringBuilder line = new StringBuilder(summary);
+        if (details != null && !details.isEmpty()) {
+            details.forEach((k, v) -> line.append(" | ").append(k).append("=").append(v));
+        }
+        AppLogBuffer.debug(category, line.toString());
+
         if (!enabled) return;
 
         DebugEvent event = new DebugEvent(

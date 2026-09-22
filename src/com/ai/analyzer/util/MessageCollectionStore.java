@@ -9,7 +9,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
-import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -35,7 +34,9 @@ public final class MessageCollectionStore {
         StoreEntry(HttpRequestResponse requestResponse, long timestamp) {
             this.requestResponse = requestResponse;
             this.timestamp = timestamp;
-            this.timeText = DateTimeFormatter.ofPattern("HH:mm:ss").format(LocalTime.now());
+            this.timeText = java.time.LocalDateTime
+                    .ofInstant(java.time.Instant.ofEpochMilli(timestamp), java.time.ZoneId.systemDefault())
+                    .format(DateTimeFormatter.ofPattern("HH:mm:ss"));
         }
 
         public HttpRequestResponse getRequestResponse() {
@@ -151,9 +152,9 @@ public final class MessageCollectionStore {
         }
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            digest.update(new String(requestResponse.request().toByteArray().getBytes(), StandardCharsets.UTF_8).getBytes(StandardCharsets.UTF_8));
+            digest.update(requestResponse.request().toByteArray().getBytes());
             if (requestResponse.response() != null) {
-                digest.update(new String(requestResponse.response().toByteArray().getBytes(), StandardCharsets.UTF_8).getBytes(StandardCharsets.UTF_8));
+                digest.update(requestResponse.response().toByteArray().getBytes());
             }
             return Base64.getEncoder().encodeToString(digest.digest());
         } catch (Exception e) {
@@ -214,7 +215,19 @@ public final class MessageCollectionStore {
             }
             sb.append("]}");
             file.getParent().toFile().mkdirs();
-            Files.writeString(file, sb.toString(), StandardCharsets.UTF_8);
+            // 原子写：先写临时文件再原子替换，避免写入中途崩溃导致 JSON 半截损坏、整列表丢失
+            Path tmp = file.resolveSibling(file.getFileName().toString() + ".tmp");
+            try {
+                Files.writeString(tmp, sb.toString(), StandardCharsets.UTF_8);
+                try {
+                    Files.move(tmp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                            java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+                } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+                    Files.move(tmp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+            } finally {
+                Files.deleteIfExists(tmp);
+            }
         } catch (Exception ignored) {
             // 持久化失败不阻断功能，下次变更时重试
         }

@@ -144,6 +144,25 @@ public final class NotebookStore {
         });
     }
 
+    /** 某域名 Notebook 的一次性读取结果：正文 + 是否存在 + 最新版本（单次持锁，避免二次读盘）。 */
+    public record ReadResult(String content, boolean exists, int version) {}
+
+    public ReadResult readWithMeta(String domain) throws IOException {
+        String d = normalizeDomain(domain);
+        return withFileLock(d, () -> {
+            Path target = resolveNotebookPath(d);
+            if (!Files.exists(target)) {
+                return new ReadResult("", false, 0);
+            }
+            String content = Files.readString(target, StandardCharsets.UTF_8);
+            int version = parseEntries(content).stream()
+                    .mapToInt(NotebookEntry::version)
+                    .max()
+                    .orElse(0);
+            return new ReadResult(content, true, version);
+        });
+    }
+
     /**
      * 追加一条关键发现。内容为空返回 {@code appended=false}；与已有条目内容重复时
      * 返回 {@code duplicate=true}（不产生新版本、不广播）。

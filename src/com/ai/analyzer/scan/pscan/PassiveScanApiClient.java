@@ -12,7 +12,7 @@ import com.ai.analyzer.core.PluginSettings;
 import com.ai.analyzer.util.AppLogBuffer;
 import com.ai.analyzer.util.DebugContext;
 import com.ai.analyzer.util.HttpFormatter;
-import com.ai.analyzer.agent.runtime.AgentScopeAgentRuntime;
+import com.ai.analyzer.agent.runtime.ReActAgentRuntime;
 import com.ai.analyzer.agent.runtime.RuntimeEvent;
 import com.ai.analyzer.agent.runtime.RuntimeEventListener;
 import com.ai.analyzer.core.AgentScopeModelFactory;
@@ -118,13 +118,19 @@ public class PassiveScanApiClient {
     private String customMcpConfigJson = "";
     private List<CustomMcpConfig> customMcpConfigs = Collections.emptyList();
 
+    /** 被动扫描默认模型并发预算（可后续接配置项）。模型调用是稀缺资源，用信号量而非线程数控制。 */
+    private static final int DEFAULT_MODEL_CONCURRENCY = 3;
+
     // ========== AgentScope 运行时 ==========
-    private AgentScopeAgentRuntime agentScopeRuntime;
+    private ReActAgentRuntime agentScopeRuntime;
     private Toolkit asToolkit;
     /** 共享 Notebook 工具（知识黑板）。主动与被动 Agent 指向同一 {@link com.ai.analyzer.tools.NotebookUtils.NotebookStore} 单例 */
     private com.ai.analyzer.tools.NotebookTool notebookTool;
     /** Notebook 广播订阅是否已注册（避免运行时重建导致重复订阅） */
     private volatile boolean notebookBroadcastSubscribed;
+    /** 模型并发预算：同一时间最多允许的并流 LLM 调用数（模型是稀缺资源，不是线程） */
+    private final java.util.concurrent.Semaphore modelSemaphore =
+            new java.util.concurrent.Semaphore(DEFAULT_MODEL_CONCURRENCY);
 
     // 系统提示词缓存
     private volatile String cachedSystemPrompt;
@@ -313,6 +319,7 @@ public class PassiveScanApiClient {
         normalized = normalizePath(normalized);
         com.ai.analyzer.util.HttpFormatter.setWorkplaceDirectory(normalized);
         com.ai.analyzer.tools.NotebookUtils.NotebookStore.getInstance().setWorkplaceDirectory(normalized);
+        com.ai.analyzer.graph.GraphStore.getInstance().setWorkplaceDirectory(normalized);
         this.workplaceDirectoryPath = normalized;
     }
 
@@ -382,6 +389,10 @@ public class PassiveScanApiClient {
             // 注册浏览器渲染工具
             asToolkit.registerTool(new com.ai.analyzer.tools.BrowserRenderTool());
 
+            // 受限 read_file：回读工作区 .cache/ 落盘的超长 HTTP 报文（ReActAgent 无 Harness 原生文件工具）
+            asToolkit.registerTool(new com.ai.analyzer.tools.RestrictedReadTool(workplaceDirectoryPath));
+            logInfo("AgentScope RestrictedReadTool（受限 read_file）已注册");
+
             // 注册共享 Notebook 知识黑板：被动扫描 Agent 与主动分析 Agent 共享关键发现
             if (notebookTool == null) {
                 notebookTool = new com.ai.analyzer.tools.NotebookTool(
@@ -390,6 +401,11 @@ public class PassiveScanApiClient {
             asToolkit.registerTool(notebookTool);
             ensureNotebookBroadcastSubscribed();
             logInfo("AgentScope NotebookTool（共享知识黑板）已注册");
+
+            // 资产知识图谱（SQLite）：Origin→接口→参数→功能/实体/模块/技术/N-day 关联
+            asToolkit.registerTool(new com.ai.analyzer.graph.GraphTool(
+                    com.ai.analyzer.graph.GraphStore.getInstance(), "passive-agent"));
+            logInfo("AgentScope GraphTool（资产知识图谱）已注册");
 
             // 注册 Burp 扩展工具（Intruder 发送 + 批量爆破）
             if (api != null) {
@@ -433,33 +449,17 @@ public class PassiveScanApiClient {
             // 4. 构建系统提示词
             String systemPrompt = buildSystemPrompt();
 
-            // 5. 创建工作区路径
-            java.nio.file.Path workspacePath = null;
-            if (workplaceDirectoryPath != null && !workplaceDirectoryPath.trim().isEmpty()) {
-                workspacePath = java.nio.file.Path.of(workplaceDirectoryPath.trim());
+            // 6. 创建每请求轻量 ReActAgent 运行时（被动扫描：无跨请求可变状态，隔离 + 信号量限并发）
+            // CLI：ReActAgent 无内置 shell，启用时注册跨平台 ShellExecTool（内部按 OS 用 cmd.exe / sh）
+            if (enableCliTool) {
+                asToolkit.registerTool(new com.ai.analyzer.tools.ShellExecTool(workplaceDirectoryPath));
             }
-
-            // 6. 创建 AgentScopeAgentRuntime (PASSIVE mode)
-            var runtimeBuilder = AgentScopeAgentRuntime.builder()
-                    .mode(AgentScopeAgentRuntime.Mode.PASSIVE)
+            // Skills：启用时注入技能仓库，ReActAgent 自动将 SKILL.md 提示注入上下文
+            var runtimeBuilder = ReActAgentRuntime.builder()
+                    .agentName("burp-passive-analyzer")
                     .model(asModel)
                     .systemPrompt(systemPrompt)
-                    .workspacePath(workspacePath)
                     .toolkit(asToolkit);
-            if (!enableFileSystemAccess) {
-                runtimeBuilder.disableFilesystemTools();
-            }
-            if (!enableCliTool) {
-                runtimeBuilder.disableShellTool();
-            } else {
-                boolean isWindows = System.getProperty("os.name").toLowerCase().contains("win");
-                if (isWindows) {
-                    runtimeBuilder.disableShellTool();
-                    asToolkit.registerTool(new com.ai.analyzer.tools.ShellExecTool(
-                            workplaceDirectoryPath, workplaceDirectoryPath, true, enableUnrestrictedCliTool));
-                }
-            }
-            // Skills：启用时注入技能仓库，Harness 自动将 SKILL.md 提示注入上下文
             if (enableSkills && skillsDirectoryPath != null && !skillsDirectoryPath.trim().isEmpty()) {
                 try {
                     var skillRepository = new io.agentscope.core.skill.repository.FileSystemSkillRepository(
@@ -470,17 +470,8 @@ public class PassiveScanApiClient {
                     logError("Skills 技能仓库注入失败: " + e.getMessage());
                 }
             }
-            // 上下文 Token 预算：通过 maxTokens 配置传给 HarnessAgent 和 CompactionConfig
-            if (maxTokens != null && !maxTokens.isBlank()) {
-                try {
-                    int tokens = Integer.parseInt(maxTokens);
-                    if (tokens > 0) {
-                        runtimeBuilder.maxContextTokens(tokens);
-                    }
-                } catch (NumberFormatException ignored) { }
-            }
             agentScopeRuntime = runtimeBuilder.build();
-            logInfo("AgentScopeAgentRuntime 已创建 (PASSIVE mode)");
+            logInfo("ReActAgentRuntime 已创建（被动扫描，每请求隔离 + 信号量限并发）");
 
         } catch (Exception e) {
             logError("AgentScope 运行时初始化失败: " + e.getMessage());
@@ -642,7 +633,7 @@ public class PassiveScanApiClient {
         }
         httpContent = prepared.promptText;
 
-        String userContent = buildScanPrompt(httpContent);
+        String userContent = buildScanPrompt(httpContent, domainOf(requestResponse));
 
         // ========== 前置扫描器集成 ==========
         if (preScanFilterManager != null && preScanFilterManager.isEnabled()) {
@@ -666,7 +657,7 @@ public class PassiveScanApiClient {
             return "## 风险等级: 无\n无法构建有效的分析请求。";
         }
 
-        return doAgentScopeAnalysis(userContent, cancelFlag, onChunk);
+        return doAgentScopeAnalysis(userContent, stableSessionId(domainOf(requestResponse)), cancelFlag, onChunk);
     }
 
     /**
@@ -686,99 +677,139 @@ public class PassiveScanApiClient {
         logDebug("开始会话批次分析: " + batchRequests.size() + " 个连续请求, 会话="
                 + RequestFingerprint.sessionKey(batchRequests.get(0)));
 
-        String userContent = buildBatchScanPrompt(batchRequests);
-        return doAgentScopeAnalysis(userContent, cancelFlag, onChunk);
+        String domain = domainOf(batchRequests.get(0));
+        String userContent = buildBatchScanPrompt(batchRequests, domain);
+        return doAgentScopeAnalysis(userContent, stableSessionId(domain), cancelFlag, onChunk);
     }
 
     /**
-     * AgentScope 流式分析公共骨架：发送 userContent，收集流式响应。
+     * 每请求轻量 ReActAgent 流式分析公共骨架：信号量限并发 + 发送 userContent，收集流式响应。
      */
-    private String doAgentScopeAnalysis(String userContent, AtomicBoolean cancelFlag,
+    private String doAgentScopeAnalysis(String userContent, String sessionId, AtomicBoolean cancelFlag,
             Consumer<String> onChunk) throws Exception {
-        // ========== AgentScope 路径 ==========
         ensureAgentScopeInitialized();
         if (agentScopeRuntime == null) {
             throw new Exception("AgentScope 运行时初始化失败，请检查API配置");
         }
-        logDebug("使用 AgentScope 发送流式请求");
+
+        // 模型并发预算：拿不到许可且被取消时直接退出，不发起 LLM 调用
+        boolean acquired = acquireModelPermit(cancelFlag);
+        if (!acquired) {
+            return "## 风险等级: 无\n分析已取消。";
+        }
 
         StringBuilder resultBuilder = new StringBuilder();
         CompletableFuture<String> futureResult = new CompletableFuture<>();
+        try {
+            logDebug("使用 ReActAgent 发送流式请求（session=" + sessionId + "）");
 
-        com.ai.analyzer.agent.runtime.StreamSession session = agentScopeRuntime.chat(
-                userContent,
-                "pscan-session-" + System.currentTimeMillis(),
-                new RuntimeEventListener() {
-                    @Override
-                    public void onEvent(RuntimeEvent event) {
-                        if (cancelFlag != null && cancelFlag.get()) return;
-                        switch (event.type()) {
-                            case TEXT_DELTA -> {
-                                String text = event.text();
-                                if (text != null && !text.isEmpty()) {
-                                    resultBuilder.append(text);
-                                    if (onChunk != null) {
-                                        onChunk.accept(text);
+            com.ai.analyzer.agent.runtime.StreamSession session = agentScopeRuntime.chat(
+                    userContent,
+                    sessionId,
+                    new RuntimeEventListener() {
+                        @Override
+                        public void onEvent(RuntimeEvent event) {
+                            if (cancelFlag != null && cancelFlag.get()) return;
+                            switch (event.type()) {
+                                case TEXT_DELTA -> {
+                                    String text = event.text();
+                                    if (text != null && !text.isEmpty()) {
+                                        resultBuilder.append(text);
+                                        if (onChunk != null) {
+                                            onChunk.accept(text);
+                                        }
                                     }
                                 }
-                            }
-                            case TOOL_START -> {
-                                String toolName = event.toolName();
-                                if (toolName != null && !toolName.isEmpty()) {
-                                    AppLogBuffer.tool("PassiveScanApiClient", toolName);
-                                    if (onChunk != null) {
-                                        onChunk.accept("\n[TOOL_BLOCK]" + escapeHtml(toolName) + "[/TOOL_BLOCK]\n");
+                                case TOOL_START -> {
+                                    String toolName = event.toolName();
+                                    if (toolName != null && !toolName.isEmpty()) {
+                                        AppLogBuffer.tool("PassiveScanApiClient", toolName);
+                                        if (onChunk != null) {
+                                            onChunk.accept("\n[TOOL_BLOCK]" + escapeHtml(toolName) + "[/TOOL_BLOCK]\n");
+                                        }
                                     }
                                 }
-                            }
-                            case TOOL_END -> {
-                                String toolName = event.toolName();
-                                boolean toolFailed = event.toolFailed();
-                                AppLogBuffer.tool("PassiveScanApiClient", "executed: " + (toolName != null ? toolName : "unknown")
-                                        + (toolFailed ? " (failed)" : " (ok)"));
-                                if (toolFailed && onChunk != null) {
-                                    onChunk.accept("\n⚠️ 工具执行失败: " + escapeHtml(toolName != null ? toolName : "unknown") + "\n");
+                                case TOOL_END -> {
+                                    String toolName = event.toolName();
+                                    boolean toolFailed = event.toolFailed();
+                                    AppLogBuffer.tool("PassiveScanApiClient", "executed: " + (toolName != null ? toolName : "unknown")
+                                            + (toolFailed ? " (failed)" : " (ok)"));
+                                    if (toolFailed && onChunk != null) {
+                                        onChunk.accept("\n⚠️ 工具执行失败: " + escapeHtml(toolName != null ? toolName : "unknown") + "\n");
+                                    }
+                                }
+                                case REPLY_END -> {
+                                    logDebug("ReActAgent 流式输出完成");
+                                    futureResult.complete(resultBuilder.toString());
+                                }
+                                case USAGE -> {
+                                    com.ai.analyzer.util.TokenUsageTracker.instance().record(
+                                            event.inputTokens(), event.outputTokens(),
+                                            event.cachedTokens(), event.totalTokens());
+                                }
+                                case ERROR -> {
+                                    Throwable err = event.error();
+                                    futureResult.completeExceptionally(err != null ? err : new Exception("AgentScope unknown error"));
+                                }
+                                case THINKING -> {
+                                    // 被动扫描场景下 THINKING 无 UI 展示，仅用于日志
+                                }
+                                default -> {
+                                    // SUBAGENT, MEMORY — 静默处理
                                 }
                             }
-                            case REPLY_END -> {
-                                logDebug("AgentScope 流式输出完成");
+                        }
+
+                        @Override
+                        public void onComplete() {
+                            if (!futureResult.isDone()) {
                                 futureResult.complete(resultBuilder.toString());
                             }
-                            case USAGE -> {
-                                com.ai.analyzer.util.TokenUsageTracker.instance().record(
-                                        event.inputTokens(), event.outputTokens(),
-                                        event.cachedTokens(), event.totalTokens());
-                            }
-                            case ERROR -> {
-                                Throwable err = event.error();
-                                futureResult.completeExceptionally(err != null ? err : new Exception("AgentScope unknown error"));
-                            }
-                            case THINKING -> {
-                                // 被动扫描场景下 THINKING 无 UI 展示，仅用于日志
-                            }
-                            default -> {
-                                // SUBAGENT, MEMORY — 静默处理
-                            }
                         }
-                    }
 
-                    @Override
-                    public void onComplete() {
-                        if (!futureResult.isDone()) {
-                            futureResult.complete(resultBuilder.toString());
+                        @Override
+                        public void onError(Throwable error) {
+                            futureResult.completeExceptionally(error);
                         }
-                    }
+                    });
 
-                    @Override
-                    public void onError(Throwable error) {
-                        futureResult.completeExceptionally(error);
-                    }
-                });
+            // 等待结果
+            String result = futureResult.get(10, TimeUnit.MINUTES);
+            logDebug("ReActAgent 分析完成，响应长度: " + (result != null ? result.length() : 0) + " 字符");
+            return result != null ? result : "## 风险等级: 无\nAgentScope 分析未返回结果。";
+        } finally {
+            if (acquired) {
+                modelSemaphore.release();
+            }
+        }
+    }
 
-        // 等待结果
-        String result = futureResult.get(10, TimeUnit.MINUTES);
-        logDebug("AgentScope 分析完成，响应长度: " + (result != null ? result.length() : 0) + " 字符");
-        return result != null ? result : "## 风险等级: 无\nAgentScope 分析未返回结果。";
+    /**
+     * 获取模型并发许可（信号量），带超时轮询并响应取消信号。
+     *
+     * @return true 已拿到许可；false 表示等待期间被取消
+     */
+    private boolean acquireModelPermit(AtomicBoolean cancelFlag) throws InterruptedException {
+        while (true) {
+            if (cancelFlag != null && cancelFlag.get()) {
+                return false;
+            }
+            if (modelSemaphore.tryAcquire(1, TimeUnit.SECONDS)) {
+                return true;
+            }
+        }
+    }
+
+    /** 取请求所属域名（用于 Notebook 按域隔离共享 + 稳定 sessionId）。 */
+    private static String domainOf(HttpRequestResponse requestResponse) {
+        String host = RequestFingerprint.hostOf(requestResponse);
+        return (host == null || host.isEmpty()) ? "unknown" : host;
+    }
+
+    /** 被动扫描稳定 sessionId：按域名稳定，避免每次分析都换 session 导致记忆/状态无法复用。 */
+    private static String stableSessionId(String domain) {
+        String d = domain == null || domain.isEmpty() ? "unknown" : domain;
+        return "pscan-" + d.replaceAll("[^a-zA-Z0-9._-]", "_");
     }
 
     public void clearContext() {
@@ -825,10 +856,16 @@ public class PassiveScanApiClient {
     }
 
     /**
-     * 构建扫描提示词
+     * 构建扫描提示词（单个请求），并注入目标域名与共享黑板（Notebook）协作要求。
      */
-    private String buildScanPrompt(String httpContent) {
+    private String buildScanPrompt(String httpContent, String domain) {
+        String d = domain == null || domain.isEmpty() ? "unknown" : domain;
         StringBuilder prompt = new StringBuilder();
+        prompt.append("目标域名: ").append(d).append("\n\n");
+        prompt.append("**协作要求（共享知识黑板 Notebook）**：\n");
+        prompt.append("- 分析前先调用 notebook_read(domain=\"").append(d)
+                .append("\") 读取该域名已知的关键发现，避免重复劳动\n");
+        prompt.append("- 发现新的攻击面 / 接口 / 参数 / 漏洞线索 / 验证结论后，调用 notebook_write 写入该域名，供其他 Agent 复用\n\n");
         prompt.append("请分析以下HTTP请求/响应中的安全风险：\n\n");
         prompt.append("**特别注意**：\n");
         prompt.append("- 如果URL参数中包含URL（如 `src=http://...`、`url=https://...`、`redirect=...`），这是潜在的SSRF漏洞，**必须主动测试验证**\n");
@@ -842,7 +879,7 @@ public class PassiveScanApiClient {
      * 构建会话批次分析提示词：强调流程/逻辑漏洞的序列级分析。
      * 批次内容过长时优先保留最新的请求（逻辑异常通常出现在序列尾部）。
      */
-    private String buildBatchScanPrompt(List<HttpRequestResponse> batchRequests) {
+    private String buildBatchScanPrompt(List<HttpRequestResponse> batchRequests, String domain) {
         final int maxTotalLength = 30000;
 
         StringBuilder body = new StringBuilder();
@@ -875,6 +912,10 @@ public class PassiveScanApiClient {
         }
 
         StringBuilder prompt = new StringBuilder();
+        String d = domain == null || domain.isEmpty() ? "unknown" : domain;
+        prompt.append("目标域名: ").append(d).append("\n");
+        prompt.append("**协作要求（共享知识黑板 Notebook）**：分析前先 notebook_read(domain=\"").append(d)
+                .append("\")，发现新攻击面/参数/漏洞线索后 notebook_write 到该域名。\n\n");
         prompt.append("请分析以下**连续用户操作流量序列**（同一会话内按时间先后排列）中的安全风险。\n\n");
         prompt.append("**核心关注（逻辑漏洞，本序列分析的重点）**：\n");
         prompt.append("- 业务流程：识别完整操作流程，发现流程跳跃、状态机绕过、验证码/确认步骤被跳过\n");

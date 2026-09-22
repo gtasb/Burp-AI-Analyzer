@@ -103,3 +103,7 @@ secrets.txt
 
 # Burp runtime debug output
 burp-debug-log.txt
+
+settings.local.json
+TODO.md
+TODO2.md

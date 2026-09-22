@@ -30,6 +30,37 @@ public final class AppLogBuffer {
         append("ERROR", source, message);
     }
 
+    /** 记录错误并展开完整异常链（cause + suppressed），排查 RetryExhausted 等包装异常时必用。 */
+    public static void error(String source, String message, Throwable t) {
+        append("ERROR", source, message + (t != null ? "\n" + describeChain(t, 6) : ""));
+    }
+
+    /**
+     * 展开异常链（cause + suppressed）。
+     * 例：RetryExhausted → ← ConnectException: Connection refused
+     */
+    public static String describeChain(Throwable t, int maxDepth) {
+        if (t == null) return "";
+        StringBuilder sb = new StringBuilder();
+        appendChain(sb, t, 0, maxDepth);
+        return sb.toString();
+    }
+
+    private static void appendChain(StringBuilder sb, Throwable t, int depth, int maxDepth) {
+        if (t == null) return;
+        String indent = "  ".repeat(Math.min(depth, maxDepth));
+        sb.append(indent).append(t.getClass().getSimpleName())
+                .append(": ").append(t.getMessage() != null ? t.getMessage() : "").append('\n');
+        if (depth >= maxDepth) return;
+        if (t.getCause() != null && t.getCause() != t) {
+            appendChain(sb, t.getCause(), depth + 1, maxDepth);
+        }
+        for (Throwable suppressed : t.getSuppressed()) {
+            sb.append(indent).append("  ↳ suppressed: ");
+            appendChain(sb, suppressed, depth + 1, maxDepth);
+        }
+    }
+
     public static void tool(String source, String message) {
         append("TOOL", source, message);
     }

@@ -118,15 +118,6 @@ public class AgentApiClient {
      */
     private volatile String currentSessionId;
 
-    // ========== 主动分析历史（共享，面板重建不丢失） ==========
-    private final com.ai.analyzer.ui.active.AnalysisHistoryStore analysisHistoryStore =
-            new com.ai.analyzer.ui.active.AnalysisHistoryStore();
-
-    /** 返回主动分析历史存储（同一 apiClient 实例内的所有面板共享，重建不丢失） */
-    public com.ai.analyzer.ui.active.AnalysisHistoryStore getAnalysisHistoryStore() {
-        return analysisHistoryStore;
-    }
-
     // ========== 系统提示词缓存 ==========
     private volatile String cachedSystemPrompt;
     private volatile int cachedPromptConfigHash;
@@ -531,6 +522,7 @@ public class AgentApiClient {
         normalized = normalizePath(normalized);
         com.ai.analyzer.util.HttpFormatter.setWorkplaceDirectory(normalized);
         com.ai.analyzer.tools.NotebookUtils.NotebookStore.getInstance().setWorkplaceDirectory(normalized);
+        com.ai.analyzer.graph.GraphStore.getInstance().setWorkplaceDirectory(normalized);
         if (!java.util.Objects.equals(config.getWorkplaceDirectoryPath(), normalized)) {
             config.setWorkplaceDirectoryPath(normalized);
             if (!normalized.isEmpty()) {
@@ -606,6 +598,11 @@ public class AgentApiClient {
             ensureNotebookBroadcastSubscribed();
             logInfo("AgentScope NotebookTool（共享知识黑板）已注册");
 
+            // 注册资产知识图谱（SQLite）：Origin→接口→参数→功能/实体/模块/技术/N-day 关联
+            asToolkit.registerTool(new com.ai.analyzer.graph.GraphTool(
+                    com.ai.analyzer.graph.GraphStore.getInstance(), "active-agent"));
+            logInfo("AgentScope GraphTool（资产知识图谱）已注册");
+
             // 注册 Burp 扩展工具（Intruder 发送等基础功能）
             if (api != null) {
                 asToolkit.registerTool(new BatchFuzzTool(api));
@@ -672,22 +669,11 @@ public class AgentApiClient {
             if (!config.isEnableCliTool()) {
                 runtimeBuilder.disableShellTool();
             } else {
-                boolean isWindows = System.getProperty("os.name").toLowerCase().contains("win");
-                if (isWindows) {
-                    // Windows：禁用 AgentScope 内置 shell，注册自定义 PowerShell 工具
-                    // 自定义工具处理 GBK 编码、路径空格、输出解码
-                    runtimeBuilder.disableShellTool();
-                    asToolkit.registerTool(new com.ai.analyzer.tools.ShellExecTool(
-                            config.getWorkplaceDirectoryPath(),
-                            config.getWorkplaceDirectoryPath(),
-                            true,
-                            config.isEnableUnrestrictedCliTool()));
-                    logInfo("Windows 平台：已注册自定义 PowerShell 执行工具");
-                } else {
-                    // Linux/macOS：使用 AgentScope 内置 execute_shell_command
-                    // 内置工具支持工作区隔离、ToolResultEviction、沙箱
-                    logInfo("Unix 平台：使用 AgentScope 内置 shell 工具");
-                }
+                // AgentScope 2.0.2 起内置 execute_shell_command 具备字符集感知的输出解码
+                // （LocalFilesystemWithShell.outputCharset，覆盖 GBK 等 Windows 中文字符集），
+                // 取代此前 Windows 平台禁用内置 shell、自注册编码 workaround 的 ShellExecTool。
+                // 注：被动扫描（ReActAgent 无内置 shell）仍在 PassiveScanApiClient 注册 ShellExecTool。
+                logInfo("使用 AgentScope 内置 execute_shell_command 工具");
             }
             // 上下文 Token 预算：通过 maxTokens 配置传给 HarnessAgent 和 CompactionConfig
             String maxTokens = config.getMaxTokens();
@@ -979,7 +965,8 @@ public class AgentApiClient {
                             }
                             case ERROR -> {
                                 Throwable err = event.error();
-                                logError("AgentScope 事件错误: " + (err != null ? err.getMessage() : "unknown"));
+                                logError("AgentScope 事件错误: " + (err != null ? err.getMessage() : "unknown")
+                                        + (err != null ? "\n" + AppLogBuffer.describeChain(err, 6) : ""));
                             }
                             default -> {
                                 // MEMORY, etc. — 静默忽略
@@ -994,7 +981,8 @@ public class AgentApiClient {
 
                     @Override
                     public void onError(Throwable error) {
-                        logError("AgentScope 流式错误: " + (error != null ? error.getMessage() : "unknown"));
+                        logError("AgentScope 流式错误: " + (error != null ? error.getMessage() : "unknown")
+                                + (error != null ? "\n" + AppLogBuffer.describeChain(error, 6) : ""));
                     }
                 });
 

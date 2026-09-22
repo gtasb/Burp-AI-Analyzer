@@ -163,9 +163,15 @@ public class CurlTools {
             // 6. 发送请求（api.http().sendRequest 返回 HttpRequestResponse）
             long startTime = System.currentTimeMillis();
             HttpRequestResponse requestResponse;
-            
+
+            // 真实应用读响应超时：默认 30s，可用 timeoutSeconds 覆盖
+            long timeoutMillis = (timeoutSeconds != null && timeoutSeconds > 0)
+                    ? timeoutSeconds * 1000L
+                    : DEFAULT_TIMEOUT_SECONDS * 1000L;
             try {
-                requestResponse = api.http().sendRequest(httpRequest);
+                requestResponse = api.http().sendRequest(httpRequest,
+                        burp.api.montoya.http.RequestOptions.requestOptions()
+                                .withResponseTimeout(timeoutMillis));
             } catch (Exception e) {
                 long elapsedMs = System.currentTimeMillis() - startTime;
                 return "❌ 请求失败: " + e.getMessage() + "\n" +

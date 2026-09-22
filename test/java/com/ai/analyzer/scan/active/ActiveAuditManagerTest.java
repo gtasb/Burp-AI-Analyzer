@@ -95,6 +95,12 @@ class ActiveAuditManagerTest {
 
         List<AuditIssue> received = new ArrayList<>();
         manager.setOnIssueFound(received::add);
+
+        // 生产实现仅在存在「插件主动发起的审计」时才回读 issue（activeAudits 非空）
+        Audit audit = mock(Audit.class);
+        when(scanner.startAudit(any())).thenReturn(audit);
+        manager.startAudit(List.of(rr()));
+
         AuditIssue issue = mock(AuditIssue.class);
         handlerCaptor.getValue().handleNewAuditIssue(issue);
 

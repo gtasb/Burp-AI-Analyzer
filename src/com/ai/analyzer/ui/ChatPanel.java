@@ -207,25 +207,21 @@ public class ChatPanel extends JPanel {
         
         inputPanel.add(inputScrollPane, BorderLayout.CENTER);
 
-        // 右侧竖排：停止（紧凑，置于上方）/ 发送（主按钮，占据主要空间）
-        JPanel sideButtons = new JPanel();
-        sideButtons.setLayout(new BoxLayout(sideButtons, BoxLayout.Y_AXIS));
-
-        stopButton = new JButton("■ 停止");
+        // 底部操作栏：发送（主按钮）/ 停止（危险，输出中启用），与全局 UIStyles 风格统一
+        JPanel actionBar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 2));
+        stopButton = new JButton("停止");
+        stopButton.setToolTipText("中断当前流式输出");
         stopButton.addActionListener(e -> stopStreaming());
-        stopButton.setEnabled(false); // 初始状态禁用
-        stopButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
-        UIStyles.styleDanger(stopButton);
-        sideButtons.add(stopButton);
-        sideButtons.add(Box.createVerticalStrut(4));
+        stopButton.setEnabled(false);
+        UIStyles.styleSecondary(stopButton);
+        actionBar.add(stopButton);
 
         sendButton = new JButton("发送");
         sendButton.addActionListener(e -> sendMessage());
-        sendButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
-        UIStyles.stylePrimary(sendButton);
-        sideButtons.add(sendButton);
+        UIStyles.styleSecondary(sendButton);
+        actionBar.add(sendButton);
 
-        inputPanel.add(sideButtons, BorderLayout.EAST);
+        inputPanel.add(actionBar, BorderLayout.SOUTH);
 
         add(mainSplitPane, BorderLayout.CENTER);
         add(inputPanel, BorderLayout.SOUTH);

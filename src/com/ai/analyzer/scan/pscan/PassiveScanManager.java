@@ -29,7 +29,7 @@ import java.util.function.Consumer;
 public class PassiveScanManager {
     
     // ========== 配置 ==========
-    private static final int DEFAULT_THREAD_COUNT = 5;
+    private static final int DEFAULT_THREAD_COUNT = 3;
     private static final int MAX_THREAD_COUNT = 50;
     private static final int MIN_THREAD_COUNT = 1;
     private static final int QUEUE_CAPACITY = 1000; // 队列容量
@@ -42,8 +42,11 @@ public class PassiveScanManager {
     private PassiveScanApiClient apiClient;
     
     // ========== 生产者-消费者模型 ==========
-    // 请求队列（生产者放入，消费者取出）
-    private final BlockingQueue<ScanResult> scanQueue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
+    // 请求队列（生产者放入，消费者取出）：优先级队列，高价值请求先被分析
+    private final BlockingQueue<ScanResult> scanQueue = new PriorityBlockingQueue<>(
+            QUEUE_CAPACITY,
+            java.util.Comparator.comparingInt(ScanResult::getPriority).reversed()
+                    .thenComparingInt(ScanResult::getId));
     
     // 消费者线程池
     private ExecutorService consumerExecutor;
@@ -63,6 +66,8 @@ public class PassiveScanManager {
     // ========== 扫描结果 ==========
     private final List<ScanResult> scanResults = Collections.synchronizedList(new ArrayList<>());
     private final Set<String> scannedKeys = Collections.synchronizedSet(new HashSet<>());
+    /** 已见过的端点（method|path），用于「新端点优先」打分 */
+    private final Set<String> seenEndpoints = Collections.synchronizedSet(new HashSet<>());
     private final AtomicInteger nextId = new AtomicInteger(1);
 
     // ========== 成本控制 ==========
@@ -447,6 +452,12 @@ public class PassiveScanManager {
             return;
         }
 
+        // 资产知识图谱观测：自动建立 Origin→接口→参数（静默失败，不影响扫描队列）
+        try {
+            com.ai.analyzer.graph.GraphStore.getInstance().observe(requestResponse);
+        } catch (Exception ignored) {
+        }
+
         // L3 会话批次聚合：请求先进入会话窗口，满批次或窗口过期时打包为一次序列级分析。
         // 单请求在窗口空闲超时后也会以批次（1 个请求）形式提交，保证低流量场景不饿死。
         SessionBatchCollector.Batch fullBatch = batchCollector.add(requestResponse);
@@ -465,22 +476,25 @@ public class PassiveScanManager {
 
         scanResults.add(result);
         totalCount.incrementAndGet();
+        result.setPriority(computePriority(result));
 
-        boolean offered = scanQueue.offer(result);
-        if (offered) {
-            queuedCount.incrementAndGet();
-            if (onNewRequestQueued != null) {
-                try {
-                    onNewRequestQueued.accept(result);
-                } catch (Exception e) {
-                    logError("新请求回调异常: " + e.getMessage());
-                }
-            }
-            updateStatus();
-        } else {
+        // PriorityBlockingQueue 无界且 offer 恒成功；用显式 size 检查保留「队列已满」回压，
+        // 避免极端负载下无界堆积（L4 限流 + L1 去重已在前置削峰）。
+        if (scanQueue.size() >= QUEUE_CAPACITY) {
             logError("扫描队列已满，丢弃批次: " + result.getShortUrl());
             result.markError("队列已满");
+            return;
         }
+        scanQueue.offer(result);
+        queuedCount.incrementAndGet();
+        if (onNewRequestQueued != null) {
+            try {
+                onNewRequestQueued.accept(result);
+            } catch (Exception e) {
+                logError("新请求回调异常: " + e.getMessage());
+            }
+        }
+        updateStatus();
     }
     
     /**
@@ -533,7 +547,8 @@ public class PassiveScanManager {
                 result.markCancelled();
             } else {
                 result.markError(e.getMessage());
-                logError("扫描请求失败: " + result.getShortUrl() + " - " + e.getMessage());
+                logError("扫描请求失败: " + result.getShortUrl() + " - " + e.getMessage()
+                        + "\n" + com.ai.analyzer.util.AppLogBuffer.describeChain(e, 6));
             }
         }
         
@@ -605,21 +620,68 @@ public class PassiveScanManager {
         scannedKeys.add(dedupeKey);
         scanResults.add(result);
         totalCount.incrementAndGet();
+        result.setPriority(computePriority(result));
         
         if (isRunning.get()) {
-            if (scanQueue.offer(result)) {
+            if (scanQueue.size() >= QUEUE_CAPACITY) {
+                result.markError("队列已满");
+            } else {
+                scanQueue.offer(result);
                 queuedCount.incrementAndGet();
                 if (onNewRequestQueued != null) {
                     onNewRequestQueued.accept(result);
                 }
-            } else {
-                result.markError("队列已满");
             }
         }
         updateStatus();
         return result;
     }
     
+    /**
+     * 按请求特征打分，决定处理优先级（越大越先处理）。
+     * 评分不依赖 PreScan（PreScan 保持可选）：POST/PUT/PATCH +2，带 query +1，带会话 +1，新端点 +2。
+     */
+    private int computePriority(ScanResult result) {
+        try {
+            HttpRequestResponse rr = result.getRequestResponse();
+            if (rr == null || rr.request() == null) return 0;
+            burp.api.montoya.http.message.requests.HttpRequest req = rr.request();
+
+            int priority = 0;
+            String method = req.method() != null ? req.method().toUpperCase(java.util.Locale.ROOT) : "";
+            if ("POST".equals(method) || "PUT".equals(method) || "PATCH".equals(method)) {
+                priority += 2;
+            }
+            String url = req.url();
+            if (url != null && url.contains("?")) {
+                priority += 1;
+            }
+            String sessionKey = RequestFingerprint.sessionKey(rr);
+            if (sessionKey != null && !sessionKey.endsWith("|anon")) {
+                priority += 1;
+            }
+            String endpoint = endpointKey(req);
+            if (endpoint != null && seenEndpoints.add(endpoint)) {
+                priority += 2; // 新端点优先
+            }
+            return priority;
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    private static String endpointKey(burp.api.montoya.http.message.requests.HttpRequest req) {
+        try {
+            String method = req.method() != null ? req.method().toUpperCase(java.util.Locale.ROOT) : "";
+            String url = req.url();
+            if (url == null) return null;
+            int q = url.indexOf('?');
+            return method + "|" + (q >= 0 ? url.substring(0, q) : url);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     // ========== 主动审计结果合并 ==========
 
     /**
@@ -657,6 +719,7 @@ public class PassiveScanManager {
         
         scanResults.clear();
         scannedKeys.clear();
+        seenEndpoints.clear();
         scanQueue.clear();
         completedCount.set(0);
         totalCount.set(0);

@@ -33,13 +33,14 @@ public class ScanResult {
         public String getDisplayName() {
             return displayName;
         }
-        
+
         public int getPriority() {
             return priority;
         }
-        
+
         /**
-         * 从AI响应中解析风险等级
+         * 从自由文本中解析风险等级（按优先级：严重 > 高 > 中 > 低 > 信息）。
+         * 供 UI / 测试等纯文本场景使用；AI 响应解析请用 {@link ScanResult#parseRiskLevelFromResult}。
          */
         public static RiskLevel fromString(String text) {
             if (text == null) return NONE;
@@ -90,6 +91,8 @@ public class ScanResult {
     private volatile String analysisResult;
     private volatile String errorMessage;
     private volatile LocalDateTime completedTime;
+    /** 处理优先级（越大越先处理），由扫描管理器按请求特征打分后设置 */
+    private volatile int priority;
     
     /**
      * 构造函数（单请求扫描）
@@ -199,6 +202,15 @@ public class ScanResult {
     
     public RiskLevel getRiskLevel() {
         return riskLevel;
+    }
+
+    /** 处理优先级（越大越先处理）。仅在排队时由管理器写入，消费者读取。 */
+    public int getPriority() {
+        return priority;
+    }
+
+    public void setPriority(int priority) {
+        this.priority = priority;
     }
     
     public String getAnalysisResult() {

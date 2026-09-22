@@ -18,7 +18,7 @@
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <!-- AgentScope Java 2.0 (迁移目标框架) -->
-        <agentscope.version>2.0.0</agentscope.version>
+        <agentscope.version>2.0.3</agentscope.version>
     </properties>
 
     <repositories>
@@ -107,6 +107,13 @@
         <artifactId>lombok</artifactId>
         <version>1.18.46</version>
         <scope>provided</scope>
+    </dependency>
+
+    <!-- SQLite JDBC：靶机资产生命周期知识图谱存储 -->
+    <dependency>
+        <groupId>org.xerial</groupId>
+        <artifactId>sqlite-jdbc</artifactId>
+        <version>3.45.1.0</version>
     </dependency>
 
     <!-- Test Dependencies -->

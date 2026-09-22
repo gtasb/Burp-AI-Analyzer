@@ -17,15 +17,9 @@ public class ShellExecTool {
     private static final int DEFAULT_TIMEOUT_SECONDS = 60;
 
     private final String workspacePath;
-    private final String projectPath;
-    private final boolean inheritEnv;
-    private final boolean enableUnrestricted;
 
-    public ShellExecTool(String workspacePath, String projectPath, boolean inheritEnv, boolean enableUnrestricted) {
+    public ShellExecTool(String workspacePath) {
         this.workspacePath = workspacePath;
-        this.projectPath = projectPath;
-        this.inheritEnv = inheritEnv;
-        this.enableUnrestricted = enableUnrestricted;
     }
 
     @Tool(name = "execute", description = "在本地操作系统上执行 shell 命令。支持管道、重定向、环境变量等 shell 特性。可指定工作目录和超时时间。返回退出码和命令输出。")

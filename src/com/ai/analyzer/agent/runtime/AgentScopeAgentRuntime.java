@@ -28,19 +28,6 @@ import org.reactivestreams.Subscription;
 import java.io.IOException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.attribute.BasicFileAttributes;
-
-import java.io.IOException;
-import java.nio.file.FileVisitResult;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.attribute.BasicFileAttributes;
-
-import java.io.IOException;
-import java.nio.file.FileVisitResult;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
@@ -128,8 +115,17 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         return chat(List.of(com.ai.analyzer.agent.runtime.ChatMessage.user(userMessage)), sessionId, listener);
     }
 
+    /**
+     * 同步执行一轮 agent 会话。
+     *
+     * <p>{@code synchronized} 的原因：本实现共享单个 {@link HarnessAgent} 与单个
+     * {@link #currentSubscription}，而被动扫描会用多线程并发调用 {@link #chat}，
+     * 并发下会互相覆盖 {@code currentSubscription}（取消 A 却取消 B）并并发操作
+     * 同一 HarnessAgent 的状态存储，导致取消失效/状态污染。用实例锁串行化后，
+     * 一次只跑一个流式会话，消除上述串写。长期应改为每请求一个运行时（DEC-01）。
+     */
     @Override
-    public StreamSession chat(List<com.ai.analyzer.agent.runtime.ChatMessage> messages,
+    public synchronized StreamSession chat(List<com.ai.analyzer.agent.runtime.ChatMessage> messages,
                               String sessionId,
                               RuntimeEventListener listener) {
         CompletableFuture<String> future = new CompletableFuture<>();
@@ -239,7 +235,7 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
     }
 
     @Override
-    public void shutdown() {
+    public synchronized void shutdown() {
         Subscription sub = currentSubscription.getAndSet(null);
         if (sub != null) {
             sub.cancel();
@@ -251,7 +247,18 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
      * 重置当前 Agent 会话上下文：释放并重建 agent（下一次请求会全新初始化），
      * 从而清空对话历史、长期记忆与任何挂起状态。
      */
-    public void resetSession() {
+    public synchronized void resetSession() {
+        // 官方状态清理 API（AgentScope 2.0.1+）：清掉 HarnessAgent 的内存状态缓存
+        // （挂起确认 ASKING、工具参数缓冲、会话上下文等），比只“置空重建”更彻底；
+        // clearContext(agentId, sessionId) 的参数语义未经验证，这里只用无参全量缓存清理。
+        try {
+            HarnessAgent agent = harnessAgent;
+            if (agent != null) {
+                agent.clearStateCache();
+            }
+        } catch (Exception ignored) {
+            // 缓存清理失败不阻断：下方仍会置空重建 + 清理 workspace 记忆
+        }
         shutdown();
         purgePersistentSessionData(workspacePath);
         DebugContext.log("AgentScopeAgentRuntime", "session_reset",
@@ -358,18 +365,27 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
             String args = buf != null ? buf.toString() : "";
             if (!args.isEmpty() && !"{}".equals(args)) {
                 String summary = args.length() > 200 ? args.substring(0, 200) + "…" : args;
+                com.ai.analyzer.util.AppLogBuffer.tool("AgentScopeAgentRuntime", e.getToolCallName() + " 参数: " + summary);
                 listener.onEvent(RuntimeEvent.textDelta("\n📥 参数: " + summary + "\n"));
             }
         } else if (event instanceof ToolCallStartEvent e) {
+            com.ai.analyzer.util.AppLogBuffer.tool("AgentScopeAgentRuntime", "调用工具: " + e.getToolCallName());
             listener.onEvent(RuntimeEvent.toolStart(e.getToolCallName(), null));
             DebugContext.log("AgentScopeAgentRuntime", "tool_start", Map.of("tool", e.getToolCallName()));
         } else if (event instanceof ToolResultEndEvent e) {
             boolean failed = e.getState() != ToolResultState.SUCCESS;
+            com.ai.analyzer.util.AppLogBuffer.tool("AgentScopeAgentRuntime",
+                    e.getToolCallName() + " → " + (failed ? "失败" : "成功") + " (" + e.getState() + ")");
             listener.onEvent(RuntimeEvent.toolEnd(e.getToolCallName(), null, failed, -1));
             DebugContext.log("AgentScopeAgentRuntime", "tool_end", Map.of("tool", e.getToolCallName(), "state", String.valueOf(e.getState())));
         } else if (event instanceof io.agentscope.core.event.ModelCallEndEvent e) {
             io.agentscope.core.model.ChatUsage usage = e.getUsage();
             if (usage != null) {
+                com.ai.analyzer.util.AppLogBuffer.debug("AgentScopeAgentRuntime",
+                        "model_call usage in=" + usage.getInputTokens()
+                                + " out=" + usage.getOutputTokens()
+                                + " cached=" + usage.getCachedTokens()
+                                + " total=" + usage.getTotalTokens());
                 listener.onEvent(RuntimeEvent.usage(
                         usage.getInputTokens(),
                         usage.getOutputTokens(),

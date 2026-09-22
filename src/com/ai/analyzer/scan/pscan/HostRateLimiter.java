@@ -12,6 +12,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class HostRateLimiter {
 
     private static final long WINDOW_MS = 1000;
+    /** 跟踪的 host 数超过此阈值时触发一次全量清理，避免长期运行 Map 只增不减 */
+    private static final int MAX_TRACKED_HOSTS = 10_000;
 
     private final int maxPerSecond;
     private final ConcurrentHashMap<String, LinkedList<Long>> windows = new ConcurrentHashMap<>();
@@ -43,8 +45,24 @@ public final class HostRateLimiter {
             }
             if (list.size() >= maxPerSecond) return false;
             list.addLast(now);
-            return true;
         }
+        // 机会性清理：跟踪 host 过多时剪掉已整体过期的条目，控制内存增长
+        if (windows.size() > MAX_TRACKED_HOSTS) {
+            pruneExpired(now);
+        }
+        return true;
+    }
+
+    private void pruneExpired(long now) {
+        windows.entrySet().removeIf(entry -> {
+            LinkedList<Long> list = entry.getValue();
+            synchronized (list) {
+                while (!list.isEmpty() && now - list.peekFirst() > WINDOW_MS) {
+                    list.pollFirst();
+                }
+                return list.isEmpty();
+            }
+        });
     }
 
     /**

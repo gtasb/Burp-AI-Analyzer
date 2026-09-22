@@ -10,6 +10,10 @@ import com.ai.analyzer.agent.skills.Skill;
 import com.ai.analyzer.agent.skills.SkillManager;
 import com.ai.analyzer.scan.rulesmatch.PreScanFilterManager;
 import com.ai.analyzer.ui.active.ActiveAnalysisPanel;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 import javax.swing.*;
 import javax.swing.event.DocumentEvent;
@@ -39,7 +43,11 @@ public class SettingsPanel {
     private JTextField apiUrlField;
     private JTextField apiKeyField;
     private String currentApiKeySecret = "";
-    private JTextField modelField;
+    private JComboBox<String> modelComboBox;
+    /** 模型下拉数据源 */
+    private final DefaultComboBoxModel<String> modelComboModel = new DefaultComboBoxModel<>();
+    /** “获取模型”状态提示 */
+    private JLabel modelLoadingLabel;
     private JTextField customParametersField; // 自定义参数输入框
     private JTextField maxTokensField; // 显式上下文预算输入框
     private JTextField tokenBudgetField; // 扫描周期 Token 预算输入框
@@ -130,7 +138,21 @@ public class SettingsPanel {
 
     public String getApiUrl() { return apiUrlField.getText().trim(); }
     public String getApiKey() { return getEffectiveApiKeyFromField(); }
-    public String getModel() { return modelField.getText().trim(); }
+    public String getModel() { return getModelText(); }
+
+    /** Model 下拉框当前文本（可编辑，兼容手输） */
+    private String getModelText() {
+        if (modelComboBox == null) return "";
+        Object item = modelComboBox.getEditor().getItem();
+        return item == null ? "" : String.valueOf(item).trim();
+    }
+
+    private void setModelText(String model) {
+        if (modelComboBox == null) return;
+        if (model != null && !model.isBlank()) {
+            modelComboBox.setSelectedItem(model.trim());
+        }
+    }
     public String getCustomParameters() { return customParametersField.getText().trim(); }
     public String getMaxTokens() { return maxTokensField.getText().trim(); }
     public String getTokenBudget() { return tokenBudgetField.getText().trim(); }
@@ -599,13 +621,28 @@ public class SettingsPanel {
         apiKeyField = new JTextField("", 30);
         panel.add(apiKeyField, gbc);
 
-        // Model
+        // Model（可编辑下拉框：从 API 获取模型列表选择，或手输自定义）
         row++;
         gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
         panel.add(new JLabel("Model:"), gbc);
         gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
-        modelField = new JTextField("qwen-max", 30);
-        panel.add(modelField, gbc);
+        modelComboBox = new JComboBox<>(modelComboModel);
+        modelComboBox.setEditable(true);
+        modelComboBox.setPreferredSize(new Dimension(240, 26));
+        modelComboBox.setToolTipText("模型名：可点「获取模型」下拉选择当前 API 提供的模型，或直接手输（如 qwen-max / gpt-4o / claude-sonnet-...）。不填回退默认。");
+        modelComboModel.addElement("qwen-max");
+        panel.add(modelComboBox, gbc);
+        gbc.gridx = 2; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        JPanel modelButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        JButton fetchModelsButton = new JButton("获取模型");
+        fetchModelsButton.setToolTipText("调用当前 API Provider 的模型列表接口（DashScope / OpenAI 兼容 GET /models），结果填入下拉框");
+        fetchModelsButton.addActionListener(e -> refreshAvailableModels());
+        modelButtons.add(fetchModelsButton);
+        modelLoadingLabel = new JLabel("");
+        modelLoadingLabel.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
+        modelLoadingLabel.setForeground(new Color(0x2a7de1));
+        modelButtons.add(modelLoadingLabel);
+        panel.add(modelButtons, gbc);
 
         // max_tokens
         row++;
@@ -696,7 +733,7 @@ public class SettingsPanel {
     }
 
     private void saveCurrentApiProfile() {
-        String defaultName = ((String) apiProviderComboBox.getSelectedItem()) + " / " + modelField.getText().trim();
+        String defaultName = ((String) apiProviderComboBox.getSelectedItem()) + " / " + getModelText();
         String name = JOptionPane.showInputDialog(null, "配置档案名称:", defaultName);
         if (name == null || name.trim().isEmpty()) return;
         name = name.trim();
@@ -706,7 +743,7 @@ public class SettingsPanel {
                 (String) apiProviderComboBox.getSelectedItem(),
                 apiUrlField.getText().trim(),
                 getEffectiveApiKeyFromField(),
-                modelField.getText().trim(),
+                getModelText(),
                 customParametersField.getText().trim()
         );
 
@@ -729,7 +766,7 @@ public class SettingsPanel {
         apiProviderComboBox.setSelectedItem(profile.getApiProvider());
         apiUrlField.setText(profile.getApiUrl());
         setApiKeySecretAndMask(profile.getApiKey());
-        modelField.setText(profile.getModel());
+        setModelText(profile.getModel());
         customParametersField.setText(profile.getCustomParameters());
 
         apiClient.setApiProvider(profile.getApiProvider());
@@ -793,6 +830,115 @@ public class SettingsPanel {
                 + key.substring(Math.max(6, key.length() - 4));
     }
 
+    // ========== 获取当前 LLM API 的可用模型列表 ==========
+
+    /**
+     * 调用当前 API Provider 的“模型列表”接口获取可用模型，填入 Model 下拉框（后台线程，避免 UI 卡死）。
+     * 支持：DashScope（OpenAI 兼容 /models）、OpenAI 兼容（GET /models）、Anthropic 兼容（GET /v1/models）。
+     */
+    private void refreshAvailableModels() {
+        final String provider = apiProviderComboBox != null ? String.valueOf(apiProviderComboBox.getSelectedItem()) : "";
+        final String apiUrl = apiUrlField != null ? apiUrlField.getText().trim() : "";
+        final String apiKey = getEffectiveApiKeyFromField();
+
+        if (modelLoadingLabel != null) {
+            modelLoadingLabel.setText("获取中…");
+        }
+        new Thread(() -> {
+            String result = fetchModelList(provider, apiUrl, apiKey);
+            SwingUtilities.invokeLater(() -> {
+                if (modelLoadingLabel != null) {
+                    modelLoadingLabel.setText("");
+                }
+                if (result == null || result.isEmpty()) {
+                    api.logging().logToOutput("[Settings] 未能从当前 API 获取模型列表（请检查 URL / Key / 网络）");
+                    return;
+                }
+                String current = getModelText();
+                java.util.List<String> list = java.util.Arrays.asList(result.split("\n"));
+                String prevSelected = null;
+                Object sel = modelComboBox.getSelectedItem();
+                if (sel != null) prevSelected = String.valueOf(sel);
+                modelComboModel.removeAllElements();
+                for (String m : list) {
+                    modelComboModel.addElement(m);
+                }
+                // 尽量恢复原选中；否则回退到模型名前缀（如 qwen）的第一个
+                if (prevSelected != null && modelComboModel.getIndexOf(prevSelected) >= 0) {
+                    modelComboBox.setSelectedItem(prevSelected);
+                } else if (!current.isEmpty()) {
+                    String prefix = current.split("-")[0];
+                    for (int i = 0; i < modelComboModel.getSize(); i++) {
+                        if (modelComboModel.getElementAt(i).startsWith(prefix)) {
+                            modelComboBox.setSelectedItem(modelComboModel.getElementAt(i));
+                            break;
+                        }
+                    }
+                }
+                api.logging().logToOutput("[Settings] 获取到 " + list.size() + " 个可用模型");
+            });
+        }, "fetch-models").start();
+    }
+
+    /** 同步调模型列表接口，返回每行一个模型名的字符串；失败返回空串。 */
+    private String fetchModelList(String provider, String apiUrl, String apiKey) {
+        try {
+            if (apiKey == null || apiKey.isBlank()) return "";
+            String endpoint;
+            java.util.Map<String, String> headers = new java.util.HashMap<>();
+            headers.put("Authorization", "Bearer " + apiKey);
+            if ("DashScope".equals(provider)) {
+                String base = (apiUrl == null || apiUrl.isEmpty())
+                        ? "https://dashscope.aliyuncs.com/api/v1" : apiUrl;
+                endpoint = (base.endsWith("/") ? base : base + "/") + "models";
+            } else if ("Anthropic兼容".equals(provider)) {
+                String base = (apiUrl == null || apiUrl.isEmpty())
+                        ? "https://api.anthropic.com" : apiUrl;
+                endpoint = (base.endsWith("/") ? base : base + "/") + "v1/models";
+                headers.put("anthropic-version", "2023-06-01");
+                headers.put("x-api-key", apiKey);
+            } else { // OpenAI 兼容
+                String base = (apiUrl == null || apiUrl.isEmpty())
+                        ? "https://api.openai.com/v1" : apiUrl;
+                endpoint = (base.endsWith("/") ? base : base + "/") + "models";
+            }
+            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+                    .connectTimeout(java.time.Duration.ofSeconds(10))
+                    .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
+                    .build();
+            java.net.http.HttpRequest.Builder rb = java.net.http.HttpRequest.newBuilder()
+                    .uri(java.net.URI.create(endpoint))
+                    .timeout(java.time.Duration.ofSeconds(15))
+                    .GET();
+            headers.forEach(rb::header);
+            java.net.http.HttpResponse<String> resp = client.send(rb.build(),
+                    java.net.http.HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() != 200) {
+                api.logging().logToError("[Settings] 模型列表接口 HTTP " + resp.statusCode() + " : " + endpoint);
+                return "";
+            }
+            JsonObject root = JsonParser.parseString(resp.body()).getAsJsonObject();
+            JsonArray arr = root.getAsJsonArray("data");
+            if (arr == null || arr.isEmpty()) {
+                api.logging().logToError("[Settings] 模型列表响应无 data: " + endpoint);
+                return "";
+            }
+            java.util.List<String> models = new java.util.ArrayList<>();
+            for (JsonElement el : arr) {
+                JsonObject o = el.getAsJsonObject();
+                if (o == null) continue;
+                // Anthropic data: {type:"model", id:"claude-3-5-sonnet-..."}；其余: {id:"..."}
+                String id = o.has("id") ? o.get("id").getAsString() : null;
+                if (id != null && !id.isBlank()) models.add(id);
+            }
+            models.sort(String::compareTo);
+            return String.join("\n", models);
+        } catch (Exception e) {
+            api.logging().logToError("[Settings] 获取模型列表失败: " + e.getMessage());
+            return "";
+        }
+    }
+
     private JPanel createConfigSubTab_Features() {
         JPanel panel = new JPanel(new GridBagLayout());
         panel.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
@@ -801,95 +947,14 @@ public class SettingsPanel {
         gbc.anchor = GridBagConstraints.WEST;
         int row = 0;
 
-        // Burp MCP
-        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 1;
-        gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
-        panel.add(new JLabel("Burp MCP:"), gbc);
-        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
-        enableMcpCheckBox = new JCheckBox("启用 Burp MCP 工具调用", false);
-        enableMcpCheckBox.addActionListener(e -> {
-            boolean enabled = enableMcpCheckBox.isSelected();
-            BurpMcpUrlField.setEnabled(enabled);
-            if (burpMcpAuthorizationField != null) {
-                burpMcpAuthorizationField.setEnabled(enabled);
-            }
-            apiClient.setEnableMcp(enabled);
-            if (enabled && !BurpMcpUrlField.getText().trim().isEmpty())
-                apiClient.setBurpMcpUrl(BurpMcpUrlField.getText().trim());
-            if (enabled) {
-                apiClient.setBurpMcpAuthorization(burpMcpAuthorizationField.getText().trim());
-            }
-        });
-        panel.add(enableMcpCheckBox, gbc);
-
+        // Burp MCP / 知识库（RAG）/ 自定义 MCP 已统一移至「MCP 配置」标签页，集中管理并默认预填示例配置
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2;
+        gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        JLabel mcpMovedHint = new JLabel("MCP / 知识库配置已统一移至「MCP 配置」标签页（Burp / RAG / 自定义，默认预填示例）");
+        mcpMovedHint.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        mcpMovedHint.setForeground(new Color(0x2a7de1));
+        panel.add(mcpMovedHint, gbc);
         row++;
-        gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
-        panel.add(new JLabel("  MCP 地址:"), gbc);
-        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
-        BurpMcpUrlField = new JTextField("http://127.0.0.1:9876/", 30);
-        BurpMcpUrlField.setEnabled(false);
-        BurpMcpUrlField.getDocument().addDocumentListener(new DocumentListener() {
-            @Override public void insertUpdate(DocumentEvent e) { syncBurpMcpUrl(); }
-            @Override public void removeUpdate(DocumentEvent e) { syncBurpMcpUrl(); }
-            @Override public void changedUpdate(DocumentEvent e) { syncBurpMcpUrl(); }
-            private void syncBurpMcpUrl() {
-                if (enableMcpCheckBox.isSelected() && !BurpMcpUrlField.getText().trim().isEmpty())
-                    apiClient.setBurpMcpUrl(BurpMcpUrlField.getText().trim());
-            }
-        });
-        panel.add(BurpMcpUrlField, gbc);
-
-        row++;
-        gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
-        panel.add(new JLabel("  Authorization:"), gbc);
-        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
-        burpMcpAuthorizationField = new JTextField("", 30);
-        burpMcpAuthorizationField.setEnabled(false);
-        burpMcpAuthorizationField.setToolTipText("可选，示例：Bearer your-token 或其他网关要求的 Authorization 值");
-        burpMcpAuthorizationField.getDocument().addDocumentListener(new DocumentListener() {
-            @Override public void insertUpdate(DocumentEvent e) { sync(); }
-            @Override public void removeUpdate(DocumentEvent e) { sync(); }
-            @Override public void changedUpdate(DocumentEvent e) { sync(); }
-            private void sync() {
-                if (enableMcpCheckBox.isSelected()) {
-                    apiClient.setBurpMcpAuthorization(burpMcpAuthorizationField.getText().trim());
-                }
-            }
-        });
-        panel.add(burpMcpAuthorizationField, gbc);
-
-        // 知识库
-        row++;
-        gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
-        panel.add(new JLabel("知识库:"), gbc);
-        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
-        JPanel knowledgeBasePanel = new JPanel();
-        knowledgeBasePanel.setLayout(new BoxLayout(knowledgeBasePanel, BoxLayout.X_AXIS));
-        enableRagMcpCheckBox = new JCheckBox("RAG MCP（语义检索）", false);
-        enableRagMcpCheckBox.addActionListener(e -> {
-            boolean enabled = enableRagMcpCheckBox.isSelected();
-            ragMcpDocumentsPathField.setEnabled(enabled || enableFileSystemAccessCheckBox.isSelected());
-            apiClient.setEnableRagMcp(enabled);
-            if (enabled && !ragMcpDocumentsPathField.getText().trim().isEmpty())
-                apiClient.setRagMcpDocumentsPath(ragMcpDocumentsPathField.getText().trim());
-        });
-        knowledgeBasePanel.add(enableRagMcpCheckBox);
-        knowledgeBasePanel.add(Box.createHorizontalStrut(10));
-        enableFileSystemAccessCheckBox = new JCheckBox("直接查找（文件浏览）", false);
-        enableFileSystemAccessCheckBox.addActionListener(e -> {
-            boolean enabled = enableFileSystemAccessCheckBox.isSelected();
-            ragMcpDocumentsPathField.setEnabled(enabled || enableRagMcpCheckBox.isSelected());
-            apiClient.setEnableFileSystemAccess(enabled);
-            if (enabled && !ragMcpDocumentsPathField.getText().trim().isEmpty())
-                apiClient.setRagMcpDocumentsPath(ragMcpDocumentsPathField.getText().trim());
-        });
-        knowledgeBasePanel.add(enableFileSystemAccessCheckBox);
-        panel.add(knowledgeBasePanel, gbc);
-        ragMcpDocumentsPathField = new JTextField("", 30);
-        ragMcpDocumentsPathField.setEnabled(true);
-        ragMcpDocumentsPathField.setEditable(false);
-
-        // Chrome MCP 配置已隐藏
 
         // 分隔线
         row++;
@@ -930,8 +995,9 @@ public class SettingsPanel {
     }
 
     /**
-     * 创建 MCP 配置标签页（独立子标签页）
-     * 包含：总开关、自定义 MCP 服务器 JSON 配置、实时验证、错误明细。
+     * 创建 MCP 配置标签页（独立子标签页，统一管理所有 MCP 端点）。
+     * 包含：Burp MCP、知识库（RAG/直接查找）、自定义 MCP 服务器 JSON 配置、
+     * 实时验证与错误明细；全部预填默认示例，主动/被动 Agent 共享同一条连接。
      */
     private JPanel createConfigSubTab_Mcp() {
         JPanel panel = new JPanel(new GridBagLayout());
@@ -941,7 +1007,149 @@ public class SettingsPanel {
         gbc.anchor = GridBagConstraints.WEST;
         int row = 0;
 
+        // 总体说明（默认配置提示）
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2;
+        gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        JTextArea mcpIntro = new JTextArea(
+                "MCP 统一配置（Burp / 知识库 / 自定义端点都在这里管理）：\n" +
+                "• 所有端点默认已预填示例配置，直接勾选「启用」+ 保存即可使用。\n" +
+                "• 主动与被动扫描共享同一条 MCP 连接，不会重复建连。");
+        mcpIntro.setEditable(false);
+        mcpIntro.setOpaque(false);
+        mcpIntro.setLineWrap(true);
+        mcpIntro.setWrapStyleWord(true);
+        mcpIntro.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        mcpIntro.setForeground(new Color(0x2a7de1));
+        panel.add(mcpIntro, gbc);
+
+        // ---- 分节 1：Burp MCP ----
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2;
+        gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        JLabel burpSectionLabel = new JLabel("Burp MCP（Burp 原生 MCP 服务器，默认地址已预填）");
+        burpSectionLabel.setFont(burpSectionLabel.getFont().deriveFont(Font.BOLD));
+        panel.add(burpSectionLabel, gbc);
+
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 1;
+        gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("启用:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        enableMcpCheckBox = new JCheckBox("启用 Burp MCP 工具调用", false);
+        enableMcpCheckBox.setToolTipText("默认地址 http://127.0.0.1:9876/（Burp 扩展的 MCP 服务）");
+        enableMcpCheckBox.addActionListener(e -> {
+            boolean enabled = enableMcpCheckBox.isSelected();
+            BurpMcpUrlField.setEnabled(enabled);
+            if (burpMcpAuthorizationField != null) {
+                burpMcpAuthorizationField.setEnabled(enabled);
+            }
+            apiClient.setEnableMcp(enabled);
+            if (enabled && !BurpMcpUrlField.getText().trim().isEmpty())
+                apiClient.setBurpMcpUrl(BurpMcpUrlField.getText().trim());
+            if (enabled) {
+                apiClient.setBurpMcpAuthorization(burpMcpAuthorizationField.getText().trim());
+            }
+        });
+        panel.add(enableMcpCheckBox, gbc);
+
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("MCP 地址:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        BurpMcpUrlField = new JTextField("http://127.0.0.1:9876/", 30);
+        BurpMcpUrlField.setEnabled(false);
+        BurpMcpUrlField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override public void insertUpdate(DocumentEvent e) { syncBurpMcpUrl(); }
+            @Override public void removeUpdate(DocumentEvent e) { syncBurpMcpUrl(); }
+            @Override public void changedUpdate(DocumentEvent e) { syncBurpMcpUrl(); }
+            private void syncBurpMcpUrl() {
+                if (enableMcpCheckBox.isSelected() && !BurpMcpUrlField.getText().trim().isEmpty())
+                    apiClient.setBurpMcpUrl(BurpMcpUrlField.getText().trim());
+            }
+        });
+        panel.add(BurpMcpUrlField, gbc);
+
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("Authorization:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        burpMcpAuthorizationField = new JTextField("", 30);
+        burpMcpAuthorizationField.setEnabled(false);
+        burpMcpAuthorizationField.setToolTipText("可选，示例：Bearer your-token 或其他网关要求的 Authorization 值");
+        burpMcpAuthorizationField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override public void insertUpdate(DocumentEvent e) { sync(); }
+            @Override public void removeUpdate(DocumentEvent e) { sync(); }
+            @Override public void changedUpdate(DocumentEvent e) { sync(); }
+            private void sync() {
+                if (enableMcpCheckBox.isSelected()) {
+                    apiClient.setBurpMcpAuthorization(burpMcpAuthorizationField.getText().trim());
+                }
+            }
+        });
+        panel.add(burpMcpAuthorizationField, gbc);
+
+        // ---- 分节 2：知识库（RAG MCP / 直接查找 / 文档路径） ----
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2;
+        gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        JLabel kbSectionLabel = new JLabel("知识库（RAG MCP 语义检索 / 直接查找本地文档）");
+        kbSectionLabel.setFont(kbSectionLabel.getFont().deriveFont(Font.BOLD));
+        panel.add(kbSectionLabel, gbc);
+
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 1;
+        gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("启用:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        JPanel knowledgeBasePanel = new JPanel();
+        knowledgeBasePanel.setLayout(new BoxLayout(knowledgeBasePanel, BoxLayout.X_AXIS));
+        enableRagMcpCheckBox = new JCheckBox("RAG MCP（语义检索）", false);
+        enableRagMcpCheckBox.addActionListener(e -> {
+            boolean enabled = enableRagMcpCheckBox.isSelected();
+            ragMcpDocumentsPathField.setEnabled(enabled || enableFileSystemAccessCheckBox.isSelected());
+            apiClient.setEnableRagMcp(enabled);
+            if (enabled && !ragMcpDocumentsPathField.getText().trim().isEmpty())
+                apiClient.setRagMcpDocumentsPath(ragMcpDocumentsPathField.getText().trim());
+        });
+        knowledgeBasePanel.add(enableRagMcpCheckBox);
+        knowledgeBasePanel.add(Box.createHorizontalStrut(10));
+        enableFileSystemAccessCheckBox = new JCheckBox("直接查找（文件浏览）", false);
+        enableFileSystemAccessCheckBox.addActionListener(e -> {
+            boolean enabled = enableFileSystemAccessCheckBox.isSelected();
+            ragMcpDocumentsPathField.setEnabled(enabled || enableRagMcpCheckBox.isSelected());
+            apiClient.setEnableFileSystemAccess(enabled);
+            if (enabled && !ragMcpDocumentsPathField.getText().trim().isEmpty())
+                apiClient.setRagMcpDocumentsPath(ragMcpDocumentsPathField.getText().trim());
+        });
+        knowledgeBasePanel.add(enableFileSystemAccessCheckBox);
+        panel.add(knowledgeBasePanel, gbc);
+
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("文档路径:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        ragMcpDocumentsPathField = new JTextField("", 30);
+        ragMcpDocumentsPathField.setEnabled(true);
+        ragMcpDocumentsPathField.setEditable(false);
+        ragMcpDocumentsPathField.setToolTipText("知识库文档目录（默认位于工作区 /rag 下，随工作区自动派生）");
+        panel.add(ragMcpDocumentsPathField, gbc);
+
+        // 分隔线
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2;
+        gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        panel.add(new JSeparator(), gbc);
+
+        // ---- 分节 3：自定义 MCP 服务器 ----
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2;
+        gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        JLabel customSectionLabel = new JLabel("自定义 MCP 服务器（默认预填示例模板，可一键恢复）");
+        customSectionLabel.setFont(customSectionLabel.getFont().deriveFont(Font.BOLD));
+        panel.add(customSectionLabel, gbc);
+
         // 总开关
+        row++;
         gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         enableCustomMcpCheckBox = new JCheckBox("启用自定义 MCP 服务器", false);
@@ -958,7 +1166,7 @@ public class SettingsPanel {
         });
         panel.add(enableCustomMcpCheckBox, gbc);
 
-        // 自定义 MCP 服务器配置
+        // 自定义 MCP 服务器配置 JSON
         row++;
         gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0; gbc.weighty = 0;
@@ -1011,7 +1219,7 @@ public class SettingsPanel {
         gbc.fill = GridBagConstraints.NONE; gbc.anchor = GridBagConstraints.EAST;
         JPanel customMcpButtonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         JButton validateCustomMcpButton = new JButton("验证配置");
-        JButton restoreCustomMcpButton = new JButton("恢复默认");
+        JButton restoreCustomMcpButton = new JButton("恢复默认模板");
         validateCustomMcpButton.addActionListener(e -> {
             validateCustomMcpConfig();
             testCustomMcpConnections();
@@ -1602,7 +1810,7 @@ public class SettingsPanel {
             PluginSettings settings = new PluginSettings(
                 apiUrlField.getText().trim(),
                 effectiveApiKey,
-                modelField.getText().trim(),
+                getModelText(),
                 host.getUserPromptText(),
                 enableSearchCheckBox.isSelected(),
                 enableMcpCheckBox.isSelected(),
@@ -1738,7 +1946,29 @@ public class SettingsPanel {
             ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream("ai_analyzer_settings.dat"));
             oos.writeObject(settings);
             oos.close();
+            // 同时写用户主目录，防止 Burp 工作目录变化导致配置漂移（加载时 CWD 优先）
+            java.io.File homeSettingsFile = new java.io.File(System.getProperty("user.home"), ".burp_ai_analyzer_settings");
+            try (ObjectOutputStream homeOut = new ObjectOutputStream(new FileOutputStream(homeSettingsFile))) {
+                homeOut.writeObject(settings);
+            }
             setApiKeySecretAndMask(effectiveApiKey);
+
+            // 保存即生效：核心 API 配置推送到运行中的客户端（触发 runtime 重建，
+            // 解决“在 AI 停止输出后切换 LLM API 不生效”）
+            apiClient.setApiProvider((String) apiProviderComboBox.getSelectedItem());
+            apiClient.setApiUrl(apiUrlField.getText().trim());
+            apiClient.setApiKey(effectiveApiKey);
+            apiClient.setModel(getModelText());
+            apiClient.setMaxTokens(maxTokensField.getText().trim());
+            apiClient.setCustomParameters(customParametersField.getText().trim());
+            if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
+                PassiveScanApiClient psClient = passiveScanManager.getApiClient();
+                psClient.setApiProvider((String) apiProviderComboBox.getSelectedItem());
+                psClient.setApiUrl(apiUrlField.getText().trim());
+                psClient.setApiKey(effectiveApiKey);
+                psClient.setModel(getModelText());
+                psClient.setMaxTokens(maxTokensField.getText().trim());
+            }
 
             api.logging().logToOutput("设置已保存");
             host.flashStatusMessage("设置已保存 ✔");
@@ -1804,7 +2034,7 @@ public class SettingsPanel {
         boolean isAnthropic = "Anthropic兼容".equals(provider);
         apiUrlField.setText(settings.getApiUrl());
         setApiKeySecretAndMask(settings.getApiKey());
-        modelField.setText(settings.getModel());
+        setModelText(settings.getModel());
         maxTokensField.setText(settings.getMaxTokens());
         if (tokenBudgetField != null) {
             tokenBudgetField.setText(settings.getTokenBudgetTokens() > 0
@@ -1900,8 +2130,9 @@ public class SettingsPanel {
             }
         }
         if (enableCustomMcpCheckBox != null) {
-            boolean customMcpEnabled = settings.isEnableCustomMcp() || hasSavedCustomMcp;
-            enableCustomMcpCheckBox.setSelected(customMcpEnabled && hasSavedCustomMcp);
+            // 启用状态只认显式保存的 enableCustomMcp 标志；
+            // 仅“保存了 JSON 配置但未启用”时保持关闭，避免用户关掉后重启回弹
+            enableCustomMcpCheckBox.setSelected(settings.isEnableCustomMcp());
             if (customMcpConfigArea != null) {
                 customMcpConfigArea.setEnabled(enableCustomMcpCheckBox.isSelected());
             }
@@ -2049,7 +2280,7 @@ public class SettingsPanel {
         apiClient.setApiProvider((String) apiProviderComboBox.getSelectedItem());
         apiClient.setApiUrl(apiUrlField.getText().trim());
         apiClient.setApiKey(getEffectiveApiKeyFromField());
-        apiClient.setModel(modelField.getText().trim());
+        apiClient.setModel(getModelText());
         apiClient.setCustomParameters(customParametersField.getText().trim());
         apiClient.setMaxTokens(maxTokensField.getText().trim());
         com.ai.analyzer.util.TokenUsageTracker.instance().setBudget(parseTokenBudget(tokenBudgetField.getText()));

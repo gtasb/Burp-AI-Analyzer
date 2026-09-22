@@ -35,6 +35,50 @@ public class AgentScopeMcpManager {
 
     private AgentScopeMcpManager() {}
 
+    /** 同一 MCP 端点注册计数（主动/被动共享连接后，>1 表示多 toolkit 复用） */
+    private static final java.util.concurrent.ConcurrentHashMap<String, Integer> endpointRegistrations =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 按端点共享的 MCP 客户端：同一端点全插件只建一条连接（主动/被动注册同一 wrapper，根除双连接互相踢线） */
+    private static final java.util.concurrent.ConcurrentHashMap<String, McpClientWrapper> SHARED_CLIENTS =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static void recordRegistration(String endpointKey) {
+        int count = endpointRegistrations.merge(endpointKey, 1, Integer::sum);
+        if (count == 1) {
+            AppLogBuffer.info("AgentScopeMcpManager", "已建立共享 MCP 连接: " + endpointKey);
+        } else if (count == 2) {
+            AppLogBuffer.info("AgentScopeMcpManager",
+                    "MCP 端点被多个 toolkit 复用共享连接（主动/被动共用，不再重复建连）: " + endpointKey);
+        }
+    }
+
+    /**
+     * 取（或创建）某端点的共享客户端：已缓存且已初始化的直接复用；
+     * 缓存连接失效（isInitialized=false）时丢弃重建，避免“死连接一直粘住”。
+     */
+    private static McpClientWrapper endpointClient(String key, CheckedSupplier<McpClientWrapper> factory) throws Exception {
+        McpClientWrapper existing = SHARED_CLIENTS.get(key);
+        if (existing != null && existing.isInitialized()) {
+            return existing;
+        }
+        if (existing != null) {
+            SHARED_CLIENTS.remove(key, existing);
+            try {
+                existing.close();
+            } catch (Exception ignored) {
+            }
+        }
+        McpClientWrapper created = factory.get();
+        McpClientWrapper raced = SHARED_CLIENTS.putIfAbsent(key, created);
+        return raced != null ? raced : created;
+    }
+
+    @FunctionalInterface
+    private interface CheckedSupplier<T> {
+        T get() throws Exception;
+    }
+
     /**
      * 规范化 Authorization 值：若已含 "Bearer " 前缀（不区分大小写）则原样透传，
      * 否则补上前缀。避免用户填 "Bearer xxx" 时被拼成 "Bearer Bearer xxx" 导致 401。
@@ -183,21 +227,23 @@ public class AgentScopeMcpManager {
 
         String url = burpMcpUrl.trim();
         try {
-            withExtensionClassLoader(() -> {
-                // 传输协议按 URL 自动选择；根路径（如 BurpMCP-Ultra）SSE 优先并回退 Streamable HTTP
-                McpClientWrapper client = buildTransportClient("burp-mcp", url, null, null,
-                        builder -> {
-                            String bearer = normalizeBearer(authorization);
-                            if (bearer != null) {
-                                builder.header("Authorization", bearer);
-                            }
-                        });
-
-                toolkit.registerMcpClient(client).block();
-                clients.add(client);
-                return null;
-            });
-            AppLogBuffer.info("AgentScopeMcpManager", "Burp MCP registered: " + url);
+            String key = "burp-mcp|" + url;
+            // 共享客户端：同一端点只建一条连接，主动/被动 toolkit 复用（避免双连接互相踢线）
+            McpClientWrapper client = withExtensionClassLoader(() -> endpointClient(key, () ->
+                    buildTransportClient("burp-mcp", url, null, null,
+                            builder -> {
+                                String bearer = normalizeBearer(authorization);
+                                if (bearer != null) {
+                                    builder.header("Authorization", bearer);
+                                }
+                            })));
+            if (client == null) {
+                throw new RuntimeException("MCP 客户端构建失败: " + url);
+            }
+            toolkit.registerMcpClient(client).block();
+            clients.add(client);
+            recordRegistration(key);
+            AppLogBuffer.info("AgentScopeMcpManager", "Burp MCP registered (shared): " + url);
             DebugContext.log("AgentScopeMcpManager", "burp_mcp_registered", Map.of("url", url));
         } catch (Exception e) {
             AppLogBuffer.info("AgentScopeMcpManager",
@@ -228,7 +274,9 @@ public class AgentScopeMcpManager {
         if (urlOrCommand == null || urlOrCommand.trim().isEmpty()) return null;
 
         try {
-            McpClientWrapper client = withExtensionClassLoader(() ->
+            String key = transportType + "|" + urlOrCommand.trim();
+            // 共享客户端：同一端点只建一条连接，主动/被动 toolkit 复用
+            McpClientWrapper client = withExtensionClassLoader(() -> endpointClient(key, () ->
                     buildTransportClient(serverName.trim(), urlOrCommand.trim(), transportType, args,
                             builder -> {
                                 if (headers != null) {
@@ -236,8 +284,13 @@ public class AgentScopeMcpManager {
                                         builder.header(entry.getKey(), entry.getValue());
                                     }
                                 }
-                            }));
-            AppLogBuffer.info("AgentScopeMcpManager", "Custom MCP registered: " + serverName + " (" + transportType + ")");
+                            })));
+            if (client == null) {
+                throw new RuntimeException("MCP 客户端构建失败: " + serverName);
+            }
+            toolkit.registerMcpClient(client).block();
+            recordRegistration(key);
+            AppLogBuffer.info("AgentScopeMcpManager", "Custom MCP registered (shared): " + serverName + " (" + transportType + ")");
             DebugContext.log("AgentScopeMcpManager", "custom_mcp_registered", Map.of("server", serverName, "transport", String.valueOf(transportType)));
             return client;
         } catch (Exception e) {

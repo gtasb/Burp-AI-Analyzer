@@ -21,8 +21,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 主动分析面板：请求分析、批量分析、快捷任务、目标速览、分析历史、
- * 结果工具（复制/发送 Intruder）以及 Plan Mode 切换与 HITL 批准对话框。
+ * 主动分析面板：请求分析、批量分析、目标速览、分析历史、
+ * 结果工具以及 Plan Mode 切换与 HITL 批准对话框。
  * 与 AIAnalyzerTab 通过依赖注入解耦：
  * - bind(): 注入 apiClient、API 配置更新器、状态监听、被动数据源
  * - setActiveMode(): 切换当前渲染目标（主动/被动结果区）
@@ -50,8 +50,6 @@ public class ActiveAnalysisPanel extends JPanel {
     private JComboBox<String> planModeComboBox;
     private JLabel targetInfoLabel;
     private JLabel targetDetailLabel;
-    private JList<AnalysisHistoryStore.AnalysisHistoryEntry> analysisHistoryList;
-    private DefaultListModel<AnalysisHistoryStore.AnalysisHistoryEntry> analysisHistoryModel;
     private JTextArea behaviorTextArea;
     private JScrollPane behaviorScrollPane;
     /** 模型行为订阅（add/remove 成对使用，避免覆盖侧栏 ChatPanel 的订阅） */
@@ -67,8 +65,6 @@ public class ActiveAnalysisPanel extends JPanel {
     private SwingWorker<Void, String> currentWorker;
     private volatile int analysisRunId = 0;
 
-    private AnalysisHistoryStore historyStore;
-
     public ActiveAnalysisPanel(MontoyaApi api) {
         this.api = api;
         buildUi();
@@ -79,11 +75,6 @@ public class ActiveAnalysisPanel extends JPanel {
         this.apiClientConfigUpdater = configUpdater;
         this.stateListener = listener;
         this.dataSource = ds;
-        if (client != null) {
-            this.historyStore = client.getAnalysisHistoryStore();
-        } else {
-            this.historyStore = new AnalysisHistoryStore();
-        }
         setupAgentHITL();
     }
 
@@ -137,50 +128,7 @@ public class ActiveAnalysisPanel extends JPanel {
         planModeComboBox.addActionListener(e -> handlePlanModeChanged());
         modeSelect.add(planModeComboBox);
         modeBar.add(modeSelect, BorderLayout.WEST);
-
-        // 右侧：操作按钮组
-        JPanel actionGroup = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 4));
-        JButton copyResultButton = new JButton("复制结果");
-        copyResultButton.setToolTipText("将当前 AI 分析结果全文复制到剪贴板");
-        copyResultButton.addActionListener(e -> copyAnalysisResult());
-        UIStyles.styleSecondary(copyResultButton);
-        actionGroup.add(copyResultButton);
-
-        JButton copyRequestButton = new JButton("复制请求");
-        copyRequestButton.setToolTipText("将当前选中的请求/响应报文复制到剪贴板");
-        copyRequestButton.addActionListener(e -> copyCurrentRequest());
-        UIStyles.styleSecondary(copyRequestButton);
-        actionGroup.add(copyRequestButton);
-
-        JButton sendIntruderButton = new JButton("发送到 Intruder");
-        sendIntruderButton.setToolTipText("将当前选中的请求发送到 Intruder 进行自动化测试");
-        sendIntruderButton.addActionListener(e -> sendSelectedToIntruder());
-        UIStyles.styleSecondary(sendIntruderButton);
-        actionGroup.add(sendIntruderButton);
-
-        JButton batchAnalyzeButton = new JButton("批量分析");
-        batchAnalyzeButton.setToolTipText("将请求列表中选中的多个请求一次性提交给 Agent 归纳分析");
-        batchAnalyzeButton.addActionListener(e -> performBatchAnalysis());
-        UIStyles.styleSecondary(batchAnalyzeButton);
-        actionGroup.add(batchAnalyzeButton);
-
-        JButton pasteMessageButton = new JButton("粘贴报文");
-        pasteMessageButton.setToolTipText("粘贴原始 HTTP 请求/响应报文进行分析（无需先在请求列表中选中）");
-        pasteMessageButton.addActionListener(e -> showPasteMessageDialog());
-        UIStyles.styleSecondary(pasteMessageButton);
-        actionGroup.add(pasteMessageButton);
-        modeBar.add(actionGroup, BorderLayout.EAST);
         topArea.add(modeBar);
-
-        // ---- 快捷任务行：常见渗透测试任务一键填充提示词并执行 ----
-        JPanel quickBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
-        quickBar.setBorder(UIStyles.titledBorder("快捷任务"));
-        for (QuickTaskPresets.QuickTask task : QuickTaskPresets.defaults()) {
-            JButton qb = createQuickTaskButton(task.label(), task.prompt());
-            UIStyles.styleSecondary(qb);
-            quickBar.add(qb);
-        }
-        topArea.add(quickBar);
 
         // ---- 目标上下文速览条 ----
         JPanel infoBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 3));
@@ -211,42 +159,7 @@ public class ActiveAnalysisPanel extends JPanel {
         resultScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         resultScrollPane.setBorder(UIStyles.titledBorder("AI分析结果"));
 
-        // ---- 右侧：分析历史列表 ----
-        analysisHistoryModel = new DefaultListModel<>();
-        analysisHistoryList = new JList<>(analysisHistoryModel);
-        analysisHistoryList.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
-        analysisHistoryList.setCellRenderer(new DefaultListCellRenderer() {
-            @Override
-            public Component getListCellRendererComponent(JList<?> list, Object value, int index,
-                                                          boolean isSelected, boolean cellHasFocus) {
-                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
-                if (value instanceof AnalysisHistoryStore.AnalysisHistoryEntry entry) {
-                    setText(entry.timestamp() + " — " + entry.targetDesc());
-                    setToolTipText(entry.prompt());
-                }
-                return this;
-            }
-        });
-        analysisHistoryList.addMouseListener(new java.awt.event.MouseAdapter() {
-            @Override
-            public void mouseClicked(java.awt.event.MouseEvent e) {
-                if (e.getClickCount() == 2) {
-                    showAnalysisHistoryEntry(analysisHistoryList.getSelectedIndex());
-                }
-            }
-        });
-        JScrollPane historyScroll = new JScrollPane(analysisHistoryList);
-        historyScroll.setBorder(UIStyles.titledBorder("分析历史（双击回看）"));
-        JButton clearHistoryButton = new JButton("清空历史");
-        clearHistoryButton.addActionListener(e -> {
-            historyStore.clear();
-            analysisHistoryModel.clear();
-        });
-        JPanel historyPanel = new JPanel(new BorderLayout(2, 2));
-        historyPanel.add(historyScroll, BorderLayout.CENTER);
-        historyPanel.add(clearHistoryButton, BorderLayout.SOUTH);
-
-        // ---- 右侧第二个页签：模型行为（thinking / 工具调用实时流） ----
+        // ---- 右侧：模型行为观察窗（thinking / 工具调用实时流，保留并优化） ----
         behaviorTextArea = new JTextArea();
         behaviorTextArea.setEditable(false);
         behaviorTextArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
@@ -256,18 +169,22 @@ public class ActiveAnalysisPanel extends JPanel {
         behaviorScrollPane = new JScrollPane(behaviorTextArea);
         behaviorScrollPane.setBorder(UIStyles.titledBorder("模型行为（思考/工具调用）"));
         behaviorScrollPane.setVisible(true);
-        JPanel behaviorPanel = new JPanel(new BorderLayout());
+        JPanel behaviorPanel = new JPanel(new BorderLayout(4, 2));
+        JButton clearBehaviorButton = new JButton("清空");
+        clearBehaviorButton.setToolTipText("清空模型行为观察窗");
+        clearBehaviorButton.addActionListener(e -> {
+            behaviorTextArea.setText("");
+            thinkingLineStart = -1;
+            currentThinking.setLength(0);
+        });
+        UIStyles.styleSecondary(clearBehaviorButton);
+        behaviorPanel.add(clearBehaviorButton, BorderLayout.NORTH);
         behaviorPanel.add(behaviorScrollPane, BorderLayout.CENTER);
 
-        JTabbedPane rightTabs = new JTabbedPane();
-        rightTabs.addTab("分析历史", historyPanel);
-        rightTabs.addTab("模型行为", behaviorPanel);
-
-        JSplitPane resultSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, resultScrollPane, rightTabs);
+        JSplitPane resultSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, resultScrollPane, behaviorPanel);
         resultSplit.setDividerLocation(680);
         resultSplit.setResizeWeight(0.75);
         resultSplit.setContinuousLayout(true);
-        add(resultSplit, BorderLayout.CENTER);
 
         // ---- 底部：输入区域 ----
         JPanel promptPanel = new JPanel(new BorderLayout());
@@ -295,21 +212,13 @@ public class ActiveAnalysisPanel extends JPanel {
         });
 
         promptPanel.add(promptScroll, BorderLayout.CENTER);
-        add(promptPanel, BorderLayout.SOUTH);
-    }
 
-    private JButton createQuickTaskButton(String label, String prompt) {
-        JButton button = new JButton(label);
-        button.setToolTipText("填充提示词并立即分析：" + prompt);
-        button.addActionListener(e -> {
-            if (isAnalyzing) {
-                JOptionPane.showMessageDialog(this, "当前正在分析中，请等待完成或点击停止");
-                return;
-            }
-            activeModePromptArea.setText(prompt);
-            performAnalysis();
-        });
-        return button;
+        // “AI分析结果” 与 “输入”区：垂直 JSplitPane，分隔条可自由拖拽调节上下大小
+        JSplitPane verticalSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, resultSplit, promptPanel);
+        verticalSplit.setResizeWeight(0.75);
+        verticalSplit.setContinuousLayout(true);
+        verticalSplit.setOneTouchExpandable(true);
+        add(verticalSplit, BorderLayout.CENTER);
     }
 
     private void applyEditorTheme(JTextComponent component) {
@@ -415,42 +324,6 @@ public class ActiveAnalysisPanel extends JPanel {
             apiClientConfigUpdater.run();
         }
         startAnalysisWorker(httpContent, userPrompt, targetDesc, detail);
-    }
-
-    private void performBatchAnalysis() {
-        if (isAnalyzing) {
-            JOptionPane.showMessageDialog(this, "当前正在分析中，请等待完成或点击停止");
-            return;
-        }
-        if (apiClient == null) {
-            return;
-        }
-        List<Map.Entry<Object, String>> targets = collectSelectedTargets();
-        if (targets.size() < 2) {
-            JOptionPane.showMessageDialog(this, "请在请求列表中选择至少 2 个请求进行批量分析");
-            return;
-        }
-        StringBuilder sb = new StringBuilder();
-        sb.append("以下是 ").append(targets.size()).append(" 个待分析的 HTTP 请求/响应（按顺序编号）：\n\n");
-        int idx = 1;
-        for (Map.Entry<Object, String> entry : targets) {
-            sb.append("========== 请求 ").append(idx++).append(" ==========\n");
-            sb.append(entry.getValue()).append("\n\n");
-        }
-        String httpContent = sb.toString();
-
-        String userPrompt = (promptArea != null ? promptArea.getText().trim() : "");
-        if (userPrompt.isEmpty()) {
-            userPrompt = "请逐一分析以上 " + targets.size() + " 个请求存在的安全漏洞，按风险等级排序归纳，并给出利用条件与验证建议";
-        }
-        String targetDesc = "批量分析 " + targets.size() + " 个请求";
-        String batchDetail = "总报文 " + httpContent.length() + " 字符";
-        updateTargetInfo(targetDesc, batchDetail);
-
-        if (apiClientConfigUpdater != null) {
-            apiClientConfigUpdater.run();
-        }
-        startAnalysisWorker(httpContent, userPrompt, targetDesc, batchDetail);
     }
 
     private void startAnalysisWorker(String httpContent, String userPrompt, String targetDesc, String detail) {
@@ -595,9 +468,6 @@ public class ActiveAnalysisPanel extends JPanel {
                 try {
                     get();
                     if (runId != analysisRunId) return;
-                    if (!fullResponse.toString().isBlank()) {
-                        recordAnalysisHistory(finalTargetDesc, finalUserPrompt, fullResponse.toString());
-                    }
                     updateTargetInfo(finalTargetDesc, buildStatusSuffix(finalDetail, startTime));
                 } catch (Exception e) {
                     if (!isCancelled() && runId == analysisRunId) {
@@ -735,37 +605,10 @@ public class ActiveAnalysisPanel extends JPanel {
             behaviorTextArea.setText("");
         }
         flushThinking();
-        historyStore.clear();
-        if (analysisHistoryModel != null) {
-            analysisHistoryModel.clear();
-        }
         api.logging().logToOutput("已新开会话");
     }
 
     // ========== 目标速览 / 分析历史 / 结果工具 ==========
-
-    /** 收集请求表中所有选中行的 (ScanResult/RequestData, httpContent) */
-    private List<Map.Entry<Object, String>> collectSelectedTargets() {
-        List<Map.Entry<Object, String>> targets = new ArrayList<>();
-        if (dataSource == null) return targets;
-        List<Object> selections = dataSource.getSelectedSelections();
-        for (Object selection : selections) {
-            String content = "";
-            String label = "";
-            if (selection instanceof ScanResult sr && sr.getRequestResponse() != null) {
-                content = HttpFormatter.formatHttpRequestResponse(sr.getRequestResponse());
-                label = sr.getMethod() + " " + sr.getShortUrl();
-            } else if (selection instanceof RequestData rd) {
-                content = rd.getFullRequestResponse();
-                String url = rd.getUrl();
-                label = rd.getMethod() + " " + (url.length() > 80 ? url.substring(0, 80) + "..." : url);
-            }
-            if (content != null && !content.isBlank()) {
-                targets.add(Map.entry(selection, content + "\n\n--- 目标: " + label + " ---"));
-            }
-        }
-        return targets;
-    }
 
     private void updateTargetInfo(String targetDesc, String detail) {
         if (targetInfoLabel != null) {
@@ -853,132 +696,6 @@ public class ActiveAnalysisPanel extends JPanel {
     private void flushThinking() {
         currentThinking.setLength(0);
         thinkingLineStart = -1;
-    }
-
-    // ========== 粘贴报文分析 ==========
-
-    private void showPasteMessageDialog() {
-        if (isAnalyzing) {
-            JOptionPane.showMessageDialog(this, "当前正在分析中，请等待完成或点击停止");
-            return;
-        }
-        JTextArea rawArea = new JTextArea(20, 60);
-        rawArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
-        rawArea.setLineWrap(false);
-        JScrollPane rawScroll = new JScrollPane(rawArea);
-        rawScroll.setBorder(BorderFactory.createTitledBorder("粘贴原始 HTTP 请求/响应报文"));
-        JPanel dialogPanel = new JPanel(new BorderLayout(5, 5));
-        dialogPanel.add(rawScroll, BorderLayout.CENTER);
-        dialogPanel.add(new JLabel("支持粘贴 Burp/抓包工具复制的完整报文（含请求行与请求头，可包含响应）"), BorderLayout.NORTH);
-        int option = JOptionPane.showConfirmDialog(this, dialogPanel, "粘贴报文分析",
-                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-        if (option != JOptionPane.OK_OPTION) {
-            return;
-        }
-        String raw = rawArea.getText();
-        if (raw == null || raw.isBlank()) {
-            JOptionPane.showMessageDialog(this, "报文内容为空");
-            return;
-        }
-        String targetDesc = "粘贴报文分析";
-        String host = "";
-        try {
-            HttpRequest parsed = HttpRequest.httpRequest(raw.trim());
-            if (parsed != null && parsed.url() != null && !parsed.url().isBlank()) {
-                targetDesc = parsed.method() + " " + parsed.url();
-                host = extractHost(parsed.url());
-            }
-        } catch (Exception ignored) {
-            // 解析失败（如带响应或非标准报文），使用原始文本分析
-        }
-        String detail = (host.isEmpty() ? "" : "Host: " + host + " · ") + "报文 " + raw.length() + " 字节";
-        String userPrompt = (activeModePromptArea != null ? activeModePromptArea.getText().trim() : "");
-        if (userPrompt.isEmpty()) {
-            userPrompt = "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议";
-        }
-        if (apiClientConfigUpdater != null) {
-            apiClientConfigUpdater.run();
-        }
-        startAnalysisWorker(raw.trim(), userPrompt, targetDesc, detail);
-    }
-
-    private void recordAnalysisHistory(String targetDesc, String prompt, String result) {
-        if (analysisHistoryModel == null) return;
-        historyStore.add(targetDesc, prompt, result);
-        analysisHistoryModel.addElement(historyStore.get(historyStore.size() - 1));
-        while (analysisHistoryModel.size() > AnalysisHistoryStore.MAX_ENTRIES) {
-            analysisHistoryModel.removeElementAt(0);
-        }
-    }
-
-    private void showAnalysisHistoryEntry(int index) {
-        if (index < 0 || index >= historyStore.size()) return;
-        AnalysisHistoryStore.AnalysisHistoryEntry entry = historyStore.get(index);
-        try {
-            StyledDocument doc = activeModeResultTextPane.getStyledDocument();
-            javax.swing.text.Style histStyle = doc.addStyle("historyHeader", null);
-            javax.swing.text.StyleConstants.setForeground(histStyle, new Color(120, 120, 120));
-            javax.swing.text.StyleConstants.setBold(histStyle, true);
-            doc.insertString(doc.getLength(), "\n\n========== 历史回看 " + entry.timestamp() + " — " + entry.targetDesc() + " ==========\n\n", histStyle);
-            MarkdownRenderer.appendMarkdown(activeModeResultTextPane, entry.result());
-            activeModeResultTextPane.setCaretPosition(doc.getLength());
-        } catch (Exception ex) {
-            api.logging().logToError("历史回看失败: " + ex.getMessage());
-        }
-    }
-
-    private void copyAnalysisResult() {
-        String text = activeModeResultTextPane == null ? "" : activeModeResultTextPane.getText();
-        if (text.isBlank()) {
-            JOptionPane.showMessageDialog(this, "当前没有可复制的分析结果");
-            return;
-        }
-        java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
-            .setContents(new java.awt.datatransfer.StringSelection(text), null);
-        api.logging().logToOutput("分析结果已复制到剪贴板");
-    }
-
-    private void copyCurrentRequest() {
-        String content = firstSelectedHttpContent();
-        if (content == null || content.isBlank()) {
-            JOptionPane.showMessageDialog(this, "当前没有选中的请求可复制");
-            return;
-        }
-        java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
-            .setContents(new java.awt.datatransfer.StringSelection(content), null);
-        api.logging().logToOutput("请求报文已复制到剪贴板");
-    }
-
-    private void sendSelectedToIntruder() {
-        if (dataSource == null) {
-            return;
-        }
-        HttpRequestResponse rr = dataSource.selectedRequestResponse();
-        if (rr == null || rr.request() == null) {
-            JOptionPane.showMessageDialog(this, "当前没有选中的请求可发送");
-            return;
-        }
-        try {
-            api.intruder().sendToIntruder(rr.request());
-            api.logging().logToOutput("请求已发送到 Intruder");
-        } catch (Exception ex) {
-            api.logging().logToError("发送到 Intruder 失败: " + ex.getMessage());
-            JOptionPane.showMessageDialog(this, "发送到 Intruder 失败: " + ex.getMessage());
-        }
-    }
-
-    private String firstSelectedHttpContent() {
-        if (dataSource == null) return null;
-        int viewRow = dataSource.getSelectedViewRow();
-        if (viewRow < 0) return null;
-        Object selection = dataSource.selectionForViewRow(viewRow);
-        if (selection instanceof ScanResult sr && sr.getRequestResponse() != null) {
-            return HttpFormatter.formatHttpRequestResponse(sr.getRequestResponse());
-        }
-        if (selection instanceof RequestData rd) {
-            return rd.getFullRequestResponse();
-        }
-        return null;
     }
 
     // ========== 渲染工具 ==========

@@ -47,17 +47,16 @@ public class NotebookTool {
             @ToolParam(name = "domain", description = "目标域名，例如 example.com") String domain) {
         try {
             String d = NotebookStore.normalizeDomain(domain);
-            String content = store.read(d);
-            int version = store.latestVersion(d);
-            if (content == null || content.isBlank()) {
+            NotebookStore.ReadResult r = store.readWithMeta(d);
+            if (!r.exists()) {
                 return "Notebook 为空: " + d + "（尚无任何记录，latest_version=0）";
             }
-            String body = NotebookStore.stripEntryMarkers(content);
+            String body = NotebookStore.stripEntryMarkers(r.content());
             if (body.length() > MAX_READ_CHARS) {
                 body = body.substring(0, MAX_READ_CHARS)
                         + "\n...[内容已截断，请用 notebook_get_updates(domain, since_version) 按版本增量读取剩余内容]";
             }
-            return "Notebook: " + d + ".md\nlatest_version: " + version + "\n\n" + body;
+            return "Notebook: " + d + ".md\nlatest_version: " + r.version() + "\n\n" + body;
         } catch (Exception e) {
             return "Notebook 读取失败: " + e.getMessage();
         }

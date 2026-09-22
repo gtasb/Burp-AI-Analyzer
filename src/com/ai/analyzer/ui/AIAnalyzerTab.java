@@ -499,23 +499,21 @@ public class AIAnalyzerTab extends JPanel {
         topModePanel.add(analysisModeComboBox);
         panel.add(topModePanel, BorderLayout.NORTH);
 
-        JPanel controlPanel = new JPanel();
-        controlPanel.setLayout(new BoxLayout(controlPanel, BoxLayout.Y_AXIS));
-        JPanel controlRow1 = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 3));
-        JPanel controlRow2 = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 3));
+        // 被动扫描控件压成一行，减少「设置」框高度
+        JPanel controlRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 3));
 
         enablePassiveScanCheckBox = new JCheckBox("启用被动扫描", false);
         enablePassiveScanCheckBox.setToolTipText("启用后可以自动从HTTP History获取流量进行AI安全扫描");
         enablePassiveScanCheckBox.addActionListener(e -> {
             boolean enabled = enablePassiveScanCheckBox.isSelected();
             threadCountSpinner.setEnabled(enabled);
-            startPassiveScanButton.setEnabled(enabled && !passiveScanManager.isRunning());
-            stopPassiveScanButton.setEnabled(enabled && passiveScanManager.isRunning());
+            startPassiveScanButton.setEnabled(enabled && passiveScanManager != null && !passiveScanManager.isRunning());
+            stopPassiveScanButton.setEnabled(enabled && passiveScanManager != null && passiveScanManager.isRunning());
         });
-        controlRow1.add(enablePassiveScanCheckBox);
+        controlRow.add(enablePassiveScanCheckBox);
 
-        controlRow1.add(new JLabel("线程数:"));
-        SpinnerModel spinnerModel = new SpinnerNumberModel(10, 1, 50, 1);
+        controlRow.add(new JLabel("线程数:"));
+        SpinnerModel spinnerModel = new SpinnerNumberModel(3, 1, 50, 1);
         threadCountSpinner = new JSpinner(spinnerModel);
         threadCountSpinner.setEnabled(false);
         threadCountSpinner.setPreferredSize(new Dimension(60, 25));
@@ -524,41 +522,36 @@ public class AIAnalyzerTab extends JPanel {
                 passiveScanManager.setThreadCount((Integer) threadCountSpinner.getValue());
             }
         });
-        controlRow1.add(threadCountSpinner);
+        controlRow.add(threadCountSpinner);
 
         startPassiveScanButton = new JButton("开始扫描");
         startPassiveScanButton.setEnabled(false);
         startPassiveScanButton.addActionListener(e -> startPassiveScan());
-        controlRow1.add(startPassiveScanButton);
+        controlRow.add(startPassiveScanButton);
 
         stopPassiveScanButton = new JButton("停止扫描");
         stopPassiveScanButton.setEnabled(false);
         stopPassiveScanButton.addActionListener(e -> stopPassiveScan());
-        controlRow1.add(stopPassiveScanButton);
+        controlRow.add(stopPassiveScanButton);
 
         JButton clearPassiveScanButton = new JButton("清空结果");
         clearPassiveScanButton.addActionListener(e -> clearPassiveScanResults());
-        controlRow2.add(clearPassiveScanButton);
+        controlRow.add(clearPassiveScanButton);
 
         JButton resetTokenButton = new JButton("重置Token统计");
         resetTokenButton.setToolTipText("清零累计 Token 用量与预算状态（预算值本身保留）");
         resetTokenButton.addActionListener(e ->
                 com.ai.analyzer.util.TokenUsageTracker.instance().reset());
-        controlRow2.add(resetTokenButton);
-
-        JButton activeAuditButton = new JButton("主动审计选中");
-        activeAuditButton.setToolTipText("对结果列表中选中的请求发起 Burp Scanner 主动审计，完成后问题自动合并回列表");
-        activeAuditButton.addActionListener(e -> startActiveAuditForSelection());
-        controlRow2.add(activeAuditButton);
+        controlRow.add(resetTokenButton);
 
         auditQueueButton = new JButton("审计队列(0)");
         auditQueueButton.setToolTipText("被动扫描判定的高危结果自动进入待审计队列；点击一键对队列内全部目标发起 Burp 主动审计");
         auditQueueButton.setEnabled(false);
         auditQueueButton.addActionListener(e -> auditPendingQueue());
-        controlRow2.add(auditQueueButton);
+        controlRow.add(auditQueueButton);
 
-        controlPanel.add(controlRow1);
-        controlPanel.add(controlRow2);
+        JPanel controlPanel = new JPanel(new BorderLayout());
+        controlPanel.add(controlRow, BorderLayout.WEST);
 
         JPanel statusPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 5));
         passiveScanStatusLabel = new JLabel("就绪");
@@ -580,6 +573,10 @@ public class AIAnalyzerTab extends JPanel {
         passiveControlDetailsPanel = new JPanel(controlDetailCard);
         passiveControlDetailsPanel.add(passiveModeControlLine, CARD_PASSIVE);
         JPanel activeHintPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
+        JLabel activeHintLabel = new JLabel("主动模式无需扫描控制项，直接在下方输入框对话 / 粘贴报文 / 批量分析");
+        activeHintLabel.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        activeHintLabel.setForeground(new Color(0x666666));
+        activeHintPanel.add(activeHintLabel);
         passiveControlDetailsPanel.add(activeHintPanel, CARD_ACTIVE);
         controlDetailCard.show(passiveControlDetailsPanel, CARD_PASSIVE);
         panel.add(passiveControlDetailsPanel, BorderLayout.CENTER);
@@ -843,32 +840,6 @@ public class AIAnalyzerTab extends JPanel {
         int size = activeAuditManager.pendingQueueSize();
         auditQueueButton.setText("审计队列(" + size + ")");
         auditQueueButton.setEnabled(size > 0);
-    }
-
-    private void startActiveAuditForSelection() {
-        if (activeAuditManager == null || passiveScanTable == null) {
-            return;
-        }
-        int[] viewRows = passiveScanTable.getSelectedRows();
-        java.util.List<HttpRequestResponse> targets = new java.util.ArrayList<>();
-        for (int viewRow : viewRows) {
-            int modelRow = passiveScanTable.convertRowIndexToModel(viewRow);
-            Object idObj = passiveScanTableModel.getValueAt(modelRow, 0);
-            if (idObj instanceof Number) {
-                ScanResult result = passiveScanManager.getResultById(((Number) idObj).intValue());
-                if (result != null && result.getRequestResponse() != null) {
-                    targets.add(result.getRequestResponse());
-                }
-            }
-        }
-        if (targets.isEmpty()) {
-            passiveScanStatusLabel.setText("请先在结果列表中选择要审计的请求");
-            return;
-        }
-        int started = activeAuditManager.startAudit(targets);
-        if (started > 0) {
-            passiveScanStatusLabel.setText("主动审计已启动，共 " + started + " 个目标请求");
-        }
     }
 
     private void updatePassiveScanTable(ScanResult result) {
@@ -1139,7 +1110,6 @@ public class AIAnalyzerTab extends JPanel {
         JScrollPane resultScrollPane = new JScrollPane(localResultTextPane);
         resultScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         this.resultScrollPane = resultScrollPane;
-        panel.add(resultScrollPane, BorderLayout.CENTER);
 
         JPanel promptPanel = new JPanel(new BorderLayout());
         promptPanel.setBorder(BorderFactory.createTitledBorder("分析提示词"));
@@ -1152,7 +1122,12 @@ public class AIAnalyzerTab extends JPanel {
         JScrollPane promptScrollPane = new JScrollPane(localPromptArea);
         promptPanel.add(promptScrollPane, BorderLayout.CENTER);
 
-        panel.add(promptPanel, BorderLayout.SOUTH);
+        // “AI分析结果” 与 “分析提示词”区：垂直 JSplitPane，拖拽分隔条自由调节上下大小
+        JSplitPane resultPromptSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, resultScrollPane, promptPanel);
+        resultPromptSplit.setResizeWeight(0.75);
+        resultPromptSplit.setContinuousLayout(true);
+        resultPromptSplit.setOneTouchExpandable(true);
+        panel.add(resultPromptSplit, BorderLayout.CENTER);
 
         passiveModeResultTextPane = localResultTextPane;
         passiveScanResultPane = localResultTextPane;
@@ -1202,6 +1177,10 @@ public class AIAnalyzerTab extends JPanel {
         }
         if (passiveControlDetailsPanel != null && passiveControlDetailsPanel.getLayout() instanceof CardLayout) {
             ((CardLayout) passiveControlDetailsPanel.getLayout()).show(passiveControlDetailsPanel, active ? CARD_ACTIVE : CARD_PASSIVE);
+        }
+        // 主动模式下收起被动扫描控制区（CardLayout 仍按最大子卡尺寸计算，空卡会导致「设置」框留白过大）
+        if (passiveControlDetailsPanel != null) {
+            passiveControlDetailsPanel.setVisible(!active);
         }
         if (active) {
             resultTextPane = activeAnalysisPanel.getResultPane();
