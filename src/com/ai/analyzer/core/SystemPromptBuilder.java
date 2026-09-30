@@ -10,6 +10,9 @@ public class SystemPromptBuilder {
     private boolean enableSkills;
     private String ragMcpDocumentsPath;
     private String customBasePrompt;
+    private String pathWorkplaceRoot;
+    private String pathFileToolRoot;
+    private String pathNamespace;
 
     public SystemPromptBuilder() {}
 
@@ -21,6 +24,17 @@ public class SystemPromptBuilder {
     public SystemPromptBuilder enableSkills(boolean v) { this.enableSkills = v; return this; }
     public SystemPromptBuilder ragMcpDocumentsPath(String v) { this.ragMcpDocumentsPath = v; return this; }
     public SystemPromptBuilder customBasePrompt(String v) { this.customBasePrompt = v; return this; }
+
+    /**
+     * 注入本环境实测的路径事实：配置工作区根、文件工具实际根（含用户命名空间层）、
+     * 用户命名空间段。解决模型对「写入的文件在哪 / shell 在哪执行」的路径认知混乱。
+     */
+    public SystemPromptBuilder pathFacts(String workplaceRoot, String fileToolRoot, String namespaceSegment) {
+        this.pathWorkplaceRoot = workplaceRoot;
+        this.pathFileToolRoot = fileToolRoot;
+        this.pathNamespace = namespaceSegment;
+        return this;
+    }
 
     public static String getDefaultBasePrompt() {
         // HarnessAgent auto-injects <available_skills> block from workspace/skills/
@@ -168,6 +182,25 @@ public class SystemPromptBuilder {
                 - 发现新的攻击面、接口、参数、漏洞线索或验证结论时，及时 `notebook_write` 到对应域名
                 - 其他 Agent 的新写入通过广播提醒；用 `notebook_get_updates` 按版本增量获取
                 """);
+
+        // 本环境实测路径事实：解决模型「写入的文件在哪 / shell 在哪执行」的认知混乱
+        if (pathFileToolRoot != null && !pathFileToolRoot.isBlank()) {
+            String ws = (pathWorkplaceRoot != null && !pathWorkplaceRoot.isBlank())
+                    ? pathWorkplaceRoot : "(未配置 workplace)";
+            String ns = (pathNamespace != null && !pathNamespace.isBlank())
+                    ? pathNamespace : System.getProperty("user.name", "user");
+            p.append("""
+                    \n# 文件与执行路径（本环境实测值，必须遵守）
+                    - 配置工作区根（设置面板 workplace，也是「## Workspace」段 Workspace 行显示的目录）: %s
+                    - 文件工具实际根（read_file/write_file/edit_file/glob_files 等文件工具相对路径的解析基准；execute 不传 working_directory 时的默认工作目录）: %s
+                    - 两者相差一层用户命名空间「%s」：系统会自动把该段加到相对路径上，绝对路径不会被自动加。
+                    - 规则：
+                      1. 文件工具一律使用相对路径（相对「文件工具实际根」），这是唯一始终正确的写法。
+                      2. shell 中的相对路径同样以「文件工具实际根」为基准；python 等需要绝对路径时用「文件工具实际根」拼接（必须含 %s\\那一层）。
+                      3. execute 的 working_directory 留空即可，或传工作区内的相对路径；禁止传 D:\\ 这类盘符开头的绝对路径（校验拦不住，会落到错误目录）。
+                      4. 不要用「## Workspace」段的 Workspace 行拼绝对路径去访问刚写入的文件——那是未加命名空间的上级目录。
+                    """.formatted(ws, pathFileToolRoot, ns, ns));
+        }
 
         return p.toString();
     }

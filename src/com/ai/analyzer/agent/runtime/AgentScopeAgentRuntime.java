@@ -273,10 +273,35 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
      * 仍然保留，新的 agent 一初始化就把这些长期记忆重新加载回来，导致
      * 用户点击「新会话」后依然带着旧上下文继续跑。
      */
+    /**
+     * 有效工作区根：配置了 workplace 时即配置值；未配置时复刻 HarnessAgent.resolveDefaultWorkspace()
+     * 的回退链（agentscope.workspace 属性 → AGENTSCOPE_WORKSPACE 环境变量 → user.dir/.agentscope/workspace），
+     * 保证与 Harness 内部实际使用的 workspace 始终一致。
+     */
+    public static Path resolveEffectiveWorkspace(Path workspacePath) {
+        if (workspacePath != null) return workspacePath;
+        String prop = System.getProperty("agentscope.workspace");
+        if (prop != null && !prop.isBlank()) return Path.of(prop.strip());
+        String env = System.getenv("AGENTSCOPE_WORKSPACE");
+        if (env != null && !env.isBlank()) return Path.of(env.strip());
+        return Path.of(System.getProperty("user.dir")).resolve(".agentscope/workspace");
+    }
+
+    /**
+     * 文件工具实际根：workspace + 用户命名空间层。
+     *
+     * <p>相对路径经 {@code LocalFilesystem.applyNamespacePrefix} 后都落在这里；
+     * shell 默认 cwd（LocalFilesystemSpec.project → shellCwd）也对齐到它，
+     * 避免「模型写出的文件」与「execute 的默认工作目录」分属两棵树。
+     */
+    public static Path resolveFileToolRoot(Path workspacePath) {
+        return resolveEffectiveWorkspace(workspacePath)
+                .resolve(System.getProperty("user.name", "burp-user"));
+    }
+
     public static void purgePersistentSessionData(Path workspacePath) {
         if (workspacePath == null) return;
-        String userId = System.getProperty("user.name", "burp-user");
-        deleteRecursivelyQuietly(workspacePath.resolve(userId));
+        deleteRecursivelyQuietly(resolveFileToolRoot(workspacePath));
         deleteRecursivelyQuietly(workspacePath.resolve("agents").resolve(AGENT_NAME));
     }
 
@@ -438,6 +463,21 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
                     if (workspacePath != null) {
                         builder.workspace(workspacePath);
                     }
+                    // .project() 对齐：shell 默认 cwd 指向文件工具实际根（workspace 下的 user.name 子目录），
+                    // 而非 LocalFilesystemSpec 默认的 user.dir（Burp 安装目录）。
+                    // 该 spec 与 Harness 内部无 spec 时的兜底路径完全一致（resolveFilesystem:
+                    // new LocalFilesystemSpec() → toFilesystem），仅 project 字段不同。
+                    Path fileToolRoot = resolveFileToolRoot(workspacePath);
+                    try {
+                        // resolveExecuteCwd 直接返回 shellCwd 不建目录；「新会话」purge 会删掉
+                        // <workspace>\<user>，必须在 agent 构建时重建，否则 ProcessBuilder 启动失败
+                        Files.createDirectories(fileToolRoot);
+                    } catch (Exception e) {
+                        DebugContext.log("AgentScopeAgentRuntime", "file_root_mkdir_failed",
+                                Map.of("path", fileToolRoot.toString(), "error", String.valueOf(e.getMessage())));
+                    }
+                    builder.filesystem(new io.agentscope.harness.agent.filesystem.spec.LocalFilesystemSpec()
+                            .project(fileToolRoot));
                     if (toolkit != null) {
                         builder.toolkit(toolkit);
                     }

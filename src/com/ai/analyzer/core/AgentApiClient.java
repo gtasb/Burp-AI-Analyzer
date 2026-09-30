@@ -1080,15 +1080,25 @@ public class AgentApiClient {
     }
 
     private String buildSystemPrompt() {
+        String workplaceSetting = config.getWorkplaceDirectoryPath();
+        java.nio.file.Path configuredWorkspace = null;
+        if (workplaceSetting != null && !workplaceSetting.trim().isEmpty()) {
+            configuredWorkspace = java.nio.file.Path.of(workplaceSetting.trim());
+        }
         int hash = java.util.Objects.hash(
                 config.isEnableSearch(), config.isEnableMcp(),
                 config.isEnableRagMcp(), config.isEnableChromeMcp(),
                 config.isEnableFileSystemAccess(), config.isEnableSkills(),
                 config.getRagMcpDocumentsPath(),
-                config.getCustomSystemPrompt());
+                config.getCustomSystemPrompt(),
+                workplaceSetting);
         String cached = cachedSystemPrompt;
         if (cached != null && hash == cachedPromptConfigHash) return cached;
 
+        java.nio.file.Path workplaceRoot = com.ai.analyzer.agent.runtime.AgentScopeAgentRuntime
+                .resolveEffectiveWorkspace(configuredWorkspace);
+        java.nio.file.Path fileToolRoot = com.ai.analyzer.agent.runtime.AgentScopeAgentRuntime
+                .resolveFileToolRoot(configuredWorkspace);
         cached = new SystemPromptBuilder()
                 .enableSearch(config.isEnableSearch())
                 .enableMcp(config.isEnableMcp())
@@ -1098,6 +1108,9 @@ public class AgentApiClient {
                 .enableSkills(config.isEnableSkills())
                 .ragMcpDocumentsPath(config.getRagMcpDocumentsPath())
                 .customBasePrompt(config.getCustomSystemPrompt())
+                .pathFacts(workplaceRoot.toAbsolutePath().toString(),
+                        fileToolRoot.toAbsolutePath().toString(),
+                        System.getProperty("user.name", "burp-user"))
                 .build();
         cachedSystemPrompt = cached;
         cachedPromptConfigHash = hash;

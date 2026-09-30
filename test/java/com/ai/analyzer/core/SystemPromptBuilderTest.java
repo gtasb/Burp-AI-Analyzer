@@ -108,4 +108,38 @@ class SystemPromptBuilderTest {
             assertThat(prompt).contains("Role");
         }
     }
+
+    @Nested
+    @DisplayName("Path facts")
+    class PathFacts {
+
+        @Test
+        @DisplayName("should_contain_path_facts_section_when_set")
+        void should_contain_path_facts_section_when_set() {
+            String prompt = new SystemPromptBuilder()
+                    .pathFacts("D:\\ws", "D:\\ws\\alice", "alice")
+                    .build();
+            assertThat(prompt).contains("文件与执行路径");
+            assertThat(prompt).contains("D:\\ws");
+            assertThat(prompt).contains("D:\\ws\\alice");
+            assertThat(prompt).contains("alice");
+            assertThat(prompt).contains("working_directory");
+        }
+
+        @Test
+        @DisplayName("should_omit_path_facts_section_when_unset")
+        void should_omit_path_facts_section_when_unset() {
+            String prompt = new SystemPromptBuilder().build();
+            assertThat(prompt).doesNotContain("文件与执行路径");
+        }
+
+        @Test
+        @DisplayName("should_omit_path_facts_section_when_file_root_blank")
+        void should_omit_path_facts_section_when_file_root_blank() {
+            String prompt = new SystemPromptBuilder()
+                    .pathFacts("D:\\ws", "", "alice")
+                    .build();
+            assertThat(prompt).doesNotContain("文件与执行路径");
+        }
+    }
 }
