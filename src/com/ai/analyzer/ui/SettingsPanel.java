@@ -70,6 +70,8 @@ public class SettingsPanel {
     // CLI 标签页组件
     private JCheckBox enableCliToolCheckBox;
     private JCheckBox enableUnrestrictedCliToolCheckBox;
+    private JCheckBox enableFileSystemSandboxCheckBox;
+    private JLabel sandboxStateLabel;
     private JTextArea cliWhitelistArea;
     private JTextArea cliToolPromptArea;
     private JButton browseWorkplaceDirButton;
@@ -313,6 +315,31 @@ public class SettingsPanel {
 
         row++;
 
+        // 沙箱开关：只约束文件工具的路径，与上面的 CLI 命令白名单无关
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2; gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        enableFileSystemSandboxCheckBox = new JCheckBox("开启文件沙箱（限制文件工具只能访问工作区内路径）", false);
+        enableFileSystemSandboxCheckBox.setToolTipText(
+                "默认关闭：文件工具（read_file/write_file/edit_file/glob_files）可读写任意路径。"
+                        + "勾选后限制在工作区与 project 根内，写其它位置会被系统拒绝。");
+        enableFileSystemSandboxCheckBox.addActionListener(e -> {
+            boolean sandbox = enableFileSystemSandboxCheckBox.isSelected();
+            apiClient.setEnableFileSystemSandbox(sandbox);
+            updateSandboxStateLabel(sandbox);
+        });
+        panel.add(enableFileSystemSandboxCheckBox, gbc);
+
+        row++;
+
+        // 当前沙箱状态显式提示
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2; gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        sandboxStateLabel = new JLabel(" ");
+        sandboxStateLabel.setFont(new Font("Microsoft YaHei", Font.BOLD, 12));
+        panel.add(sandboxStateLabel, gbc);
+
+        row++;
+
         // 白名单
         gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 1; gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
@@ -351,9 +378,12 @@ public class SettingsPanel {
                 "说明:\n" +
                 "• 该工具会暴露一个名为 run_cli 的 Tool；默认情况下，AI 只能执行你在白名单中列出的命令。\n" +
                 "• 如果勾选“无限制调用”，将绕过白名单，允许 AI 直接执行系统内置命令和 PATH 中的任意命令。\n" +
-                "• 白名单支持：绝对路径、相对路径、以及系统 PATH 中的命令；也支持组合命令行（例如：python D:\\\\sqlmap.py）。\n" +
+                "• 白名单支持：绝对路径、相对路径、以及系统 PATH 中的命令；也支持组合命令行（例如：python D:\\sqlmap.py）。\n" +
                 "• 为避免上下文过长，命令输出会被自动截断。\n" +
-                "• 强烈建议：只加入只读/安全的工具，避免写入/破坏性命令。");
+                "• 强烈建议：只加入只读/安全的工具，避免写入/破坏性命令。\n" +
+                "• 权限模式固定为 BYPASS（最大权限）：所有工具调用直接执行，不会弹确认框，不会出现等待确认而卡住的情况。\n" +
+                "• 文件沙箱只约束「文件工具能访问哪些路径」，与上面的命令白名单、权限模式都无关；"
+                        + "shell 的 PATH 已自动补全，python/py/curl/where 可直接调用。");
         hint.setEditable(false);
         hint.setOpaque(false);
         hint.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
@@ -365,6 +395,7 @@ public class SettingsPanel {
         cliWhitelistArea.setEnabled(false);
         cliToolPromptArea.setEnabled(false);
         if (enableUnrestrictedCliToolCheckBox != null) enableUnrestrictedCliToolCheckBox.setEnabled(false);
+        updateSandboxStateLabel(false);
 
         // 底部填充
         row++;
@@ -373,6 +404,21 @@ public class SettingsPanel {
         panel.add(new JLabel(), gbc);
 
         return panel;
+    }
+
+    /**
+     * 显式展示当前沙箱状态。模型侧拿到的系统提示词也按同一状态生成
+     * （见 {@code SystemPromptBuilder.sandboxEnabled}），避免 UI 与实际行为不一致。
+     */
+    private void updateSandboxStateLabel(boolean sandboxEnabled) {
+        if (sandboxStateLabel == null) return;
+        if (sandboxEnabled) {
+            sandboxStateLabel.setText("当前：文件沙箱已开启 — 文件工具只能访问工作区内路径");
+            sandboxStateLabel.setForeground(new Color(180, 100, 0));
+        } else {
+            sandboxStateLabel.setText("当前：沙箱已关闭 — 文件工具可读写任意路径");
+            sandboxStateLabel.setForeground(new Color(0, 120, 0));
+        }
     }
 
     private JPanel createSkillsTabPanel() {
@@ -1765,6 +1811,7 @@ public class SettingsPanel {
             psClient.setEnablePythonScript(apiClient.isEnablePythonScript());
             psClient.setEnableCliTool(apiClient.getConfig().isEnableCliTool());
             psClient.setEnableUnrestrictedCliTool(apiClient.getConfig().isEnableUnrestrictedCliTool());
+            psClient.setEnableFileSystemSandbox(apiClient.isEnableFileSystemSandbox());
             psClient.setCliWhitelist(apiClient.getConfig().getCliWhitelist());
             psClient.setCliToolPrompt(apiClient.getConfig().getCliToolPrompt());
             psClient.setWorkplaceDirectoryPath(workplaceDirectoryField != null ? workplaceDirectoryField.getText().trim() : "");
@@ -1843,6 +1890,7 @@ public class SettingsPanel {
             // CLI 工具选项
             settings.setEnableCliTool(enableCliToolCheckBox != null && enableCliToolCheckBox.isSelected());
             settings.setEnableUnrestrictedCliTool(enableUnrestrictedCliToolCheckBox != null && enableUnrestrictedCliToolCheckBox.isSelected());
+            settings.setEnableFileSystemSandbox(enableFileSystemSandboxCheckBox != null && enableFileSystemSandboxCheckBox.isSelected());
             settings.setCliWhitelist(cliWhitelistArea != null ? cliWhitelistArea.getText() : "");
             settings.setCliToolPrompt(cliToolPromptArea != null ? cliToolPromptArea.getText() : "");
 
@@ -2095,6 +2143,10 @@ public class SettingsPanel {
             enableUnrestrictedCliToolCheckBox.setSelected(settings.isEnableUnrestrictedCliTool());
             enableUnrestrictedCliToolCheckBox.setEnabled(settings.isEnableCliTool());
         }
+        if (enableFileSystemSandboxCheckBox != null) {
+            enableFileSystemSandboxCheckBox.setSelected(settings.isEnableFileSystemSandbox());
+        }
+        updateSandboxStateLabel(settings.isEnableFileSystemSandbox());
         if (cliWhitelistArea != null) {
             cliWhitelistArea.setText(settings.getCliWhitelist());
             cliWhitelistArea.setEnabled(settings.isEnableCliTool() && !settings.isEnableUnrestrictedCliTool());
@@ -2219,6 +2271,11 @@ public class SettingsPanel {
             enableUnrestrictedCliToolCheckBox.setEnabled(settings.isEnableCliTool());
             apiClient.setEnableUnrestrictedCliTool(settings.isEnableUnrestrictedCliTool());
         }
+        if (enableFileSystemSandboxCheckBox != null) {
+            enableFileSystemSandboxCheckBox.setSelected(settings.isEnableFileSystemSandbox());
+            apiClient.setEnableFileSystemSandbox(settings.isEnableFileSystemSandbox());
+        }
+        updateSandboxStateLabel(settings.isEnableFileSystemSandbox());
         if (cliWhitelistArea != null) {
             cliWhitelistArea.setText(settings.getCliWhitelist());
             cliWhitelistArea.setEnabled(settings.isEnableCliTool() && !settings.isEnableUnrestrictedCliTool());

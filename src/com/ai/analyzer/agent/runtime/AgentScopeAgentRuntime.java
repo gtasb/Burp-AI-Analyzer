@@ -77,6 +77,8 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
     private final boolean enablePlanMode;
     private final boolean enableTaskList;
     private final int maxContextTokens;
+    /** 文件沙箱开关：true=限制在工作区/project 根内；false=文件工具可读写任意路径（默认） */
+    private final boolean sandboxEnabled;
     private final List<io.agentscope.core.skill.repository.AgentSkillRepository> skillRepositories;
 
     private volatile HarnessAgent harnessAgent;
@@ -97,6 +99,7 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         this.enablePlanMode = builder.enablePlanMode;
         this.enableTaskList = builder.enableTaskList;
         this.maxContextTokens = builder.maxContextTokens;
+        this.sandboxEnabled = builder.sandboxEnabled;
         this.skillRepositories = builder.skillRepositories;
     }
 
@@ -476,8 +479,21 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
                         DebugContext.log("AgentScopeAgentRuntime", "file_root_mkdir_failed",
                                 Map.of("path", fileToolRoot.toString(), "error", String.valueOf(e.getMessage())));
                     }
+                    // 沙箱开关：关闭（默认）时文件工具可读写任意路径；
+                    // 开启时限制在工作区 / project 根内。该开关只管路径，与权限模式（BYPASS）无关。
+                    //
+                    // inheritEnv(true) + 显式 PATH：Harness 默认 inheritEnv=false，
+                    // 子进程会沿用 Burp 自身的进程环境；部分 Burp 启动方式（快捷方式/启动器/服务）
+                    // 把 PATH 裁到只剩自带 JRE 的 bin，导致 python/py/where/curl 全部找不到，
+                    // 表现为「脚本写好了却执行不了」。这里显式补全 PATH 并要求继承其余环境变量。
+                    java.util.Map<String, String> shellEnv = com.ai.analyzer.tools.ShellEnvironment.augmentedEnv();
                     builder.filesystem(new io.agentscope.harness.agent.filesystem.spec.LocalFilesystemSpec()
-                            .project(fileToolRoot));
+                            .project(fileToolRoot)
+                            .mode(sandboxEnabled
+                                    ? io.agentscope.harness.agent.workspace.LocalFsMode.ROOTED
+                                    : io.agentscope.harness.agent.workspace.LocalFsMode.UNRESTRICTED)
+                            .inheritEnv(true)
+                            .env("PATH", shellEnv.get("PATH")));
                     if (toolkit != null) {
                         builder.toolkit(toolkit);
                     }
@@ -499,8 +515,10 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
                     builder.compaction(compactionCfg.build());
                     // 配置长期记忆（跨会话持久化）
                     builder.memory(MemoryConfig.defaults());
-                    // 权限模式设为 BYPASS：敏感工具（extension_info 等）直接执行，
-                    // 不再进入 ASKING 等待人工确认
+                    // 权限模式固定为 BYPASS（最大权限）：敏感工具（extension_info 等）直接执行，
+                    // 不进入 ASKING 等待人工确认。历史上 BYPASS 曾被写死以根除 ASKING 暂停卡死，
+                    // 故不提供 UI 切换。
+                    // 注：这与文件沙箱（LocalFsMode）无关——沙箱管路径，权限模式管工具是否放行。
                     builder.permissionContext(io.agentscope.core.permission.PermissionContextState.builder()
                             .mode(io.agentscope.core.permission.PermissionMode.BYPASS)
                             .build());
@@ -629,7 +647,18 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         private boolean enablePlanMode;
         private boolean enableTaskList;
         private int maxContextTokens;
+        private boolean sandboxEnabled;
         private List<io.agentscope.core.skill.repository.AgentSkillRepository> skillRepositories;
+
+        /**
+         * 是否启用文件沙箱。关闭时文件工具可读写任意路径（{@code LocalFsMode.UNRESTRICTED}），
+         * 开启时限制在工作区与 project 根内（{@code LocalFsMode.ROOTED}）。
+         * 不设时默认关闭沙箱。
+         */
+        public Builder sandboxEnabled(boolean sandboxEnabled) {
+            this.sandboxEnabled = sandboxEnabled;
+            return this;
+        }
 
         /** Active 和 Passive 模式均使用 HarnessAgent（持久会话 + workspace + skills） */
         public Builder mode(Mode mode) {

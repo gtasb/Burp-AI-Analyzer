@@ -51,6 +51,9 @@ public class ShellExecTool {
         try {
             ProcessBuilder pb = new ProcessBuilder(cmdLine);
             pb.redirectErrorStream(true);
+            // 补全 PATH：Burp 自身进程环境可能被裁剪（只剩自带 JRE 的 bin），
+            // 导致 python/py/where/curl 找不到。详见 ShellEnvironment。
+            pb.environment().putAll(ShellEnvironment.augmentedEnv());
 
             if (workingDirectory != null && !workingDirectory.trim().isEmpty()) {
                 java.io.File wd = new java.io.File(workingDirectory.trim());

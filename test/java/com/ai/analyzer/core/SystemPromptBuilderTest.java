@@ -142,4 +142,48 @@ class SystemPromptBuilderTest {
             assertThat(prompt).doesNotContain("文件与执行路径");
         }
     }
+
+    @Nested
+    @DisplayName("Sandbox statement")
+    class SandboxStatement {
+
+        private String prompt(boolean sandboxEnabled) {
+            return new SystemPromptBuilder()
+                    .pathFacts("D:\\ws", "D:\\ws\\alice", "alice")
+                    .sandboxEnabled(sandboxEnabled)
+                    .build();
+        }
+
+        @Test
+        @DisplayName("should_default_to_sandbox_off_when_not_configured")
+        void defaultsToSandboxOff() {
+            // 不设 sandboxEnabled 时必须按「关闭沙箱」表述，且不得出现开启沙箱的说法
+            assertThat(prompt(false)).contains("文件沙箱已关闭");
+            assertThat(prompt(false)).doesNotContain("文件沙箱已开启");
+        }
+
+        @Test
+        @DisplayName("should_state_sandbox_on_when_enabled")
+        void statesSandboxOn() {
+            String p = prompt(true);
+            assertThat(p).contains("文件沙箱已开启");
+            assertThat(p).contains("工作区内");
+            assertThat(p).doesNotContain("文件沙箱已关闭");
+        }
+
+        @Test
+        @DisplayName("should_mention_shell_is_not_path_limited_when_sandbox_on")
+        void mentionsShellWorkaroundWhenSandboxOn() {
+            // 沙箱只拦文件工具；shell 不受路径限制，需要写工作区外时应告知改用 execute
+            assertThat(prompt(true)).contains("execute");
+        }
+
+        @Test
+        @DisplayName("should_mention_augmented_path_when_sandbox_off")
+        void mentionsAugmentedPathWhenSandboxOff() {
+            // PATH 已补全是上一轮修复，提示词要让模型知道 python/curl 可直接用，不必绕道 MCP
+            assertThat(prompt(false)).contains("python");
+            assertThat(prompt(false)).contains("curl");
+        }
+    }
 }

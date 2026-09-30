@@ -100,6 +100,8 @@ public class PassiveScanApiClient {
     private boolean enableCliTool = false;
     @Getter
     private boolean enableUnrestrictedCliTool = false;
+    /** 镜像自主动端的文件沙箱开关（ReActAgent 无 Harness 文件系统，此处不改变行为） */
+    private boolean enableFileSystemSandbox = false;
     @Getter
     private String cliWhitelist = "";
     @Getter
@@ -293,6 +295,18 @@ public class PassiveScanApiClient {
 
     public void setEnableUnrestrictedCliTool(boolean v) {
         if (v != this.enableUnrestrictedCliTool) { this.enableUnrestrictedCliTool = v; invalidateAgentScopeRuntime(); }
+    }
+
+    /**
+     * 镜像主动端的文件沙箱开关。被动扫描走 ReActAgent（无 Harness 文件系统），
+     * 该开关在此不产生行为差异，仅保持配置同步，避免设置面板保存后两端状态漂移。
+     */
+    public void setEnableFileSystemSandbox(boolean v) {
+        this.enableFileSystemSandbox = v;
+    }
+
+    public boolean isEnableFileSystemSandbox() {
+        return this.enableFileSystemSandbox;
     }
 
     public void setCliWhitelist(String v) {
@@ -571,6 +585,7 @@ public class PassiveScanApiClient {
         this.enablePythonScript = settings.isEnablePythonScript();
         this.enableCliTool = settings.isEnableCliTool();
         this.enableUnrestrictedCliTool = settings.isEnableUnrestrictedCliTool();
+        this.enableFileSystemSandbox = settings.isEnableFileSystemSandbox();
         this.cliWhitelist = settings.getCliWhitelist();
         this.cliToolPrompt = settings.getCliToolPrompt();
         this.enableSkills = settings.isEnableSkills();

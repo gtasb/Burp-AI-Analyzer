@@ -166,14 +166,39 @@ class PluginSettingsTest {
         }
     }
 
-    @Nested
-    @DisplayName("序列化兼容性")
+@Nested
+    @DisplayName("序列化兼容")
     class Serialization {
 
         @Test
         @DisplayName("should_be_serializable")
         void should_be_serializable() {
             assertThat(java.io.Serializable.class).isAssignableFrom(PluginSettings.class);
+        }
+
+        @Test
+        @DisplayName("should_default_sandbox_off_so_legacy_configs_keep_behavior")
+        void defaultsSandboxOff() {
+            // 旧配置文件反序列化后该字段为 false，等价于关闭沙箱，
+            // 与引入该开关之前的行为一致（文件工具可访问任意路径）
+            assertThat(new PluginSettings().isEnableFileSystemSandbox()).isFalse();
+        }
+
+        @Test
+        @DisplayName("should_round_trip_sandbox_flag")
+        void roundTripsSandboxFlag() throws Exception {
+            PluginSettings settings = new PluginSettings();
+            settings.setEnableFileSystemSandbox(true);
+
+            java.io.File tmp = java.io.File.createTempFile("settings-test", ".dat");
+            tmp.deleteOnExit();
+            try (java.io.ObjectOutputStream oos =
+                         new java.io.ObjectOutputStream(new java.io.FileOutputStream(tmp))) {
+                oos.writeObject(settings);
+            }
+
+            PluginSettings loaded = PluginSettings.loadCompat(tmp);
+            assertThat(loaded.isEnableFileSystemSandbox()).isTrue();
         }
     }
 }

@@ -126,6 +126,7 @@ public class AgentConfig {
         this.enablePythonScript = other.enablePythonScript;
         this.enableCliTool = other.enableCliTool;
         this.enableUnrestrictedCliTool = other.enableUnrestrictedCliTool;
+        this.enableFileSystemSandbox = other.enableFileSystemSandbox;
         this.cliWhitelist = other.cliWhitelist;
         this.cliToolPrompt = other.cliToolPrompt;
         this.workplaceDirectoryPath = other.workplaceDirectoryPath;
@@ -288,6 +289,11 @@ public class AgentConfig {
     public void setEnablePythonScript(boolean enablePythonScript) { this.enablePythonScript = enablePythonScript; }
     public boolean isEnableCliTool() { return enableCliTool; }
     public void setEnableCliTool(boolean enableCliTool) { this.enableCliTool = enableCliTool; }
+
+    /** 文件沙箱：true=限制在工作区/project 根内；false=文件工具可读写任意路径（默认关闭） */
+    private boolean enableFileSystemSandbox = false;
+    public boolean isEnableFileSystemSandbox() { return enableFileSystemSandbox; }
+    public void setEnableFileSystemSandbox(boolean v) { this.enableFileSystemSandbox = v; }
     public boolean isEnableUnrestrictedCliTool() { return enableUnrestrictedCliTool; }
     public void setEnableUnrestrictedCliTool(boolean enableUnrestrictedCliTool) { this.enableUnrestrictedCliTool = enableUnrestrictedCliTool; }
     public String getCliWhitelist() { return cliWhitelist; }

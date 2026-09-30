@@ -13,6 +13,7 @@ public class SystemPromptBuilder {
     private String pathWorkplaceRoot;
     private String pathFileToolRoot;
     private String pathNamespace;
+    private boolean sandboxEnabled;
 
     public SystemPromptBuilder() {}
 
@@ -33,6 +34,17 @@ public class SystemPromptBuilder {
         this.pathWorkplaceRoot = workplaceRoot;
         this.pathFileToolRoot = fileToolRoot;
         this.pathNamespace = namespaceSegment;
+        return this;
+    }
+
+    /**
+     * 声明文件沙箱开关状态。默认 false（沙箱关闭，文件工具可访问任意路径）。
+     *
+     * <p>与权限模式是两回事：权限模式固定 BYPASS（管工具是否放行），
+     * 沙箱只管文件工具能碰哪些路径。
+     */
+    public SystemPromptBuilder sandboxEnabled(boolean sandboxEnabled) {
+        this.sandboxEnabled = sandboxEnabled;
         return this;
     }
 
@@ -194,14 +206,26 @@ public class SystemPromptBuilder {
                     - 配置工作区根（设置面板 workplace，也是「## Workspace」段 Workspace 行显示的目录）: %s
                     - 文件工具实际根（read_file/write_file/edit_file/glob_files 等文件工具相对路径的解析基准；execute 不传 working_directory 时的默认工作目录）: %s
                     - 两者相差一层用户命名空间「%s」：系统会自动把该段加到相对路径上，绝对路径不会被自动加。
+                    - %s
                     - 规则：
                       1. 文件工具一律使用相对路径（相对「文件工具实际根」），这是唯一始终正确的写法。
                       2. shell 中的相对路径同样以「文件工具实际根」为基准；python 等需要绝对路径时用「文件工具实际根」拼接（必须含 %s\\那一层）。
                       3. execute 的 working_directory 留空即可，或传工作区内的相对路径；禁止传 D:\\ 这类盘符开头的绝对路径（校验拦不住，会落到错误目录）。
                       4. 不要用「## Workspace」段的 Workspace 行拼绝对路径去访问刚写入的文件——那是未加命名空间的上级目录。
-                    """.formatted(ws, pathFileToolRoot, ns, ns));
+                      5. 脚本「写好了却执行不了」时，先确认解释器存在（python -V / where python），不要直接改用 MCP 绕路。
+                    """.formatted(ws, pathFileToolRoot, ns, sandboxStatement(), ns));
         }
 
         return p.toString();
+    }
+
+    /** 按沙箱开关生成一行环境事实。沙箱状态与权限模式无关，仅约束文件工具可访问的路径。 */
+    private String sandboxStatement() {
+        if (sandboxEnabled) {
+            return "文件沙箱已开启：文件工具只能访问「文件工具实际根」与配置工作区根内的路径，"
+                    + "写其它位置会被系统拒绝；需要写到工作区外时请改用 execute（shell 不受文件沙箱路径限制）。";
+        }
+        return "文件沙箱已关闭：文件工具可读写任意路径；shell 的 PATH 已补全，"
+                + "python/py/curl/where 等系统命令可直接调用，无需再绕道 MCP。";
     }
 }

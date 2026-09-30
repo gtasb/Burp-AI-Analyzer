@@ -4,7 +4,7 @@
 
 ```powershell
 mvn clean package           # full build + tests
-mvn test                    # 349 tests, ~2 min
+mvn test                    # 394 tests, ~2 min
 ```
 
 Requires JDK 21 + `--enable-preview` (Maven config handles this).
@@ -18,11 +18,37 @@ Requires JDK 21 + `--enable-preview` (Maven config handles this).
 
 ## Key dependencies
 
-`io.agentscope:agentscope-harness:2.0.0` — HarnessAgent provides native tools:
-- `execute_shell_command` (controlled by `enableCliTool` checkbox)
+`io.agentscope:agentscope-harness:2.0.3` (via `${agentscope.version}`) — HarnessAgent provides native tools:
+- `execute` (native shell tool; the actual `ShellExecuteTool.NAME` constant is `execute`, **not** `execute_shell_command` — controlled by `enableCliTool` checkbox)
 - `agent_spawn`/`agent_send`/`agent_list` (sub-agents, always enabled)
 - `read_file`/`write_file`/`edit_file`/`grep`/`glob` (filesystem, controlled by `enableFileSystemAccess`)
 - Tool results >16KB auto-evicted to disk, readable via `read_file`
+
+## Sandbox vs permission mode (two independent layers)
+
+- **File sandbox** (`LocalFilesystemSpec.mode`, set in `AgentScopeAgentRuntime`): constrains which
+  **paths** file tools may touch. `UNRESTRICTED` (default, sandbox off) = any path;
+  `ROOTED` = workspace/project roots only. Toggled by `enableFileSystemSandbox` in the CLI tab.
+- **Permission mode** (`PermissionContextState.mode`, hardcoded `BYPASS`): constrains whether a tool
+  call is **allowed to execute at all**, for every tool. AgentScope offers 5 (`DEFAULT`,
+  `ACCEPT_EDITS`, `EXPLORE`, `BYPASS`, `DONT_ASK`) but only non-interactive ones would be safe here:
+  the confirm handler is auto-approve (`-> true`), so `DEFAULT`/`ACCEPT_EDITS` would ask-then-auto-yes
+  and risk re-triggering the historical ASKING stall. Do not add a UI for them without a real dialog.
+
+## Shell environment
+
+`ShellEnvironment.augmentedEnv()` must be passed to every child process. Burp's own process PATH is
+sometimes truncated to just its bundled JRE (launchers/shortcuts/services), which makes `python`,
+`py`, `where`, `curl` all disappear. Two separate paths need it: the Harness spec
+(`.inheritEnv(true).env("PATH", ...)`) and our own `ShellExecTool` (passive scan).
+
+## File-tool path resolution (namespace)
+
+Relative paths passed to file tools get a **namespace prefix** (`user.name`) injected by
+`LocalFilesystem.applyNamespacePrefix`, so they land in `<workspace>\<user.name>\...`. Harness's
+`LocalFilesystemSpec.project` is set to that same directory so the shell's default cwd matches
+(`resolveFileToolRoot`). Without this alignment the agent writes a file and then cannot find it from
+`execute`. Absolute paths are NOT namespaced.
 
 ## Known bugs & quirks
 

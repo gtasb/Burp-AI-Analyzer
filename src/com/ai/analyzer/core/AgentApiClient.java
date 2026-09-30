@@ -493,6 +493,20 @@ public class AgentApiClient {
         }
     }
 
+    public boolean isEnableFileSystemSandbox() { return config.isEnableFileSystemSandbox(); }
+
+    /**
+     * 开关文件沙箱。关闭时文件工具可读写任意路径；开启时限制在工作区 / project 根内。
+     * 与权限模式无关：权限模式固定 BYPASS，沙箱只约束路径。
+     */
+    public void setEnableFileSystemSandbox(boolean enableFileSystemSandbox) {
+        if (config.isEnableFileSystemSandbox() != enableFileSystemSandbox) {
+            config.setEnableFileSystemSandbox(enableFileSystemSandbox);
+            invalidateAgentScopeRuntime();
+            logInfo("文件沙箱已" + (enableFileSystemSandbox ? "开启（限制在工作区内）" : "关闭（文件工具可访问任意路径）"));
+        }
+    }
+
     public void setCliWhitelist(String v) {
         if (v == null) v = "";
         if (!v.equals(config.getCliWhitelist())) {
@@ -675,6 +689,8 @@ public class AgentApiClient {
                 // 注：被动扫描（ReActAgent 无内置 shell）仍在 PassiveScanApiClient 注册 ShellExecTool。
                 logInfo("使用 AgentScope 内置 execute_shell_command 工具");
             }
+            // 文件沙箱开关（只管路径，与 BYPASS 权限模式无关）
+            runtimeBuilder.sandboxEnabled(config.isEnableFileSystemSandbox());
             // 上下文 Token 预算：通过 maxTokens 配置传给 HarnessAgent 和 CompactionConfig
             String maxTokens = config.getMaxTokens();
             if (maxTokens != null && !maxTokens.isBlank()) {
@@ -793,6 +809,7 @@ public class AgentApiClient {
         config.setGoogleSearchCsi(settings.getGoogleSearchCsi());
         config.setEnableCliTool(settings.isEnableCliTool());
         config.setEnableUnrestrictedCliTool(settings.isEnableUnrestrictedCliTool());
+        config.setEnableFileSystemSandbox(settings.isEnableFileSystemSandbox());
         config.setBurpMcpAuthorization(settings.getBurpMcpAuthorization());
         config.setCliWhitelist(settings.getCliWhitelist());
         config.setCliToolPrompt(settings.getCliToolPrompt());
@@ -1091,7 +1108,8 @@ public class AgentApiClient {
                 config.isEnableFileSystemAccess(), config.isEnableSkills(),
                 config.getRagMcpDocumentsPath(),
                 config.getCustomSystemPrompt(),
-                workplaceSetting);
+                workplaceSetting,
+                config.isEnableFileSystemSandbox());
         String cached = cachedSystemPrompt;
         if (cached != null && hash == cachedPromptConfigHash) return cached;
 
@@ -1111,6 +1129,7 @@ public class AgentApiClient {
                 .pathFacts(workplaceRoot.toAbsolutePath().toString(),
                         fileToolRoot.toAbsolutePath().toString(),
                         System.getProperty("user.name", "burp-user"))
+                .sandboxEnabled(config.isEnableFileSystemSandbox())
                 .build();
         cachedSystemPrompt = cached;
         cachedPromptConfigHash = hash;
