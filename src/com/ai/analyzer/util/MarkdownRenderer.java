@@ -590,39 +590,11 @@ public class MarkdownRenderer {
         final Color oddBg  = t.tableOddBg;
         final Color cellFg = t.tableCellFg;
         final Font rendererFont = cellFont;
-        jTable.setDefaultRenderer(Object.class, new javax.swing.table.TableCellRenderer() {
-            @Override
-            public Component getTableCellRendererComponent(
-                    JTable tbl, Object value, boolean sel, boolean focus, int row, int col) {
-                JTextArea area = new JTextArea(value != null ? value.toString() : "");
-                area.setFont(rendererFont);
-                area.setLineWrap(true);
-                area.setWrapStyleWord(true);
-                area.setOpaque(true);
-                area.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
-                area.setBackground(sel ? tbl.getSelectionBackground() : (row % 2 == 0 ? evenBg : oddBg));
-                area.setForeground(sel ? tbl.getSelectionForeground() : cellFg);
-                area.setToolTipText(value != null ? value.toString() : "");
 
-                int width = Math.max(40, tbl.getColumnModel().getColumn(col).getWidth() - 8);
-                area.setSize(width, Short.MAX_VALUE);
-                int preferredHeight = Math.max(28, area.getPreferredSize().height + 8);
-                if (tbl.getRowHeight(row) != preferredHeight) {
-                    tbl.setRowHeight(row, preferredHeight);
-                }
-                return area;
-            }
-        });
-
-        // 表头样式
-        JTableHeader tableHeader = jTable.getTableHeader();
-        tableHeader.setFont(headerFont);
-        tableHeader.setBackground(t.tableHeaderBg);
-        tableHeader.setForeground(t.tableHeaderFg);
-        tableHeader.setReorderingAllowed(false);
-
-        // --- 自动计算列宽（基于 FontMetrics 估算，每列最宽内容决定，上限 400px）---
-        // 使用临时 FontMetrics 估算（Consolas 12pt：ASCII ~7px/char，CJK ~14px/char）
+        // --- 先算列宽，再据此一次性量出每行高度 ---
+        // 旧实现在 cell renderer 里调用 setRowHeight（绘制副作用），
+        // 而 JTable 嵌在 JTextPane 中往往拿不到完整 layout pass，
+        // 行高停留在初始 28px，多行单元格内容被截断。
         final int CHAR_PX = 7;
         final int CJK_PX  = 14;
         final int CELL_PAD = 16;
@@ -655,19 +627,80 @@ public class MarkdownRenderer {
 
         for (int c = 0; c < numCols; c++) {
             jTable.getColumnModel().getColumn(c).setPreferredWidth(widths[c]);
+            jTable.getColumnModel().getColumn(c).setWidth(widths[c]);
         }
 
-        // --- 包装进 JScrollPane，总宽限制，窄面板内水平滚动 ---
+        // 用离屏 Graphics 精确量高：按列宽换行后的实际高度，而不是固定 28px
+        int totalHeight = 0;
+        java.awt.Graphics2D g2 = null;
+        try {
+            java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(1, 1,
+                    java.awt.image.BufferedImage.TYPE_INT_ARGB);
+            g2 = img.createGraphics();
+            g2.setFont(cellFont);
+            for (int r = 0; r < rowData.length; r++) {
+                int maxLines = 1;
+                for (int c = 0; c < numCols; c++) {
+                    String txt = rowData[r][c] != null ? rowData[r][c].toString() : "";
+                    int avail = Math.max(20, widths[c] - 12);
+                    // 估算该单元格在给定列宽下的行数
+                    int lines = estimateWrappedLines(txt, avail, cellFont, g2);
+                    maxLines = Math.max(maxLines, lines);
+                }
+                int lineH = g2.getFontMetrics(cellFont).getHeight();
+                int rowH = Math.max(28, maxLines * lineH + 10);
+                jTable.setRowHeight(r, rowH);
+                totalHeight += rowH + 1;
+            }
+        } finally {
+            if (g2 != null) g2.dispose();
+        }
+        if (rowData.length == 0) {
+            totalHeight = 28;
+        }
+
+        jTable.setDefaultRenderer(Object.class, new javax.swing.table.TableCellRenderer() {
+            @Override
+            public Component getTableCellRendererComponent(
+                    JTable tbl, Object value, boolean sel, boolean focus, int row, int col) {
+                JTextArea area = new JTextArea(value != null ? value.toString() : "");
+                area.setFont(rendererFont);
+                area.setLineWrap(true);
+                area.setWrapStyleWord(true);
+                area.setOpaque(true);
+                area.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
+                area.setBackground(sel ? tbl.getSelectionBackground() : (row % 2 == 0 ? evenBg : oddBg));
+                area.setForeground(sel ? tbl.getSelectionForeground() : cellFg);
+                area.setToolTipText(value != null ? value.toString() : "");
+                return area;
+            }
+        });
+
+        // 表头样式
+        JTableHeader tableHeader = jTable.getTableHeader();
+        tableHeader.setFont(headerFont);
+        tableHeader.setBackground(t.tableHeaderBg);
+        tableHeader.setForeground(t.tableHeaderFg);
+        tableHeader.setReorderingAllowed(false);
+
+        // --- 包装进 JScrollPane：宽度受上限约束，窄面板内水平滚动 ---
+        // 高度按已算好的行高总和决定（旧实现用初始 rowHeight=28 去乘行数，
+        // 多行单元格会被截断），并给出行数很多时的滚动上限。
         int viewW = Math.min(totalWidth + 4, MAX_VIEW_PX);
-        int rowH   = jTable.getRowHeight();
-        int hdrH   = tableHeader.getPreferredSize().height > 0
+        int hdrH = tableHeader.getPreferredSize().height > 0
                 ? tableHeader.getPreferredSize().height : 26;
-        int viewH  = Math.min(hdrH + rowH * Math.max(1, jTable.getRowCount()) + 80, 420);
+        int viewH = Math.min(hdrH + totalHeight + 4, 600);
 
         JScrollPane scrollPane = new JScrollPane(jTable,
                 JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
                 JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
         scrollPane.setPreferredSize(new Dimension(viewW, viewH));
+        // 嵌在 JTextPane 里的组件不一定自动完成 layout pass，
+        // 手动 setSize + validate 让表格立刻按算出的行高/列宽显示
+        scrollPane.setSize(viewW, viewH);
+        jTable.setSize(totalWidth, Math.max(totalHeight, 28));
+        scrollPane.validate();
+        jTable.validate();
         scrollPane.setBorder(BorderFactory.createLineBorder(t.tableBorder, 1));
         scrollPane.getViewport().setBackground(t.tableEvenBg);
 
@@ -682,8 +715,7 @@ public class MarkdownRenderer {
     }
 
     /** 估算文本渲染像素宽度（不依赖 Graphics 上下文）。 */
-    private static int estimateTextPx(String text, int asciiPx, int cjkPx) {
-        if (text == null || text.isEmpty()) return 0;
+    private static int estimateTextPx(String text, int asciiPx, int cjkPx) {        if (text == null || text.isEmpty()) return 0;
         int px = 0;
         for (int i = 0; i < text.length(); ) {
             int cp = text.codePointAt(i);
@@ -701,6 +733,43 @@ public class MarkdownRenderer {
             i += Character.charCount(cp);
         }
         return px;
+    }
+
+    /**
+     * 估算文本在给定像素宽度下换行后的行数（离屏量测，不用绘制副作用）。
+     *
+     * <p>用于在渲染前就确定表格每行高度——嵌在 JTextPane 里的 JTable 通常拿不到
+     * 完整 layout pass，事后再用 cell renderer 调 setRowHeight 已经太晚。
+     */
+    private static int estimateWrappedLines(String text, int availPx, Font font, Graphics2D g2) {
+        if (text == null || text.isEmpty()) return 1;
+        int maxAvail = Math.max(20, availPx);
+        java.awt.FontMetrics fm = g2.getFontMetrics(font);
+
+        int lines = 0;
+        // 按硬换行分段，逐段做贪心折行
+        for (String segment : text.split("\\r?\\n", -1)) {
+            if (segment.isEmpty()) {
+                lines++;
+                continue;
+            }
+            int lineCount = 1;
+            int lineWidth = 0;
+            for (int i = 0; i < segment.length(); ) {
+                int cp = segment.codePointAt(i);
+                int charCount = Character.charCount(cp);
+                int cw = fm.charWidth(cp);
+                if (lineWidth + cw > maxAvail && lineWidth > 0) {
+                    lineCount++;
+                    lineWidth = cw;
+                } else {
+                    lineWidth += cw;
+                }
+                i += charCount;
+            }
+            lines += lineCount;
+        }
+        return Math.max(1, lines);
     }
 
     // ======================== 内联内容渲染 ========================

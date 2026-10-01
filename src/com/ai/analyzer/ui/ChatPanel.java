@@ -688,7 +688,12 @@ public class ChatPanel extends JPanel {
 
     private void addToSharedHistory(String sender, String content, boolean isUser) {
         apiClient.addChatUiEntry(sender, content, isUser);
-        lastSyncedHistorySize = apiClient.getSharedChatUiHistorySize();
+        // 注意：这里**不能**推进 lastSyncedHistorySize。
+        // 它是「已渲染到哪一条」的游标，由 syncChatAreaFromSharedHistory() 在渲染后自行推进。
+        // 曾经在此处同步赋值，导致紧随其后的 sync 直接命中
+        // 「currentSize <= lastSyncedHistorySize」提前 return，
+        // 消息已写入共享历史与历史文件、却从不渲染——只有重载插件后
+        // loadChatHistory() 重新读文件才能看到，表现为「发出去的消息不显示」。
     }
 
     private void debouncedSave() {
@@ -707,12 +712,25 @@ public class ChatPanel extends JPanel {
     private void syncChatAreaFromSharedHistory() {
         int currentSize = apiClient.getSharedChatUiHistorySize();
         resetDefaultParagraphAlignment();
+
+        // 共享历史上限 MAX_SHARED_UI_HISTORY，超出后 addChatUiEntry 会裁掉最旧条目，
+        // 此时下标发生偏移，游标会比列表更长。若不处理，currentSize <= lastSyncedHistorySize
+        // 会永久成立，后续消息再也不渲染。这里直接从当前历史整体重建一次。
+        if (currentSize < lastSyncedHistorySize) {
+            lastSyncedHistorySize = 0;
+            try {
+                chatArea.setText("");
+            } catch (Exception ignored) { }
+        }
+
         if (currentSize <= lastSyncedHistorySize) return;
         for (int i = lastSyncedHistorySize; i < currentSize; i++) {
             Object[] entry = apiClient.getSharedChatUiHistoryEntry(i);
+            if (entry == null || entry.length < 3) continue;
             String sender = (String) entry[0];
             String content = (String) entry[1];
             boolean isUser = (Boolean) entry[2];
+            if (content == null) continue;
             if ("AI助手".equals(sender) && content.length() > 100) {
                 appendMarkdownToChat(sender, content);
             } else {
