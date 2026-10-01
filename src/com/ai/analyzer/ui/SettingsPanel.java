@@ -69,7 +69,6 @@ public class SettingsPanel {
     private JCheckBox enablePythonScriptCheckbox;
     // CLI 标签页组件
     private JCheckBox enableCliToolCheckBox;
-    private JCheckBox enableUnrestrictedCliToolCheckBox;
     private JCheckBox enableFileSystemSandboxCheckBox;
     private JLabel sandboxStateLabel;
     private JTextArea cliWhitelistArea;
@@ -170,7 +169,6 @@ public class SettingsPanel {
     public boolean isPreScanEnabled() { return enablePreScanCheckbox != null && enablePreScanCheckbox.isSelected(); }
     public boolean isPythonScriptEnabled() { return enablePythonScriptCheckbox != null && enablePythonScriptCheckbox.isSelected(); }
     public boolean isCliToolEnabled() { return enableCliToolCheckBox != null && enableCliToolCheckBox.isSelected(); }
-    public boolean isUnrestrictedCliToolEnabled() { return enableUnrestrictedCliToolCheckBox != null && enableUnrestrictedCliToolCheckBox.isSelected(); }
     public String getCliWhitelist() { return cliWhitelistArea != null ? cliWhitelistArea.getText() : ""; }
     public String getCliToolPrompt() { return cliToolPromptArea != null ? cliToolPromptArea.getText() : ""; }
     public boolean isSkillsEnabled() { return enableSkillsCheckBox != null && enableSkillsCheckBox.isSelected(); }
@@ -290,32 +288,18 @@ public class SettingsPanel {
         gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2; gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
         enableCliToolCheckBox = new JCheckBox("启用 CLI 工具（允许 AI 调用本地命令）", false);
-        enableCliToolCheckBox.setToolTipText("启用后，AI 可通过 run_cli 工具执行白名单内命令（建议谨慎开启）");
+        enableCliToolCheckBox.setToolTipText("启用后，AI 可通过 execute 工具执行本地 shell 命令（建议谨慎开启）");
         enableCliToolCheckBox.addActionListener(e -> {
             boolean enabled = enableCliToolCheckBox.isSelected();
-            if (cliWhitelistArea != null) cliWhitelistArea.setEnabled(enabled && (enableUnrestrictedCliToolCheckBox == null || !enableUnrestrictedCliToolCheckBox.isSelected()));
+            if (cliWhitelistArea != null) cliWhitelistArea.setEnabled(enabled);
             if (cliToolPromptArea != null) cliToolPromptArea.setEnabled(enabled);
-            if (enableUnrestrictedCliToolCheckBox != null) enableUnrestrictedCliToolCheckBox.setEnabled(enabled);
             apiClient.setEnableCliTool(enabled);
         });
         panel.add(enableCliToolCheckBox, gbc);
 
         row++;
 
-        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2; gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
-        enableUnrestrictedCliToolCheckBox = new JCheckBox("允许无限制调用任意系统内置命令行工具", false);
-        enableUnrestrictedCliToolCheckBox.setToolTipText("启用后将绕过白名单限制，AI 可直接调用系统内置命令及 PATH 中的任意命令，风险极高");
-        enableUnrestrictedCliToolCheckBox.addActionListener(e -> {
-            boolean unrestricted = enableUnrestrictedCliToolCheckBox.isSelected();
-            if (cliWhitelistArea != null) cliWhitelistArea.setEnabled(enableCliToolCheckBox != null && enableCliToolCheckBox.isSelected() && !unrestricted);
-            apiClient.setEnableUnrestrictedCliTool(unrestricted);
-        });
-        panel.add(enableUnrestrictedCliToolCheckBox, gbc);
-
-        row++;
-
-        // 沙箱开关：只约束文件工具的路径，与上面的 CLI 命令白名单无关
+        // 沙箱开关：只约束文件工具的路径，与上面的 CLI 命令无关
         gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2; gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
         enableFileSystemSandboxCheckBox = new JCheckBox("开启文件沙箱（限制文件工具只能访问工作区内路径）", false);
@@ -340,15 +324,16 @@ public class SettingsPanel {
 
         row++;
 
-        // 白名单
+        // 工具白名单
         gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 1; gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        panel.add(new JLabel("工具白名单（每行一个）:"), gbc);
+        panel.add(new JLabel("推荐工具（每行一个）:"), gbc);
 
         cliWhitelistArea = new JTextArea(10, 60);
         cliWhitelistArea.setFont(new Font("Consolas", Font.PLAIN, 12));
         cliWhitelistArea.setLineWrap(false);
-        cliWhitelistArea.setToolTipText("每行一个可执行命令：可绝对/相对路径或环境变量命令；也可组合，如：C:\\\\venv\\\\Scripts\\\\python.exe D:\\\\sqlmap.py");
+        cliWhitelistArea.setToolTipText("每行一个推荐给 AI 使用的工具，如 python、curl、nmap、sqlmap。"
+                + "注意：这只是写进系统提示词的软性建议，execute 工具本身不拦截任何命令。");
         JScrollPane whitelistScroll = new JScrollPane(cliWhitelistArea);
         gbc.gridx = 1; gbc.fill = GridBagConstraints.BOTH; gbc.weightx = 1.0;
         panel.add(whitelistScroll, gbc);
@@ -376,14 +361,12 @@ public class SettingsPanel {
         gbc.weightx = 1.0;
         JTextArea hint = new JTextArea(
                 "说明:\n" +
-                "• 该工具会暴露一个名为 run_cli 的 Tool；默认情况下，AI 只能执行你在白名单中列出的命令。\n" +
-                "• 如果勾选“无限制调用”，将绕过白名单，允许 AI 直接执行系统内置命令和 PATH 中的任意命令。\n" +
-                "• 白名单支持：绝对路径、相对路径、以及系统 PATH 中的命令；也支持组合命令行（例如：python D:\\sqlmap.py）。\n" +
+                "• 启用后，AI 可通过 execute 工具执行任意本地 shell 命令（cmd.exe / sh），没有命令级白名单。\n" +
                 "• 为避免上下文过长，命令输出会被自动截断。\n" +
-                "• 强烈建议：只加入只读/安全的工具，避免写入/破坏性命令。\n" +
                 "• 权限模式固定为 BYPASS（最大权限）：所有工具调用直接执行，不会弹确认框，不会出现等待确认而卡住的情况。\n" +
-                "• 文件沙箱只约束「文件工具能访问哪些路径」，与上面的命令白名单、权限模式都无关；"
-                        + "shell 的 PATH 已自动补全，python/py/curl/where 可直接调用。");
+                "• 文件沙箱只约束「文件工具能访问哪些路径」，与命令执行、权限模式都无关；"
+                        + "shell 的 PATH 已自动补全，python/py/curl/where 可直接调用。\n" +
+                "• 「工具提示词」是写给 AI 的额外约束（软性提示），用于限制它的行为习惯，不是强制拦截。");
         hint.setEditable(false);
         hint.setOpaque(false);
         hint.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
@@ -394,7 +377,6 @@ public class SettingsPanel {
         // 初始禁用（等 applySettings 再打开）
         cliWhitelistArea.setEnabled(false);
         cliToolPromptArea.setEnabled(false);
-        if (enableUnrestrictedCliToolCheckBox != null) enableUnrestrictedCliToolCheckBox.setEnabled(false);
         updateSandboxStateLabel(false);
 
         // 底部填充
@@ -1810,7 +1792,6 @@ public class SettingsPanel {
             // Python 脚本执行配置
             psClient.setEnablePythonScript(apiClient.isEnablePythonScript());
             psClient.setEnableCliTool(apiClient.getConfig().isEnableCliTool());
-            psClient.setEnableUnrestrictedCliTool(apiClient.getConfig().isEnableUnrestrictedCliTool());
             psClient.setEnableFileSystemSandbox(apiClient.isEnableFileSystemSandbox());
             psClient.setCliWhitelist(apiClient.getConfig().getCliWhitelist());
             psClient.setCliToolPrompt(apiClient.getConfig().getCliToolPrompt());
@@ -1889,7 +1870,6 @@ public class SettingsPanel {
 
             // CLI 工具选项
             settings.setEnableCliTool(enableCliToolCheckBox != null && enableCliToolCheckBox.isSelected());
-            settings.setEnableUnrestrictedCliTool(enableUnrestrictedCliToolCheckBox != null && enableUnrestrictedCliToolCheckBox.isSelected());
             settings.setEnableFileSystemSandbox(enableFileSystemSandboxCheckBox != null && enableFileSystemSandboxCheckBox.isSelected());
             settings.setCliWhitelist(cliWhitelistArea != null ? cliWhitelistArea.getText() : "");
             settings.setCliToolPrompt(cliToolPromptArea != null ? cliToolPromptArea.getText() : "");
@@ -2139,17 +2119,13 @@ public class SettingsPanel {
         if (enableCliToolCheckBox != null) {
             enableCliToolCheckBox.setSelected(settings.isEnableCliTool());
         }
-        if (enableUnrestrictedCliToolCheckBox != null) {
-            enableUnrestrictedCliToolCheckBox.setSelected(settings.isEnableUnrestrictedCliTool());
-            enableUnrestrictedCliToolCheckBox.setEnabled(settings.isEnableCliTool());
-        }
         if (enableFileSystemSandboxCheckBox != null) {
             enableFileSystemSandboxCheckBox.setSelected(settings.isEnableFileSystemSandbox());
         }
         updateSandboxStateLabel(settings.isEnableFileSystemSandbox());
         if (cliWhitelistArea != null) {
             cliWhitelistArea.setText(settings.getCliWhitelist());
-            cliWhitelistArea.setEnabled(settings.isEnableCliTool() && !settings.isEnableUnrestrictedCliTool());
+            cliWhitelistArea.setEnabled(settings.isEnableCliTool());
         }
         if (cliToolPromptArea != null) {
             cliToolPromptArea.setText(settings.getCliToolPrompt());
@@ -2266,11 +2242,6 @@ public class SettingsPanel {
             enableCliToolCheckBox.setSelected(settings.isEnableCliTool());
             apiClient.setEnableCliTool(settings.isEnableCliTool());
         }
-        if (enableUnrestrictedCliToolCheckBox != null) {
-            enableUnrestrictedCliToolCheckBox.setSelected(settings.isEnableUnrestrictedCliTool());
-            enableUnrestrictedCliToolCheckBox.setEnabled(settings.isEnableCliTool());
-            apiClient.setEnableUnrestrictedCliTool(settings.isEnableUnrestrictedCliTool());
-        }
         if (enableFileSystemSandboxCheckBox != null) {
             enableFileSystemSandboxCheckBox.setSelected(settings.isEnableFileSystemSandbox());
             apiClient.setEnableFileSystemSandbox(settings.isEnableFileSystemSandbox());
@@ -2278,7 +2249,7 @@ public class SettingsPanel {
         updateSandboxStateLabel(settings.isEnableFileSystemSandbox());
         if (cliWhitelistArea != null) {
             cliWhitelistArea.setText(settings.getCliWhitelist());
-            cliWhitelistArea.setEnabled(settings.isEnableCliTool() && !settings.isEnableUnrestrictedCliTool());
+            cliWhitelistArea.setEnabled(settings.isEnableCliTool());
             apiClient.setCliWhitelist(settings.getCliWhitelist());
         }
         if (cliToolPromptArea != null) {

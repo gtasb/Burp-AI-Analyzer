@@ -798,7 +798,6 @@ public class AIAnalyzerTab extends JPanel {
 
             psClient.setEnablePythonScript(apiClient.isEnablePythonScript());
             psClient.setEnableCliTool(apiClient.getConfig().isEnableCliTool());
-            psClient.setEnableUnrestrictedCliTool(apiClient.getConfig().isEnableUnrestrictedCliTool());
             psClient.setEnableFileSystemSandbox(apiClient.isEnableFileSystemSandbox());
             psClient.setCliWhitelist(apiClient.getConfig().getCliWhitelist());
             psClient.setCliToolPrompt(apiClient.getConfig().getCliToolPrompt());

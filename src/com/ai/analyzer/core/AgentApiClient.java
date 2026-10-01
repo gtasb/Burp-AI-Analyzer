@@ -227,7 +227,6 @@ public class AgentApiClient {
     public boolean isEnableFileSystemAccess() { return config.isEnableFileSystemAccess(); }
     public boolean isEnableSkills() { return config.isEnableSkills(); }
     public boolean isEnablePythonScript() { return config.isEnablePythonScript(); }
-    public boolean isEnableUnrestrictedCliTool() { return config.isEnableUnrestrictedCliTool(); }
     public String getCustomParameters() { return config.getCustomParameters(); }
     public String getMaxTokens() { return config.getMaxTokens(); }
 
@@ -482,14 +481,6 @@ public class AgentApiClient {
             config.setEnableCliTool(enableCliTool);
             invalidateAgentScopeRuntime();
             logInfo("CLI 工具已" + (enableCliTool ? "启用" : "禁用"));
-        }
-    }
-
-    public void setEnableUnrestrictedCliTool(boolean enableUnrestrictedCliTool) {
-        if (config.isEnableUnrestrictedCliTool() != enableUnrestrictedCliTool) {
-            config.setEnableUnrestrictedCliTool(enableUnrestrictedCliTool);
-            invalidateAgentScopeRuntime();
-            logInfo("CLI 无限制模式已" + (enableUnrestrictedCliTool ? "启用" : "禁用"));
         }
     }
 
@@ -808,7 +799,6 @@ public class AgentApiClient {
         config.setGoogleSearchApiKey(settings.getGoogleSearchApiKey());
         config.setGoogleSearchCsi(settings.getGoogleSearchCsi());
         config.setEnableCliTool(settings.isEnableCliTool());
-        config.setEnableUnrestrictedCliTool(settings.isEnableUnrestrictedCliTool());
         config.setEnableFileSystemSandbox(settings.isEnableFileSystemSandbox());
         config.setBurpMcpAuthorization(settings.getBurpMcpAuthorization());
         config.setCliWhitelist(settings.getCliWhitelist());

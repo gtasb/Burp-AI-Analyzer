@@ -53,7 +53,6 @@ public class PluginSettings implements Serializable {
 
     // CLI 工具配置
     private boolean enableCliTool = false;
-    private boolean enableUnrestrictedCliTool = false;
     /** 文件沙箱：true=限制在工作区/project 根内；false=文件工具可读写任意路径（默认关闭） */
     private boolean enableFileSystemSandbox = false;
     private String cliWhitelist = "";
@@ -539,14 +538,6 @@ public class PluginSettings implements Serializable {
 
     public void setEnableCliTool(boolean enableCliTool) {
         this.enableCliTool = enableCliTool;
-    }
-
-    public boolean isEnableUnrestrictedCliTool() {
-        return enableUnrestrictedCliTool;
-    }
-
-    public void setEnableUnrestrictedCliTool(boolean enableUnrestrictedCliTool) {
-        this.enableUnrestrictedCliTool = enableUnrestrictedCliTool;
     }
 
     public boolean isEnableFileSystemSandbox() {

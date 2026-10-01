@@ -55,7 +55,6 @@ public class AgentConfig {
     private String skillsDirectoryPath = "";
     private boolean enablePythonScript = false;
     private boolean enableCliTool = false;
-    private boolean enableUnrestrictedCliTool = false;
     private String cliWhitelist = "";
     private String cliToolPrompt = "";
     private String workplaceDirectoryPath = "";
@@ -125,8 +124,6 @@ public class AgentConfig {
         this.skillsDirectoryPath = other.skillsDirectoryPath;
         this.enablePythonScript = other.enablePythonScript;
         this.enableCliTool = other.enableCliTool;
-        this.enableUnrestrictedCliTool = other.enableUnrestrictedCliTool;
-        this.enableFileSystemSandbox = other.enableFileSystemSandbox;
         this.cliWhitelist = other.cliWhitelist;
         this.cliToolPrompt = other.cliToolPrompt;
         this.workplaceDirectoryPath = other.workplaceDirectoryPath;
@@ -294,8 +291,6 @@ public class AgentConfig {
     private boolean enableFileSystemSandbox = false;
     public boolean isEnableFileSystemSandbox() { return enableFileSystemSandbox; }
     public void setEnableFileSystemSandbox(boolean v) { this.enableFileSystemSandbox = v; }
-    public boolean isEnableUnrestrictedCliTool() { return enableUnrestrictedCliTool; }
-    public void setEnableUnrestrictedCliTool(boolean enableUnrestrictedCliTool) { this.enableUnrestrictedCliTool = enableUnrestrictedCliTool; }
     public String getCliWhitelist() { return cliWhitelist; }
     public void setCliWhitelist(String cliWhitelist) { this.cliWhitelist = cliWhitelist != null ? cliWhitelist : ""; }
     public String getCliToolPrompt() { return cliToolPrompt; }

@@ -98,8 +98,6 @@ public class PassiveScanApiClient {
     private boolean enablePythonScript = false;
     @Getter
     private boolean enableCliTool = false;
-    @Getter
-    private boolean enableUnrestrictedCliTool = false;
     /** 镜像自主动端的文件沙箱开关（ReActAgent 无 Harness 文件系统，此处不改变行为） */
     private boolean enableFileSystemSandbox = false;
     @Getter
@@ -291,10 +289,6 @@ public class PassiveScanApiClient {
 
     public void setEnableCliTool(boolean v) {
         if (v != this.enableCliTool) { this.enableCliTool = v; invalidateAgentScopeRuntime(); }
-    }
-
-    public void setEnableUnrestrictedCliTool(boolean v) {
-        if (v != this.enableUnrestrictedCliTool) { this.enableUnrestrictedCliTool = v; invalidateAgentScopeRuntime(); }
     }
 
     /**
@@ -584,7 +578,6 @@ public class PassiveScanApiClient {
         this.enableFileSystemAccess = settings.isEnableFileSystemAccess();
         this.enablePythonScript = settings.isEnablePythonScript();
         this.enableCliTool = settings.isEnableCliTool();
-        this.enableUnrestrictedCliTool = settings.isEnableUnrestrictedCliTool();
         this.enableFileSystemSandbox = settings.isEnableFileSystemSandbox();
         this.cliWhitelist = settings.getCliWhitelist();
         this.cliToolPrompt = settings.getCliToolPrompt();
