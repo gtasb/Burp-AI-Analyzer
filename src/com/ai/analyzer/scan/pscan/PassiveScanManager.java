@@ -12,6 +12,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 
 /**
  * 被动扫描管理器 - 生产者消费者模型
@@ -86,8 +87,13 @@ public class PassiveScanManager {
     private Consumer<String> onStatusChanged;
     private Consumer<Integer> onProgressChanged;
     private Consumer<ScanResult> onNewRequestQueued; // 新请求入队回调
-    private Consumer<String> onStreamingChunk; // 流式输出回调（新增）
-    private volatile ScanResult currentStreamingScanResult; // 当前正在流式输出的扫描结果
+    /**
+     * 流式输出回调：(结果 id, 增量文本)。
+     *
+     * <p>必须带上结果 id：消费者线程池有多个线程并发扫描，共用一个「当前流式结果」字段
+     * 会互相覆盖，导致 A 请求的输出被丢弃或串到 B 请求的界面上。
+     */
+    private BiConsumer<Integer, String> onStreamingChunk;
     
     /**
      * 构造函数
@@ -175,19 +181,12 @@ public class PassiveScanManager {
     
     /**
      * 设置流式输出回调
-     * @param callback 接收流式输出文本块的回调函数
+     * @param callback 接收 (结果 id, 增量文本) 的回调函数
      */
-    public void setOnStreamingChunk(Consumer<String> callback) {
+    public void setOnStreamingChunk(BiConsumer<Integer, String> callback) {
         this.onStreamingChunk = callback;
     }
-    
-    /**
-     * 获取当前正在流式输出的扫描结果
-     */
-    public ScanResult getCurrentStreamingScanResult() {
-        return currentStreamingScanResult;
-    }
-    
+
     // ========== 生产者-消费者核心方法 ==========
     
     /**
@@ -506,15 +505,13 @@ public class PassiveScanManager {
             result.markScanning();
             notifyResultUpdated(result);
             
-            // 设置当前正在流式输出的扫描结果
-            currentStreamingScanResult = result;
-            
             // 调用 AI 分析（支持流式输出）：批次结果走序列级分析，单请求走单请求分析
+            // 增量文本始终带 result id，UI 侧按 id 归位，不依赖任何「当前流式结果」共享状态
+            final int resultId = result.getId();
             Consumer<String> streamHandler = chunk -> {
-                // 流式输出回调
-                if (onStreamingChunk != null && currentStreamingScanResult == result) {
+                if (onStreamingChunk != null) {
                     try {
-                        onStreamingChunk.accept(chunk);
+                        onStreamingChunk.accept(resultId, chunk);
                     } catch (Exception e) {
                         logError("流式输出回调异常: " + e.getMessage());
                     }
@@ -523,12 +520,7 @@ public class PassiveScanManager {
             String aiResponse = result.isBatch()
                 ? apiClient.analyzeBatch(result.getBatchRequests(), cancelFlag, streamHandler)
                 : apiClient.analyzeRequest(result.getRequestResponse(), cancelFlag, streamHandler);
-            
-            // 清除当前流式输出的扫描结果
-            if (currentStreamingScanResult == result) {
-                currentStreamingScanResult = null;
-            }
-            
+
             // 检查是否已取消
             if (cancelFlag.get()) {
                 result.markCancelled();
@@ -538,11 +530,6 @@ public class PassiveScanManager {
             }
             
         } catch (Exception e) {
-            // 清除当前流式输出的扫描结果
-            if (currentStreamingScanResult == result) {
-                currentStreamingScanResult = null;
-            }
-            
             if (cancelFlag.get()) {
                 result.markCancelled();
             } else {

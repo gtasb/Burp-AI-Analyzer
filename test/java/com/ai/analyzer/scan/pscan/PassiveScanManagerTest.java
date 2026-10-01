@@ -258,10 +258,11 @@ class PassiveScanManagerTest {
             manager.setOnStatusChanged(status -> {});
             manager.setOnProgressChanged(progress -> {});
             manager.setOnNewRequestQueued(result -> {});
-            manager.setOnStreamingChunk(chunk -> {});
+            // 流式回调按 (结果 id, 增量文本) 分流，便于 UI 侧按行归位
+            manager.setOnStreamingChunk((resultId, chunk) -> {});
             manager.setOnHighRiskResult(result -> {});
 
-            assertThat(manager.getCurrentStreamingScanResult()).isNull();
+            assertThat(manager).isNotNull();
         }
     }
 

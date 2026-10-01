@@ -41,7 +41,6 @@ public class AIAnalyzerTab extends JPanel {
     private HttpResponseEditor responseEditor;
     private JTextArea userPromptArea;
     private JTextPane resultTextPane;
-    private JScrollPane resultScrollPane;
     private JButton analyzeButton;
     private JButton clearButton;
     private JButton deleteRequestButton;
@@ -51,7 +50,6 @@ public class AIAnalyzerTab extends JPanel {
     private CardLayout centerModeCardLayout;
     private JPanel centerModeCardPanel;
     private JPanel passiveControlDetailsPanel;
-    private JTextPane passiveModeResultTextPane;
     private JTextArea passiveModePromptArea;
     private boolean activeModeSelected = false;
     private ActiveAnalysisPanel activeAnalysisPanel;
@@ -121,8 +119,28 @@ public class AIAnalyzerTab extends JPanel {
     private JTable passiveScanTable;
     private DefaultTableModel passiveScanTableModel;
     private JTextPane passiveScanResultPane;
-    private final StringBuilder passiveScanStreamBuffer = new StringBuilder();
-    private Integer currentStreamingId = null;
+    /** 被动扫描结果面板的滚动条（与 passiveScanResultPane 配套，不随模式切换而改指） */
+    private JScrollPane passiveScanScrollPane;
+    /**
+     * 每个结果 id 一份流式缓冲。
+     *
+     * <p>原先只有一个共享 StringBuilder + 一个 currentStreamingId：切换行会清空并把
+     * 不同请求的输出混在一起；并发扫描时后一个请求还会顶掉前一个的「当前流式结果」，
+     * 导致输出被丢弃。改为按 id 隔离后，切换行渲染对应缓冲，互不干扰。
+     */
+    private final java.util.Map<Integer, StringBuilder> pscanStreamBuffers = new java.util.concurrent.ConcurrentHashMap<>();
+    /** 增量渲染进度（已写入 JTextPane 的字符数），按结果 id 记录 */
+    private final java.util.Map<Integer, Integer> pscanRenderedLen = new java.util.concurrent.ConcurrentHashMap<>();
+    /** 当前已完整渲染（Markdown 快照）过的结果 id */
+    private final java.util.Set<Integer> pscanSnapshotDone = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** 流式缓冲上限，防止长时间被动扫描累积过多中间文本 */
+    private static final int MAX_STREAM_BUFFER_CHARS = 512 * 1024;
+    /** 流式渲染节流：纯文本追加间隔 */
+    private static final long PSCAN_PLAIN_MS = 150;
+    /** 流式渲染节流：完整 Markdown 快照间隔 */
+    private static final long PSCAN_MD_MS = 2000;
+    private final long[] pscanPlainTime = {0L};
+    private final long[] pscanMdTime = {0L};
     private static final String MODE_PASSIVE = "被动模式";
     private static final String MODE_ACTIVE = "主动模式";
     private static final String CARD_PASSIVE = "passive";
@@ -625,80 +643,126 @@ public class AIAnalyzerTab extends JPanel {
                 SwingUtilities.invokeLater(() -> updateTokenUsageLabel(snapshot)));
         updateTokenUsageLabel(com.ai.analyzer.util.TokenUsageTracker.instance().snapshot());
 
-        final long[] pscanPlainTime = {0L};
-        final long PSCAN_PLAIN_MS = 150;
-        final long[] pscanMdTime = {0L};
-        final long PSCAN_MD_MS = 2000;
-        final int[] pscanPlainLen = {0};
-        passiveScanManager.setOnStreamingChunk(chunk -> {
-            SwingUtilities.invokeLater(() -> {
-                if (passiveScanResultPane == null) return;
-                int viewRow = passiveScanTable.getSelectedRow();
-                if (viewRow < 0) return;
-
-                int modelRow = passiveScanTable.convertRowIndexToModel(viewRow);
-                Integer selectedId = (Integer) passiveScanTableModel.getValueAt(modelRow, 0);
-                ScanResult currentStreaming = passiveScanManager.getCurrentStreamingScanResult();
-                if (currentStreaming == null || selectedId == null || !selectedId.equals(currentStreaming.getId())) return;
-
-                if (currentStreamingId == null || !currentStreamingId.equals(selectedId)) {
-                    passiveScanStreamBuffer.setLength(0);
-                    pscanPlainLen[0] = 0;
-                    pscanMdTime[0] = 0;
-                    currentStreamingId = selectedId;
+        passiveScanManager.setOnStreamingChunk((resultId, chunk) -> {
+            if (resultId == null || chunk == null || chunk.isEmpty()) return;
+            // 增量文本先按 id 累积，无论当前选中哪一行都不丢
+            StringBuilder buf = pscanStreamBuffers.computeIfAbsent(resultId, k -> new StringBuilder());
+            synchronized (buf) {
+                if (buf.length() > MAX_STREAM_BUFFER_CHARS) {
+                    buf.delete(0, buf.length() - MAX_STREAM_BUFFER_CHARS);
                 }
-
-                passiveScanStreamBuffer.append(chunk);
-                long now = System.currentTimeMillis();
-
-                if (now - pscanMdTime[0] >= PSCAN_MD_MS) {
-                    pscanMdTime[0] = now;
-                    pscanPlainTime[0] = now;
-                    pscanPlainLen[0] = passiveScanStreamBuffer.length();
-                    String snapshot = passiveScanStreamBuffer.toString();
-                    try {
-                        MarkdownRenderer.appendMarkdownStreaming(passiveScanResultPane, snapshot, 0);
-                        if (isResultPaneAtBottom()) {
-                            passiveScanResultPane.setCaretPosition(passiveScanResultPane.getStyledDocument().getLength());
-                        }
-                    } catch (Exception e) {
-                        passiveScanResultPane.setText(snapshot);
-                    }
-                    return;
-                }
-
-                if (now - pscanPlainTime[0] < PSCAN_PLAIN_MS) return;
-                pscanPlainTime[0] = now;
-
-                try {
-                    int start = pscanPlainLen[0];
-                    String newText = passiveScanStreamBuffer.substring(start);
-                    pscanPlainLen[0] = passiveScanStreamBuffer.length();
-
-                    StyledDocument doc = passiveScanResultPane.getStyledDocument();
-                    javax.swing.text.Style plain = doc.getStyle("pscan_streaming");
-                    if (plain == null) {
-                        plain = doc.addStyle("pscan_streaming", null);
-                        javax.swing.text.StyleConstants.setFontFamily(plain, "Microsoft YaHei");
-                        javax.swing.text.StyleConstants.setFontSize(plain, 13);
-                        Color fg = UIManager.getColor("TextArea.foreground");
-                        if (fg != null) javax.swing.text.StyleConstants.setForeground(plain, fg);
-                    }
-                    doc.insertString(doc.getLength(), newText, plain);
-                    if (isResultPaneAtBottom()) {
-                        passiveScanResultPane.setCaretPosition(doc.getLength());
-                    }
-                } catch (Exception e) {
-                    try {
-                        passiveScanResultPane.setText(passiveScanStreamBuffer.toString());
-                    } catch (Exception ex) {
-                        api.logging().logToError("流式输出失败: " + ex.getMessage());
-                    }
-                }
-            });
+                buf.append(chunk);
+            }
+            SwingUtilities.invokeLater(() -> renderPscanStream(resultId));
         });
 
         syncApiConfigToPassiveScan();
+    }
+
+    /**
+     * 把某个结果 id 的流式文本渲染到结果面板——仅当该 id 正是当前选中行时才渲染。
+     *
+     * <p>节流策略：距上次完整 Markdown 快照超过 2s 时做一次全量快照渲染；否则只把新增部分
+     * 以纯文本追加，避免 Markdown 解析拖慢流式输出。{@code pscanRenderedLen} 按 id 记录已写入
+     * 长度，因此切换行再切回来能正确续写而不会重复或串行。
+     */
+    private void renderPscanStream(int resultId) {
+        if (passiveScanResultPane == null || passiveScanTable == null) return;
+        Integer selectedId = getSelectedPassiveScanId();
+        if (selectedId == null || selectedId.intValue() != resultId) return;
+
+        StringBuilder buf = pscanStreamBuffers.get(resultId);
+        if (buf == null) return;
+        String snapshot;
+        synchronized (buf) {
+            snapshot = buf.toString();
+        }
+        if (snapshot.isEmpty()) return;
+
+        long now = System.currentTimeMillis();
+        boolean needSnapshot = now - pscanMdTime[0] >= PSCAN_MD_MS || !pscanSnapshotDone.contains(resultId);
+        if (needSnapshot) {
+            pscanMdTime[0] = now;
+            pscanPlainTime[0] = now;
+            pscanRenderedLen.put(resultId, snapshot.length());
+            pscanSnapshotDone.add(resultId);
+            try {
+                MarkdownRenderer.appendMarkdownStreaming(passiveScanResultPane, snapshot, 0);
+                if (isPassiveResultPaneAtBottom()) {
+                    passiveScanResultPane.setCaretPosition(passiveScanResultPane.getStyledDocument().getLength());
+                }
+            } catch (Exception e) {
+                passiveScanResultPane.setText(snapshot);
+            }
+            return;
+        }
+
+        if (now - pscanPlainTime[0] < PSCAN_PLAIN_MS) return;
+        pscanPlainTime[0] = now;
+
+        try {
+            int start = pscanRenderedLen.getOrDefault(resultId, 0);
+            if (start > snapshot.length()) start = 0;
+            String newText = snapshot.substring(start);
+            pscanRenderedLen.put(resultId, snapshot.length());
+            if (newText.isEmpty()) return;
+
+            StyledDocument doc = passiveScanResultPane.getStyledDocument();
+            javax.swing.text.Style plain = doc.getStyle("pscan_streaming");
+            if (plain == null) {
+                plain = doc.addStyle("pscan_streaming", null);
+                javax.swing.text.StyleConstants.setFontFamily(plain, "Microsoft YaHei");
+                javax.swing.text.StyleConstants.setFontSize(plain, 13);
+                Color fg = UIManager.getColor("TextArea.foreground");
+                if (fg != null) javax.swing.text.StyleConstants.setForeground(plain, fg);
+            }
+            doc.insertString(doc.getLength(), newText, plain);
+            if (isPassiveResultPaneAtBottom()) {
+                passiveScanResultPane.setCaretPosition(doc.getLength());
+            }
+        } catch (Exception e) {
+            try {
+                passiveScanResultPane.setText(snapshot);
+            } catch (Exception ex) {
+                api.logging().logToError("流式输出失败: " + ex.getMessage());
+            }
+        }
+    }
+
+    /** 取当前选中行的结果 id；无选中返回 null。 */
+    private Integer getSelectedPassiveScanId() {
+        if (passiveScanTable == null || passiveScanTableModel == null) return null;
+        int viewRow = passiveScanTable.getSelectedRow();
+        if (viewRow < 0) return null;
+        int modelRow = passiveScanTable.convertRowIndexToModel(viewRow);
+        if (modelRow < 0 || modelRow >= passiveScanTableModel.getRowCount()) return null;
+        return (Integer) passiveScanTableModel.getValueAt(modelRow, 0);
+    }
+
+    /**
+     * 选中指定结果 id 所在行（按视图行定位，兼容已排序的表格）。
+     * 用于手动添加请求后立刻把焦点切过去，否则流式输出无处显示。
+     */
+    private void selectPassiveScanRow(int resultId) {
+        if (passiveScanTable == null || passiveScanTableModel == null) return;
+        for (int modelRow = 0; modelRow < passiveScanTableModel.getRowCount(); modelRow++) {
+            Object idObj = passiveScanTableModel.getValueAt(modelRow, 0);
+            if (idObj instanceof Integer id && id == resultId) {
+                int viewRow = passiveScanTable.convertRowIndexToView(modelRow);
+                if (viewRow >= 0) {
+                    passiveScanTable.setRowSelectionInterval(viewRow, viewRow);
+                    passiveScanTable.scrollRectToVisible(passiveScanTable.getCellRect(viewRow, 0, true));
+                }
+                return;
+            }
+        }
+    }
+
+    /** 释放某个结果 id 的流式缓冲（分析完成、结果已落到 ScanResult 后调用）。 */
+    private void discardPscanStreamBuffer(int resultId) {
+        pscanStreamBuffers.remove(resultId);
+        pscanRenderedLen.remove(resultId);
+        pscanSnapshotDone.remove(resultId);
     }
 
     private void syncApiConfigToPassiveScan() {
@@ -753,16 +817,17 @@ public class AIAnalyzerTab extends JPanel {
         }
     }
 
-    private boolean isResultPaneAtBottom() {
-        if (resultScrollPane == null) return false;
-        JScrollBar vbar = resultScrollPane.getVerticalScrollBar();
+    /**
+     * 被动扫描结果面板是否已滚到底部。
+     *
+     * <p>这里刻意不使用共享的 {@code resultScrollPane}/{@code resultTextPane}：
+     * 后者在切到主动模式后会改指主动分析面板，被动扫描若复用它，
+     * 自动跟随滚动判断的将是另一个面板的位置。
+     */
+    private boolean isPassiveResultPaneAtBottom() {
+        if (passiveScanScrollPane == null) return false;
+        JScrollBar vbar = passiveScanScrollPane.getVerticalScrollBar();
         return vbar.getMaximum() - vbar.getValue() - vbar.getVisibleAmount() < 80;
-    }
-
-    private void scrollResultToEndIfAtBottom() {
-        if (isResultPaneAtBottom()) {
-            resultTextPane.setCaretPosition(resultTextPane.getDocument().getLength());
-        }
     }
 
     private void startPassiveScan() {
@@ -911,26 +976,24 @@ public class AIAnalyzerTab extends JPanel {
         passiveScanTable.getColumnModel().getColumn(5).setCellRenderer(new RiskLevelCellRenderer());
 
         passiveScanTable.getSelectionModel().addListSelectionListener(e -> {
-            if (!e.getValueIsAdjusting()) {
-                int viewRow = passiveScanTable.getSelectedRow();
-                if (viewRow >= 0 && passiveScanManager != null) {
-                    int modelRow = passiveScanTable.convertRowIndexToModel(viewRow);
-                    Integer id = (Integer) passiveScanTableModel.getValueAt(modelRow, 0);
-                    if (id != null) {
-                        ScanResult result = passiveScanManager.getResultById(id);
-                        if (result != null) {
-                            Integer selectedId = id;
-                            if (currentStreamingId != null && !selectedId.equals(currentStreamingId)) {
-                                passiveScanStreamBuffer.setLength(0);
-                            }
-
-                            displayScanResult(result);
-                        }
+            if (e.getValueIsAdjusting()) return;
+            Integer id = getSelectedPassiveScanId();
+            if (id != null && passiveScanManager != null) {
+                ScanResult result = passiveScanManager.getResultById(id);
+                if (result != null) {
+                    // 优先显示该行已累积的流式文本（分析中）；否则回落到 ScanResult 里的最终结果。
+                    // 这样切换行不会把不同请求的输出混在一起。
+                    StringBuilder buf = pscanStreamBuffers.get(id);
+                    if (buf != null && buf.length() > 0 && result.getAnalysisResult() == null) {
+                        passiveScanResultPane.setText("");
+                        renderPscanStream(id);
+                    } else {
+                        displayScanResult(result);
                     }
-                } else {
-                    clearHttpEditors();
-                    passiveScanResultPane.setText("");
                 }
+            } else {
+                clearHttpEditors();
+                passiveScanResultPane.setText("");
             }
         });
 
@@ -1016,11 +1079,8 @@ public class AIAnalyzerTab extends JPanel {
 
         String analysisResult = result.getAnalysisResult();
         if (analysisResult != null && !analysisResult.isEmpty()) {
-            if (currentStreamingId != null && currentStreamingId == result.getId()) {
-                currentStreamingId = null;
-                passiveScanStreamBuffer.setLength(0);
-            }
-
+            // 结果已定稿，释放该行的流式中间缓冲
+            discardPscanStreamBuffer(result.getId());
             try {
                 passiveScanResultPane.setText("");
                 MarkdownRenderer.appendMarkdown(passiveScanResultPane, analysisResult);
@@ -1028,10 +1088,7 @@ public class AIAnalyzerTab extends JPanel {
                 passiveScanResultPane.setText(analysisResult);
             }
         } else if (result.getErrorMessage() != null) {
-            if (currentStreamingId != null && currentStreamingId == result.getId()) {
-                currentStreamingId = null;
-                passiveScanStreamBuffer.setLength(0);
-            }
+            discardPscanStreamBuffer(result.getId());
             passiveScanResultPane.setText("扫描错误: " + result.getErrorMessage());
         } else if (result.getStatus() == ScanResult.ScanStatus.SCANNING) {
             passiveScanResultPane.setText("正在分析中，请稍候...\n\n");
@@ -1044,9 +1101,18 @@ public class AIAnalyzerTab extends JPanel {
         int viewRow = passiveScanTable.getSelectedRow();
         if (viewRow >= 0) {
             int modelRow = passiveScanTable.convertRowIndexToModel(viewRow);
+            // 先取出 id 释放其流式缓冲，再删行
+            Object idObj = passiveScanTableModel.getValueAt(modelRow, 0);
+            if (idObj instanceof Integer id) {
+                discardPscanStreamBuffer(id);
+            }
             passiveScanTableModel.removeRow(modelRow);
             clearHttpEditors();
-            resultTextPane.setText("");
+            // 必须清被动面板：resultTextPane 在主动模式下指向主动分析面板，
+            // 用它会把主动模式的输出一起抹掉
+            if (passiveScanResultPane != null) {
+                passiveScanResultPane.setText("");
+            }
         }
     }
 
@@ -1110,7 +1176,9 @@ public class AIAnalyzerTab extends JPanel {
         applyEditorTheme(localResultTextPane);
         JScrollPane resultScrollPane = new JScrollPane(localResultTextPane);
         resultScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-        this.resultScrollPane = resultScrollPane;
+        // 被动扫描侧自用的滚动条。不要把被动面板的滚动条挂到共享字段上：
+        // resultTextPane 会在切到主动模式后改指主动分析面板，两者会错配。
+        this.passiveScanScrollPane = resultScrollPane;
 
         JPanel promptPanel = new JPanel(new BorderLayout());
         promptPanel.setBorder(BorderFactory.createTitledBorder("分析提示词"));
@@ -1130,7 +1198,6 @@ public class AIAnalyzerTab extends JPanel {
         resultPromptSplit.setOneTouchExpandable(true);
         panel.add(resultPromptSplit, BorderLayout.CENTER);
 
-        passiveModeResultTextPane = localResultTextPane;
         passiveScanResultPane = localResultTextPane;
         passiveModePromptArea = localPromptArea;
         resultTextPane = localResultTextPane;
@@ -1188,9 +1255,9 @@ public class AIAnalyzerTab extends JPanel {
             userPromptArea = activeAnalysisPanel.getPromptArea();
             activeAnalysisPanel.setActiveMode(true, activeAnalysisPanel.getResultPane(), activeAnalysisPanel.getPromptArea());
         } else {
-            resultTextPane = passiveModeResultTextPane;
+            resultTextPane = passiveScanResultPane;
             userPromptArea = passiveModePromptArea;
-            activeAnalysisPanel.setActiveMode(false, passiveModeResultTextPane, passiveModePromptArea);
+            activeAnalysisPanel.setActiveMode(false, passiveScanResultPane, passiveModePromptArea);
         }
         revalidate();
         repaint();
@@ -1306,9 +1373,23 @@ public class AIAnalyzerTab extends JPanel {
         }
     }
 
+    private void switchToPassiveModeForExternalRequest() {
+        if (!activeModeSelected) return;
+        if (analysisModeComboBox != null) {
+            // 触发 combo 的 action 事件会走 switchAnalysisMode，保持 UI 与内部状态一致
+            analysisModeComboBox.setSelectedItem(MODE_PASSIVE);
+        } else {
+            switchAnalysisMode(MODE_PASSIVE);
+        }
+    }
+
     public void addRequestFromHttpRequestResponse(String method, String url, HttpRequestResponse requestResponse) {
         try {
             if (passiveScanManager != null) {
+                // 右键「发送到AI分析」的目标是**被动扫描**列表。若当前停在主动模式，
+                // 请求会被加到看不见的被动卡片里，用户会误以为发到了主动模式。
+                // 这里统一切回被动模式再加入并选中新行。
+                switchToPassiveModeForExternalRequest();
                 ScanResult scanResult = passiveScanManager.addRequest(requestResponse);
                 if (scanResult != null) {
                     Object[] rowData = {
@@ -1317,12 +1398,14 @@ public class AIAnalyzerTab extends JPanel {
                         scanResult.getShortUrl(),
                         scanResult.getFormattedTimestamp(),
                         scanResult.hasResponse() ? "是" : "否",
-                        "?析中...",
+                        "分析中...",
                         "手动添加"
                     };
                     passiveScanTableModel.addRow(rowData);
                     // 立即异步分析，不阻塞用户操作，结果通过 onResultUpdated/onStreamingChunk 回填
                     passiveScanManager.analyzeSingleRequest(requestResponse);
+                    // 主动选中新行：否则流式输出找不到「当前选中行」，用户看不到任何输出
+                    selectPassiveScanRow(scanResult.getId());
                     api.logging().logToOutput("请求已发送到AI异步分析: " + method + " " + url);
                 } else {
                     api.logging().logToOutput("请求已存在，跳过添加: " + method + " " + url);
