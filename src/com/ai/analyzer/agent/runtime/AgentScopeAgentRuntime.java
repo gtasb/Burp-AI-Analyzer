@@ -66,6 +66,12 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
 
     private static final String AGENT_NAME = "burp-ai-analyzer";
 
+    /** ReAct 循环单轮默认上限：AgentScope 自带默认是 10，对渗透测试偏少 */
+    public static final int DEFAULT_MAX_ITERS = 60;
+
+    /** maxIters 合法下界；ReActAgent 要求 &gt; 0，传 0 会抛 IllegalArgumentException */
+    public static final int MIN_MAX_ITERS = 1;
+
     private final Mode mode;
     private final Model model;
     private final String systemPrompt;
@@ -77,6 +83,8 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
     private final boolean enablePlanMode;
     private final boolean enableTaskList;
     private final int maxContextTokens;
+    /** ReAct 循环单轮上限。不设时用 AgentScope 默认 10——对渗透测试偏少，会导致 agent 提前收尾 */
+    private final int maxIters;
     /** 文件沙箱开关：true=限制在工作区/project 根内；false=文件工具可读写任意路径（默认） */
     private final boolean sandboxEnabled;
     private final List<io.agentscope.core.skill.repository.AgentSkillRepository> skillRepositories;
@@ -99,6 +107,7 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         this.enablePlanMode = builder.enablePlanMode;
         this.enableTaskList = builder.enableTaskList;
         this.maxContextTokens = builder.maxContextTokens;
+        this.maxIters = builder.maxIters;
         this.sandboxEnabled = builder.sandboxEnabled;
         this.skillRepositories = builder.skillRepositories;
     }
@@ -536,6 +545,9 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
                             .timeout(java.time.Duration.ofSeconds(120))
                             .maxAttempts(2)
                             .build());
+                    // ReAct 循环单轮上限：不设置会用 AgentScope 默认的 10，
+                    // 用满后 AgentScope 注入「停下来做总结」的指令，模型就半途收尾。
+                    builder.maxIters(Math.max(MIN_MAX_ITERS, maxIters));
                     // 配置大工具结果驱逐（pentest 场景常见）
                     builder.toolResultEviction(
                             io.agentscope.harness.agent.memory.compaction.ToolResultEvictionConfig.builder()
@@ -647,6 +659,22 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         private boolean enablePlanMode;
         private boolean enableTaskList;
         private int maxContextTokens;
+        private int maxIters = AgentScopeAgentRuntime.DEFAULT_MAX_ITERS;
+
+        /**
+         * ReAct 循环单轮上限（必须 &gt; 0）。
+         *
+         * <p>AgentScope 默认仅 10 轮。用满后 AgentScope 会向模型注入
+         * 「You have failed to generate response within the maximum iterations.
+         * Now respond directly by summarizing the current situation.」，
+         * 模型于是停下来做总结——渗透测试里表现为「半途停下问要不要继续」。
+         * 注意：传 0 并非无限循环，ReActAgent 会抛
+         * {@code IllegalArgumentException: maxIters must be &gt; 0}。
+         */
+        public Builder maxIters(int maxIters) {
+            this.maxIters = maxIters;
+            return this;
+        }
         private boolean sandboxEnabled;
         private List<io.agentscope.core.skill.repository.AgentSkillRepository> skillRepositories;
 

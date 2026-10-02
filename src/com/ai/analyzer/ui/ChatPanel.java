@@ -480,11 +480,6 @@ public class ChatPanel extends JPanel {
                     final long[] lastRenderTime = {0L};
                     final long RENDER_INTERVAL_MS = 60;
 
-                    // 行级增量渲染状态：renderedMarkdownLen 是已渲染进 doc 的 markdown 前缀长度；
-                    // 未以 '\n' 结尾的部分行不触发渲染，等换行或流结束后再整体渲染，
-                    // 避免 MarkdownRenderer 每一帧对全文删除+重解析+重插入（越长越卡）。
-                    final int[] renderedMarkdownLen = {0};
-
                     api.logging().logToOutput("[ChatPanel] 开始调用analyzeRequestStream");
                     apiClient.setSystemNoticeConsumer(systemNotice ->
                         SwingUtilities.invokeLater(() -> appendToChat("系统", systemNotice, false))
@@ -499,20 +494,17 @@ public class ChatPanel extends JPanel {
 
                         if (now - lastRenderTime[0] < RENDER_INTERVAL_MS) return;
                         lastRenderTime[0] = now;
-                        String snapshot = fullResponse.toString();
-
-                        int lastNl = snapshot.lastIndexOf('\n');
-                        if (lastNl < 0) return;
-                        String renderable = snapshot.substring(0, lastNl + 1);
-                        if (renderable.length() <= renderedMarkdownLen[0]) return;
-                        final String deltaMd = renderable.substring(renderedMarkdownLen[0]);
-                        renderedMarkdownLen[0] = renderable.length();
+                        // 必须整段重解析，不能只 append 本次新增的片段：
+                        // Markdown 表格要求「表头 + 分隔行」同时存在才能被识别成 TableBlock，
+                        // 单独解析一个分片只会退化成带竖线的纯文本（表头还会被吞进不可见的内嵌组件）。
+                        final String snapshot = fullResponse.toString();
 
                         SwingUtilities.invokeLater(() -> {
                             if (isCancelled() || !isStreaming || runId != streamRunId) return;
                             try {
                                 renderPreservingScroll(() ->
-                                        MarkdownRenderer.appendMarkdown(chatArea, deltaMd));
+                                        MarkdownRenderer.appendMarkdownStreaming(
+                                                chatArea, snapshot, aiMessageStartPos));
                             } catch (Exception e) {
                                 api.logging().logToError("流式Markdown渲染失败: " + e.getMessage());
                             }
@@ -534,15 +526,16 @@ public class ChatPanel extends JPanel {
                     
                     debugLog("AI API调用完成，fullResponse长度: " + fullResponse.length());
                     
-                    // 渲染流结束后剩余的 tail（不含 \n 结尾的部分行），不做全文重渲染，避免闪烁
-                    String finalContent = fullResponse.toString();
-                    if (!finalContent.isEmpty() && finalContent.length() > renderedMarkdownLen[0]
-                            && !isCancelled() && isStreaming && runId == streamRunId) {
-                        final String tail = finalContent.substring(renderedMarkdownLen[0]);
+                    // 流结束：用完整内容做最后一次整体渲染。
+                    // appendMarkdownStreaming 会替换 aiMessageStartPos 之后的全部内容，
+                    // 所以流末尾那个没有 '\n' 结尾的半行也会被正确补上，无需再单独 append tail。
+                    final String finalContent = fullResponse.toString();
+                    if (!finalContent.isEmpty() && !isCancelled() && runId == streamRunId) {
                         SwingUtilities.invokeLater(() -> {
-                            if (isCancelled() || !isStreaming || runId != streamRunId) return;
+                            if (isCancelled() || runId != streamRunId) return;
                             renderPreservingScroll(() ->
-                                    MarkdownRenderer.appendMarkdown(chatArea, tail));
+                                    MarkdownRenderer.appendMarkdownStreaming(
+                                            chatArea, finalContent, aiMessageStartPos));
                         });
                     }
                 } catch (Exception e) {
@@ -565,10 +558,14 @@ public class ChatPanel extends JPanel {
                     
                     if (!isCancelled()) {
                         addToSharedHistory("AI助手", fullResponse.toString(), false);
+                        // 流式内容已经直接渲染进 chatArea 了。addToSharedHistory 故意不推进游标
+                        // （否则普通消息在 listener 触发的 sync 里会被跳过），所以这里必须显式补上，
+                        // 否则 addChatUiEntry 触发的 sharedHistoryListener 会把同一条回复再追加一遍。
+                        lastSyncedHistorySize = apiClient.getSharedChatUiHistorySize();
                         debouncedSave();
                     }
                     
-                    // 流式输出已完成，在done()中已经完成了完整渲染，这里不需要再渲染
+                    // 流式输出已完成，最后一次整体渲染已在上方完成，这里不再重复渲染
                 } catch (Exception e) {
                     if (!isCancelled() && runId == streamRunId) {
                         SwingUtilities.invokeLater(() -> {

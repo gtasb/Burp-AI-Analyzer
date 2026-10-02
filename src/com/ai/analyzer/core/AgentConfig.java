@@ -94,45 +94,6 @@ public class AgentConfig {
      */
     public AgentConfig() {
     }
-    
-    /**
-     * 复制构造函数
-     */
-    public AgentConfig(AgentConfig other) {
-        this.apiKey = other.apiKey;
-        this.apiUrl = other.apiUrl;
-        this.model = other.model;
-        this.apiProvider = other.apiProvider;
-        this.enableSearch = other.enableSearch;
-        this.customParameters = other.customParameters;
-        this.maxTokens = other.maxTokens;
-        this.enableMcp = other.enableMcp;
-        this.burpMcpUrl = other.burpMcpUrl;
-        this.burpMcpAuthorization = other.burpMcpAuthorization;
-        this.enableRagMcp = other.enableRagMcp;
-        this.ragMcpUrl = other.ragMcpUrl;
-        this.ragMcpDocumentsPath = other.ragMcpDocumentsPath;
-        this.enableChromeMcp = other.enableChromeMcp;
-        this.chromeMcpUrl = other.chromeMcpUrl;
-        this.searchMode = other.searchMode;
-        this.tavilyApiKey = other.tavilyApiKey;
-        this.tavilyBaseUrl = other.tavilyBaseUrl;
-        this.googleSearchApiKey = other.googleSearchApiKey;
-        this.googleSearchCsi = other.googleSearchCsi;
-        this.enableFileSystemAccess = other.enableFileSystemAccess;
-        this.enableSkills = other.enableSkills;
-        this.skillsDirectoryPath = other.skillsDirectoryPath;
-        this.enablePythonScript = other.enablePythonScript;
-        this.enableCliTool = other.enableCliTool;
-        this.cliWhitelist = other.cliWhitelist;
-        this.cliToolPrompt = other.cliToolPrompt;
-        this.workplaceDirectoryPath = other.workplaceDirectoryPath;
-        this.customSystemPrompt = other.customSystemPrompt;
-        this.enablePlanMode = other.enablePlanMode;
-        this.customMcpConfigJson = other.customMcpConfigJson;
-        this.customMcpConfigs = other.customMcpConfigs;
-    }
-    
     /**
      * 检查配置是否有效（至少需要 API Key）
      */
@@ -289,8 +250,12 @@ public class AgentConfig {
 
     /** 文件沙箱：true=限制在工作区/project 根内；false=文件工具可读写任意路径（默认关闭） */
     private boolean enableFileSystemSandbox = false;
+    /** 主动分析 Agent 的 ReAct 循环单轮上限（必须 > 0），默认 60 */
+    private int activeMaxIters = com.ai.analyzer.agent.runtime.AgentScopeAgentRuntime.DEFAULT_MAX_ITERS;
     public boolean isEnableFileSystemSandbox() { return enableFileSystemSandbox; }
     public void setEnableFileSystemSandbox(boolean v) { this.enableFileSystemSandbox = v; }
+    public int getActiveMaxIters() { return activeMaxIters; }
+    public void setActiveMaxIters(int v) { this.activeMaxIters = v; }
     public String getCliWhitelist() { return cliWhitelist; }
     public void setCliWhitelist(String cliWhitelist) { this.cliWhitelist = cliWhitelist != null ? cliWhitelist : ""; }
     public String getCliToolPrompt() { return cliToolPrompt; }

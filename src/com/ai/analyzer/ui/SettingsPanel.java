@@ -50,7 +50,9 @@ public class SettingsPanel {
     private JLabel modelLoadingLabel;
     private JTextField customParametersField; // 自定义参数输入框
     private JTextField maxTokensField; // 显式上下文预算输入框
-    private JTextField tokenBudgetField; // 扫描周期 Token 预算输入框
+    private JTextField tokenBudgetField; // 扫描周期 Token 预算
+    private JTextField activeMaxItersField; // 主动分析 ReAct 单轮上限
+    private JTextField passiveMaxItersField; // 被动扫描 ReAct 单轮上限输入框
     private JComboBox<String> apiProfileComboBox;
     private final List<PluginSettings.ApiProfile> apiProfiles = new ArrayList<>();
     private JCheckBox enableSearchCheckBox;
@@ -157,6 +159,29 @@ public class SettingsPanel {
     public String getCustomParameters() { return customParametersField.getText().trim(); }
     public String getMaxTokens() { return maxTokensField.getText().trim(); }
     public String getTokenBudget() { return tokenBudgetField.getText().trim(); }
+
+    /**
+     * 解析单轮上限输入。空/非法时回退默认值；小于 1 一律钳到 1
+     * （ReActAgent 要求 maxIters &gt; 0，传 0 会抛 IllegalArgumentException，而非无限循环）。
+     */
+    private int parseMaxIters(JTextField field, int fallback) {
+        String text = field != null ? field.getText().trim() : "";
+        if (text.isEmpty()) return fallback;
+        try {
+            return Math.max(1, Integer.parseInt(text));
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
+    }
+
+    public int getActiveMaxIters() {
+        return parseMaxIters(activeMaxItersField,
+                com.ai.analyzer.agent.runtime.AgentScopeAgentRuntime.DEFAULT_MAX_ITERS);
+    }
+
+    public int getPassiveMaxIters() {
+        return parseMaxIters(passiveMaxItersField, 15);
+    }
     public boolean isSearchEnabled() { return enableSearchCheckBox.isSelected(); }
     public boolean isMcpEnabled() { return enableMcpCheckBox.isSelected(); }
     public String getBurpMcpUrl() { return BurpMcpUrlField.getText().trim(); }
@@ -689,6 +714,27 @@ public class SettingsPanel {
         tokenBudgetField = new JTextField("", 30);
         tokenBudgetField.setToolTipText("扫描周期累计输入 Token（含缓存）预算上限；0 或留空表示不限制。用尽后自动跳过新的分析调用");
         panel.add(tokenBudgetField, gbc);
+
+        // 主动分析：ReAct 循环单轮上限
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("主动单轮上限:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        activeMaxItersField = new JTextField("", 30);
+        activeMaxItersField.setToolTipText(
+                "主动分析/侧栏 Agent 单轮内最多「思考+调用工具」的次数。"
+                        + "用满后 AgentScope 会让模型停下做总结，表现为半途询问是否继续；默认 60。"
+                        + "必须大于 0（填 0 不会被当作无限循环，会被拒绝）。");
+        panel.add(activeMaxItersField, gbc);
+
+        // 被动扫描：ReAct 循环单轮上限
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("被动单轮上限:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        passiveMaxItersField = new JTextField("", 30);
+        passiveMaxItersField.setToolTipText("被动扫描单条请求分析允许的最大迭代次数，默认 15；必须大于 0");
+        panel.add(passiveMaxItersField, gbc);
 
         // 自定义参数
         row++;
@@ -1795,6 +1841,8 @@ public class SettingsPanel {
             psClient.setEnableFileSystemSandbox(apiClient.isEnableFileSystemSandbox());
             psClient.setCliWhitelist(apiClient.getConfig().getCliWhitelist());
             psClient.setCliToolPrompt(apiClient.getConfig().getCliToolPrompt());
+            // 被动单轮上限是独立配置项，从设置面板读取
+            psClient.setPassiveMaxIters(getPassiveMaxIters());
             psClient.setWorkplaceDirectoryPath(workplaceDirectoryField != null ? workplaceDirectoryField.getText().trim() : "");
 
             // ========== 同步前置扫描管理器 ==========
@@ -1856,6 +1904,8 @@ public class SettingsPanel {
             // 设置上下文预算与自定义参数
             settings.setMaxTokens(maxTokensField.getText().trim());
             settings.setTokenBudgetTokens(parseTokenBudget(tokenBudgetField.getText()));
+            settings.setActiveMaxIters(getActiveMaxIters());
+            settings.setPassiveMaxIters(getPassiveMaxIters());
             settings.setCustomParameters(customParametersField.getText().trim());
             settings.setApiProfiles(apiProfiles);
             settings.setBurpMcpAuthorization(burpMcpAuthorizationField != null ? burpMcpAuthorizationField.getText().trim() : "");
@@ -1988,6 +2038,7 @@ public class SettingsPanel {
             apiClient.setApiKey(effectiveApiKey);
             apiClient.setModel(getModelText());
             apiClient.setMaxTokens(maxTokensField.getText().trim());
+            apiClient.setActiveMaxIters(getActiveMaxIters());
             apiClient.setCustomParameters(customParametersField.getText().trim());
             if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
                 PassiveScanApiClient psClient = passiveScanManager.getApiClient();
@@ -2069,6 +2120,12 @@ public class SettingsPanel {
                     ? String.valueOf(settings.getTokenBudgetTokens()) : "");
         }
         com.ai.analyzer.util.TokenUsageTracker.instance().setBudget(settings.getTokenBudgetTokens());
+        if (activeMaxItersField != null) {
+            activeMaxItersField.setText(String.valueOf(settings.getActiveMaxIters()));
+        }
+        if (passiveMaxItersField != null) {
+            passiveMaxItersField.setText(String.valueOf(settings.getPassiveMaxIters()));
+        }
         customParametersField.setText(settings.getCustomParameters());
         apiProfiles.clear();
         apiProfiles.addAll(settings.getApiProfiles());
@@ -2178,6 +2235,7 @@ public class SettingsPanel {
         apiClient.setApiKey(settings.getApiKey());
         apiClient.setModel(settings.getModel());
         apiClient.setMaxTokens(settings.getMaxTokens());
+        apiClient.setActiveMaxIters(settings.getActiveMaxIters());
         apiClient.setCustomParameters(settings.getCustomParameters());
         apiClient.setEnableSearch(settings.isEnableSearch());
         apiClient.setSearchMode(settings.getSearchMode());
@@ -2197,7 +2255,10 @@ public class SettingsPanel {
         apiClient.setWorkplaceDirectoryPath(settings.getWorkplaceDirectoryPath());
         applyWorkplaceToDerivedPaths(true, true);
 
-        apiClient.setWorkplaceDirectoryPath(settings.getWorkplaceDirectoryPath());
+        // 被动扫描单轮上限（独立于主动端）
+        if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
+            passiveScanManager.getApiClient().setPassiveMaxIters(settings.getPassiveMaxIters());
+        }
 
         // 前置扫描器配置
         if (enablePreScanCheckbox != null) {

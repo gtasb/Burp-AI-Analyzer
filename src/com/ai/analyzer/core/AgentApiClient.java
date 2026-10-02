@@ -486,6 +486,22 @@ public class AgentApiClient {
 
     public boolean isEnableFileSystemSandbox() { return config.isEnableFileSystemSandbox(); }
 
+    /** 主动分析 Agent 的 ReAct 循环单轮上限 */
+    public int getActiveMaxIters() { return config.getActiveMaxIters(); }
+
+    /**
+     * 设置 ReAct 循环单轮上限。低于 1 会被钳到 1（ReActAgent 拒绝 &lt;= 0）。
+     */
+    public void setActiveMaxIters(int activeMaxIters) {
+        int clamped = Math.max(
+                com.ai.analyzer.agent.runtime.AgentScopeAgentRuntime.MIN_MAX_ITERS, activeMaxIters);
+        if (config.getActiveMaxIters() != clamped) {
+            config.setActiveMaxIters(clamped);
+            invalidateAgentScopeRuntime();
+            logInfo("主动模式单轮上限已设为 " + clamped + " 次");
+        }
+    }
+
     /**
      * 开关文件沙箱。关闭时文件工具可读写任意路径；开启时限制在工作区 / project 根内。
      * 与权限模式无关：权限模式固定 BYPASS，沙箱只约束路径。
@@ -682,6 +698,8 @@ public class AgentApiClient {
             }
             // 文件沙箱开关（只管路径，与 BYPASS 权限模式无关）
             runtimeBuilder.sandboxEnabled(config.isEnableFileSystemSandbox());
+            // ReAct 循环单轮上限：不设置会用 AgentScope 默认 10，导致 agent 半途收尾
+            runtimeBuilder.maxIters(config.getActiveMaxIters());
             // 上下文 Token 预算：通过 maxTokens 配置传给 HarnessAgent 和 CompactionConfig
             String maxTokens = config.getMaxTokens();
             if (maxTokens != null && !maxTokens.isBlank()) {
@@ -800,6 +818,7 @@ public class AgentApiClient {
         config.setGoogleSearchCsi(settings.getGoogleSearchCsi());
         config.setEnableCliTool(settings.isEnableCliTool());
         config.setEnableFileSystemSandbox(settings.isEnableFileSystemSandbox());
+        config.setActiveMaxIters(settings.getActiveMaxIters());
         config.setBurpMcpAuthorization(settings.getBurpMcpAuthorization());
         config.setCliWhitelist(settings.getCliWhitelist());
         config.setCliToolPrompt(settings.getCliToolPrompt());

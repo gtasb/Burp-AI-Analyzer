@@ -100,6 +100,8 @@ public class PassiveScanApiClient {
     private boolean enableCliTool = false;
     /** 镜像自主动端的文件沙箱开关（ReActAgent 无 Harness 文件系统，此处不改变行为） */
     private boolean enableFileSystemSandbox = false;
+    /** 被动扫描 ReAct 循环单轮上限，必须 > 0 */
+    private int passiveMaxIters = 15;
     @Getter
     private String cliWhitelist = "";
     @Getter
@@ -303,6 +305,19 @@ public class PassiveScanApiClient {
         return this.enableFileSystemSandbox;
     }
 
+    /** 被动扫描 ReAct 循环单轮上限（>=1） */
+    public int getPassiveMaxIters() {
+        return this.passiveMaxIters;
+    }
+
+    public void setPassiveMaxIters(int v) {
+        int clamped = Math.max(1, v);
+        if (clamped != this.passiveMaxIters) {
+            this.passiveMaxIters = clamped;
+            invalidateAgentScopeRuntime();
+        }
+    }
+
     public void setCliWhitelist(String v) {
         if (v == null) v = "";
         if (!v.equals(this.cliWhitelist)) { this.cliWhitelist = v; invalidateAgentScopeRuntime(); }
@@ -467,7 +482,8 @@ public class PassiveScanApiClient {
                     .agentName("burp-passive-analyzer")
                     .model(asModel)
                     .systemPrompt(systemPrompt)
-                    .toolkit(asToolkit);
+                    .toolkit(asToolkit)
+                    .maxIters(Math.max(1, passiveMaxIters));
             if (enableSkills && skillsDirectoryPath != null && !skillsDirectoryPath.trim().isEmpty()) {
                 try {
                     var skillRepository = new io.agentscope.core.skill.repository.FileSystemSkillRepository(
@@ -579,6 +595,7 @@ public class PassiveScanApiClient {
         this.enablePythonScript = settings.isEnablePythonScript();
         this.enableCliTool = settings.isEnableCliTool();
         this.enableFileSystemSandbox = settings.isEnableFileSystemSandbox();
+        this.passiveMaxIters = settings.getPassiveMaxIters();
         this.cliWhitelist = settings.getCliWhitelist();
         this.cliToolPrompt = settings.getCliToolPrompt();
         this.enableSkills = settings.isEnableSkills();

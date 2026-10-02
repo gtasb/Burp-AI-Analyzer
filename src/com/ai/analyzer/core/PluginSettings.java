@@ -55,6 +55,14 @@ public class PluginSettings implements Serializable {
     private boolean enableCliTool = false;
     /** 文件沙箱：true=限制在工作区/project 根内；false=文件工具可读写任意路径（默认关闭） */
     private boolean enableFileSystemSandbox = false;
+    /**
+     * 主动分析 Agent 的 ReAct 循环单轮上限。
+     * AgentScope 默认仅 10，用满后会向模型注入「停下来总结」的指令导致半途收尾。
+     * 必须 &gt; 0（传 0 会被 ReActAgent 拒绝）。
+     */
+    private int activeMaxIters = com.ai.analyzer.agent.runtime.AgentScopeAgentRuntime.DEFAULT_MAX_ITERS;
+    /** 被动扫描 Agent 的 ReAct 循环单轮上限，必须 &gt; 0 */
+    private int passiveMaxIters = 15;
     private String cliWhitelist = "";
     private String cliToolPrompt = "";
     
@@ -546,6 +554,24 @@ public class PluginSettings implements Serializable {
 
     public void setEnableFileSystemSandbox(boolean enableFileSystemSandbox) {
         this.enableFileSystemSandbox = enableFileSystemSandbox;
+    }
+
+    public int getActiveMaxIters() {
+        // 旧配置反序列化后为 0；ReActAgent 要求 > 0，这里兜底到默认值
+        return activeMaxIters > 0 ? activeMaxIters
+                : com.ai.analyzer.agent.runtime.AgentScopeAgentRuntime.DEFAULT_MAX_ITERS;
+    }
+
+    public void setActiveMaxIters(int activeMaxIters) {
+        this.activeMaxIters = activeMaxIters;
+    }
+
+    public int getPassiveMaxIters() {
+        return passiveMaxIters > 0 ? passiveMaxIters : 15;
+    }
+
+    public void setPassiveMaxIters(int passiveMaxIters) {
+        this.passiveMaxIters = passiveMaxIters;
     }
 
     public String getCliWhitelist() {
