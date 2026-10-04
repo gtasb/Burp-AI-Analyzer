@@ -46,6 +46,15 @@ public class ReActAgentRuntime implements AgentRuntime {
     private final Model model;
     private final String systemPrompt;
     private final Toolkit toolkit;
+    /**
+     * 单次 agent 运行的整体墙钟预算；{@code <= 0} 表示不限时（仍可由取消信号打断）。
+     * 与 {@link AgentScopeAgentRuntime} 同理：原默认 10 分钟且无人覆盖，
+     * 被动扫描里跑脚本/读大文件同样会整条断流。
+     */
+    private Duration timeout() {
+        return chatTimeoutMs > 0 ? Duration.ofMillis(chatTimeoutMs) : null;
+    }
+
     private final long chatTimeoutMs;
     private final int maxIters;
     private final List<io.agentscope.core.skill.repository.AgentSkillRepository> skillRepositories;
@@ -82,7 +91,7 @@ public class ReActAgentRuntime implements AgentRuntime {
                 s.cancel();
             }
             future.cancel(true);
-        });
+        }, timeout());
 
         try {
             var builder = ReActAgent.builder()
@@ -121,7 +130,7 @@ public class ReActAgentRuntime implements AgentRuntime {
                             listener.onError(error);
                             future.completeExceptionally(error);
                         })
-                        .blockLast(Duration.ofMillis(chatTimeoutMs));
+                        .blockLast(timeout());
             }
             future.complete(null);
         } catch (Exception e) {
@@ -190,11 +199,13 @@ public class ReActAgentRuntime implements AgentRuntime {
     private static final class ReactiveStreamSession implements StreamSession {
         private final CompletableFuture<String> future;
         private final Runnable canceller;
+        private final Duration timeout;
         private volatile boolean cancelled;
 
-        ReactiveStreamSession(CompletableFuture<String> future, Runnable canceller) {
+        ReactiveStreamSession(CompletableFuture<String> future, Runnable canceller, Duration timeout) {
             this.future = future;
             this.canceller = canceller;
+            this.timeout = timeout;
         }
 
         @Override
@@ -210,10 +221,14 @@ public class ReActAgentRuntime implements AgentRuntime {
         @Override
         public String awaitCompletion() throws InterruptedException {
             try {
-                return future.get(10, TimeUnit.MINUTES);
+                // 沿用与 blockLast 同一份预算；为 null（不限时）时 future.get() 无超时等待，
+                // 仍可由 cancel() 打断。原来的硬编码 10 分钟是第二道隐形上限。
+                return timeout != null
+                        ? future.get(timeout.toMillis(), TimeUnit.MILLISECONDS)
+                        : future.get();
             } catch (TimeoutException e) {
                 cancel();
-                throw new RuntimeException("流式输出超时（10分钟）", e);
+                throw new RuntimeException("流式输出超时（" + timeout.toMinutes() + "分钟）", e);
             } catch (ExecutionException e) {
                 Throwable cause = e.getCause();
                 throw new RuntimeException(cause != null ? cause : e);
@@ -237,7 +252,9 @@ public class ReActAgentRuntime implements AgentRuntime {
         private Model model;
         private String systemPrompt;
         private Toolkit toolkit;
-        private long chatTimeoutMs = TimeUnit.MINUTES.toMillis(10);
+        /** &lt;= 0 表示不限时。改默认为不限时：真实渗透 10 分钟必然不够，
+         * 且原值全代码库无人覆盖，等于每次分析都被硬卡死。 */
+        private long chatTimeoutMs = 0;
         private int maxIters = 15;
         private List<io.agentscope.core.skill.repository.AgentSkillRepository> skillRepositories;
 

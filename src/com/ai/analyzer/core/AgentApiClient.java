@@ -848,6 +848,18 @@ public class AgentApiClient {
 
     // ========== 流式分析方法 ==========
 
+    /** 侧栏与主动分析并发的提示语，被拒绝时直接呈现给用户 */
+    public static final String CONCURRENT_ANALYSIS_MESSAGE =
+            "已有分析任务正在运行（侧栏与主动分析不能并发）。请先停止或等待当前任务完成后再发起。";
+
+    private final java.util.concurrent.atomic.AtomicBoolean analysisInFlight =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    /** 当前是否有流式分析占用通道 */
+    public boolean isAnalysisInFlight() {
+        return analysisInFlight.get();
+    }
+
     public void analyzeRequestStream(HttpRequestResponse requestResponse, String userPrompt, Consumer<String> onChunk) throws Exception {
         RequestSourceDetector.RequestSourceInfo sourceInfo = null;
         if (api != null && requestResponse != null) {
@@ -896,6 +908,25 @@ public class AgentApiClient {
     }
 
     private void analyzeRequestStream(String httpRequest, String userPrompt,
+            RequestSourceDetector.RequestSourceInfo sourceInfo, Consumer<String> onChunk) throws Exception {
+
+        // 单飞保护：侧栏(ChatPanel)与主动分析(ActiveAnalysisPanel)共用本客户端，
+        // 两边各自 add/removeModelBehaviorConsumer 且 setSystemNoticeConsumer 是「替换」语义，
+        // 并发时后启动的一方会把前者的 consumer 摘掉，导致工具事件只渲染一半。
+        // 这里在客户端层拦死，绕不过去；被动扫描有独立的 PassiveScanApiClient，不受影响。
+        if (!analysisInFlight.compareAndSet(false, true)) {
+            String msg = CONCURRENT_ANALYSIS_MESSAGE;
+            logInfo(msg);
+            throw new IllegalStateException(msg);
+        }
+        try {
+            analyzeRequestStreamGuarded(httpRequest, userPrompt, sourceInfo, onChunk);
+        } finally {
+            analysisInFlight.set(false);
+        }
+    }
+
+    private void analyzeRequestStreamGuarded(String httpRequest, String userPrompt,
             RequestSourceDetector.RequestSourceInfo sourceInfo, Consumer<String> onChunk) throws Exception {
 
         if (com.ai.analyzer.util.TokenUsageTracker.sharedOverBudget()) {

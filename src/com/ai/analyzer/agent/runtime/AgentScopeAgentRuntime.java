@@ -113,6 +113,16 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
     }
 
     /**
+     * 单次 agent 运行的整体墙钟预算；{@code <= 0} 表示不限时（仍可由取消信号打断）。
+     *
+     * <p>曾经默认 10 分钟且全代码库无人覆盖，真实渗透里读快照/跑脚本必然超限，
+     * 流会整条断在「Timeout on blocking read for 600000000000 NANOSECONDS」。
+     */
+    private java.time.Duration timeout() {
+        return chatTimeoutMs > 0 ? java.time.Duration.ofMillis(chatTimeoutMs) : null;
+    }
+
+    /**
      * 设置用户确认回调（HITL）。ASK 决策（如 plan_exit 请求批准）会调用它，
      * 未设置时自动拒绝（安全默认）。
      */
@@ -155,7 +165,7 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
                 sub.cancel();
             }
             future.cancel(true);
-        });
+        }, timeout());
 
         try {
             // 清理该会话残留的挂起确认状态：上一次运行若在 ASKING 状态中途结束，
@@ -170,7 +180,7 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
             while (!future.isCancelled()) {
                 List<io.agentscope.core.message.ToolUseBlock> pendingConfirm = new java.util.ArrayList<>();
                 buildEventStream(currentMessages, ctx, listener, future, pendingConfirm)
-                        .blockLast(java.time.Duration.ofMillis(chatTimeoutMs));
+                        .blockLast(timeout());
 
                 if (future.isCancelled() || pendingConfirm.isEmpty()) {
                     break;
@@ -604,10 +614,13 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         private final CompletableFuture<String> future;
         private final Runnable canceller;
         private volatile boolean cancelled;
+        private final java.time.Duration timeout;
 
-        AgentScopeStreamSession(CompletableFuture<String> future, Runnable canceller) {
+        AgentScopeStreamSession(CompletableFuture<String> future, Runnable canceller,
+                java.time.Duration timeout) {
             this.future = future;
             this.canceller = canceller;
+            this.timeout = timeout;
         }
 
         @Override
@@ -621,10 +634,14 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         @Override
         public String awaitCompletion() throws InterruptedException {
             try {
-                return future.get(10, TimeUnit.MINUTES);
+                // 沿用与 blockLast 同一份预算；为 null（不限时）时 future.get() 无超时等待，
+                // 仍可由 cancel() 打断。原来的硬编码 10 分钟是第二道隐形上限。
+                return timeout != null
+                        ? future.get(timeout.toMillis(), TimeUnit.MILLISECONDS)
+                        : future.get();
             } catch (TimeoutException e) {
                 cancel();
-                throw new RuntimeException("流式输出超时（10分钟）", e);
+                throw new RuntimeException("流式输出超时（" + timeout.toMinutes() + "分钟）", e);
             } catch (java.util.concurrent.ExecutionException e) {
                 Throwable cause = e.getCause();
                 throw new RuntimeException(cause != null ? cause : e);
@@ -653,7 +670,16 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         private String systemPrompt;
         private Path workspacePath;
         private Toolkit toolkit;
-        private long chatTimeoutMs = TimeUnit.MINUTES.toMillis(10);
+        /**
+         * 单次 agent 运行的整体墙钟预算，&lt;= 0 表示不限时。
+         *
+         * <p>曾默认 10 分钟，且全代码库无人调用 {@code chatTimeoutMs(...)} 覆盖它，
+         * 于是每次分析都被硬卡在 10 分钟：真实渗透里读快照、跑脚本就足以超，
+         * 流会以「Timeout on blocking read for 600000000000 NANOSECONDS」整条断开。
+         * 不限时仍然可以随时中断（前端 停止 会取消 SwingWorker，
+         * 取消信号经 future 传播到 blockLast）。
+         */
+        private long chatTimeoutMs = 0;
         private boolean disableFilesystemTools;
         private boolean disableShellTool;
         private boolean enablePlanMode;
@@ -726,6 +752,13 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         public Builder chatTimeoutMs(long chatTimeoutMs) {
             this.chatTimeoutMs = chatTimeoutMs;
             return this;
+        }
+
+        /** 解析为 blockLast 用的超时；&lt;= 0 时返回 null 表示不限时 */
+        private java.time.Duration timeout() {
+            return chatTimeoutMs > 0
+                    ? java.time.Duration.ofMillis(chatTimeoutMs)
+                    : null;
         }
 
         /** 禁用 Harness 原生文件系统工具（read_file/write_file/edit_file/grep/glob），默认开启 */

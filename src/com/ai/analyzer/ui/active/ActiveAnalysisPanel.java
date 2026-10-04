@@ -270,6 +270,14 @@ public class ActiveAnalysisPanel extends JPanel {
             return;
         }
 
+        // 侧栏与主动分析共用 AgentApiClient，并发会互相覆盖 consumer。
+        // 客户端已做单飞拦截，这里先给出干净提示，避免直接把结果区清空后再报错。
+        if (apiClient.isAnalysisInFlight()) {
+            appendToResult(resolveTargetPane(),
+                    "\n[" + com.ai.analyzer.core.AgentApiClient.CONCURRENT_ANALYSIS_MESSAGE + "]\n");
+            return;
+        }
+
         // 外部直接分析的请求优先（右键发送到AI分析），与表格选中项解耦
         HttpRequestResponse direct = pendingDirectRequest;
         pendingDirectRequest = null;

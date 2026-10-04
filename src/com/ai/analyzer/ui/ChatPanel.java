@@ -368,6 +368,13 @@ public class ChatPanel extends JPanel {
 
     private void sendMessage() {
         if (isStreaming) return;
+
+        // 侧栏与主动分析共用 AgentApiClient，并发会互相覆盖 consumer。
+        // 客户端已做单飞拦截，这里先给出干净提示，避免用户先发出消息再报错。
+        if (apiClient != null && apiClient.isAnalysisInFlight()) {
+            appendToChat("系统", AgentApiClient.CONCURRENT_ANALYSIS_MESSAGE, false);
+            return;
+        }
         
         String message = inputField.getText().trim();
         
