@@ -85,6 +85,22 @@ public class ActiveAnalysisPanel extends JPanel {
         this.promptArea = prompt;
     }
 
+    /**
+     * 解析本次分析的目标渲染区。
+     *
+     * <p>{@code targetPane} 只在 {@link #setActiveMode} 里赋值，而该方法仅由
+     * AIAnalyzerTab 的模式 combo action 触发。构造时 combo 是先
+     * {@code setSelectedItem} 再 {@code addActionListener}，action 不会触发；
+     * 此外被动卡片自己也会给 {@code resultTextPane} 赋值但不会调用
+     * {@code setActiveMode}。因此用户没手动切过模式时 {@code targetPane} 一直是 null，
+     * 此时若直接拿去渲染，每一帧都会抛「textPane cannot be null」，
+     * 整条回复都不会显示。这里退回主动模式自带的结��区，保证渲染目标永不为 null。
+     */
+    private JTextPane resolveTargetPane() {
+        JTextPane t = targetPane;
+        return t != null ? t : activeModeResultTextPane;
+    }
+
     public JTextPane getResultPane() {
         return activeModeResultTextPane;
     }
@@ -343,7 +359,7 @@ public class ActiveAnalysisPanel extends JPanel {
             activeModePromptArea.setText("");
         }
 
-        final JTextPane targetResultPane = targetPane;
+        final JTextPane targetResultPane = resolveTargetPane();
         String finalUserPrompt = userPrompt;
         String finalHttpContent = httpContent;
         String finalTargetDesc = targetDesc;
@@ -545,7 +561,7 @@ public class ActiveAnalysisPanel extends JPanel {
             notifyStateChanged();
 
             try {
-                StyledDocument doc = targetPane.getStyledDocument();
+                StyledDocument doc = resolveTargetPane().getStyledDocument();
                 javax.swing.text.Style stopStyle = doc.addStyle("stop", null);
                 javax.swing.text.StyleConstants.setForeground(stopStyle, java.awt.Color.ORANGE);
                 javax.swing.text.StyleConstants.setBold(stopStyle, true);

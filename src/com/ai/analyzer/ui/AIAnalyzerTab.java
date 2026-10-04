@@ -495,6 +495,11 @@ public class AIAnalyzerTab extends JPanel {
         centerModeCardPanel.add(passiveMainSplitPane, CARD_PASSIVE);
         centerModeCardPanel.add(activeAnalysisPanel, CARD_ACTIVE);
         centerModeCardLayout.show(centerModeCardPanel, CARD_PASSIVE);
+        // 按初始模式立即接线一次。switchAnalysisMode 原本只由模式 combo 的 action 触发，
+        // 而 combo 是先 setSelectedItem 再 addActionListener，构造期不会触发 action；
+        // 于是 activeAnalysisPanel.targetPane 一直是 null。「开始分析」按钮挂在 mainPanel
+        // 上（两种模式都可见），用户在被动模式下点它就会让整条回复一帧都不渲染。
+        switchAnalysisMode(MODE_PASSIVE);
         mainPanel.add(centerModeCardPanel, BorderLayout.CENTER);
 
         JPanel buttonPanel = createButtonPanel();
@@ -1373,8 +1378,10 @@ public class AIAnalyzerTab extends JPanel {
     }
 
     private void switchToPassiveModeForExternalRequest() {
-        if (!activeModeSelected) return;
-        if (analysisModeComboBox != null) {
+        // 注意不要像原来那样「已在被动模式就直接返回」：那会跳过 setActiveMode 接线，
+        // 而 setSelectedItem 对已选中的项不会再触发 action，targetPane 就一直是 null。
+        if (analysisModeComboBox != null
+                && !MODE_PASSIVE.equals(analysisModeComboBox.getSelectedItem())) {
             // 触发 combo 的 action 事件会走 switchAnalysisMode，保持 UI 与内部状态一致
             analysisModeComboBox.setSelectedItem(MODE_PASSIVE);
         } else {
