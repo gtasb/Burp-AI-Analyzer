@@ -179,8 +179,15 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
             List<Msg> currentMessages = asMessages;
             while (!future.isCancelled()) {
                 List<io.agentscope.core.message.ToolUseBlock> pendingConfirm = new java.util.ArrayList<>();
-                buildEventStream(currentMessages, ctx, listener, future, pendingConfirm)
-                        .blockLast(timeout());
+                reactor.core.publisher.Flux<AgentEvent> stream =
+                        buildEventStream(currentMessages, ctx, listener, future, pendingConfirm);
+                // blockLast(Duration) 内部直接调 timeout.toNanos()，传 null 会 NPE；
+                // 不限时时必须用无参重载（仍可经订阅取消打断）。
+                if (timeout() != null) {
+                    stream.blockLast(timeout());
+                } else {
+                    stream.blockLast();
+                }
 
                 if (future.isCancelled() || pendingConfirm.isEmpty()) {
                     break;
