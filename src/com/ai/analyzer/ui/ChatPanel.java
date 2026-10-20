@@ -999,8 +999,14 @@ public class ChatPanel extends JPanel {
     private static final String CHAT_HISTORY_FILENAME = ".burp_ai_chat_history.dat";
     private static final int MAX_PERSISTED_MESSAGES = 50;
     private static final int MAX_MESSAGE_PERSIST_LENGTH = 8000;
+    /** 测试可指向临时文件，避免把断言用的消息写进用户真实聊天历史 */
+    private static final String CHAT_HISTORY_PATH_PROPERTY = "burp.ai.chatHistoryFile";
     
     private File getChatHistoryFile() {
+        String override = System.getProperty(CHAT_HISTORY_PATH_PROPERTY);
+        if (override != null && !override.isBlank()) {
+            return new File(override.trim());
+        }
         return new File(System.getProperty("user.home"), CHAT_HISTORY_FILENAME);
     }
     

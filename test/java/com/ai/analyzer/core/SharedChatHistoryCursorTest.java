@@ -1,8 +1,11 @@
 package com.ai.analyzer.core;
 
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
@@ -22,6 +25,24 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SharedChatHistoryCursorTest {
 
     private static final String CHAT_PANEL = "com.ai.analyzer.ui.ChatPanel";
+    private static File tempHistoryFile;
+
+    @BeforeAll
+    static void isolateChatHistoryFile() throws Exception {
+        // ChatPanel 会把历史持久化到 user.home；测试必须指向临时文件，
+        // 否则断言用的消息会被真实 Burp 实例当作历史自动回放。
+        tempHistoryFile = File.createTempFile("burp-chat-history-test", ".dat");
+        java.nio.file.Files.deleteIfExists(tempHistoryFile.toPath());
+        System.setProperty("burp.ai.chatHistoryFile", tempHistoryFile.getAbsolutePath());
+    }
+
+    @AfterAll
+    static void cleanupChatHistoryFile() {
+        System.clearProperty("burp.ai.chatHistoryFile");
+        if (tempHistoryFile != null) {
+            tempHistoryFile.delete();
+        }
+    }
 
     @Test
     @DisplayName("sent_user_message_should_be_rendered_immediately")
