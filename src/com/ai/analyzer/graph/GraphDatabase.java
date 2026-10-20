@@ -276,6 +276,42 @@ public class GraphDatabase implements AutoCloseable {
         return out;
     }
 
+    /** 列出某 root 的全部节点（带上限），供图谱可视化等结构化读取使用。 */
+    public synchronized List<Node> listNodes(String rootId, int limit) {
+        List<Node> out = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT * FROM graph_nodes WHERE root_id=? ORDER BY id ASC LIMIT ?")) {
+            ps.setString(1, rootId);
+            ps.setInt(2, limit > 0 ? limit : 500);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    out.add(readNode(rs));
+                }
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("listNodes failed: " + e.getMessage(), e);
+        }
+        return out;
+    }
+
+    /** 列出某 root 的全部边（带上限），供图谱可视化等结构化读取使用。 */
+    public synchronized List<Edge> listEdges(String rootId, int limit) {
+        List<Edge> out = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT * FROM graph_edges WHERE root_id=? ORDER BY id ASC LIMIT ?")) {
+            ps.setString(1, rootId);
+            ps.setInt(2, limit > 0 ? limit : 2000);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    out.add(readEdge(rs));
+                }
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("listEdges failed: " + e.getMessage(), e);
+        }
+        return out;
+    }
+
     /** 显式设置节点状态（确认/推翻假设）。 */
     public synchronized void setNodeStatus(long nodeId, FactStatus status, double confidence) {
         try (PreparedStatement ps = conn.prepareStatement(

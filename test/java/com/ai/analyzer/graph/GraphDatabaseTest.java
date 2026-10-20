@@ -91,6 +91,25 @@ class GraphDatabaseTest {
     }
 
     @Test
+    @DisplayName("结构化读取：按 root 列出节点与边（图谱可视化用）")
+    void list_nodes_and_edges_by_root() {
+        String root = "https://t.com:443";
+        String other = "https://other.com:443";
+        db.ensureRoot(root, "https", "t.com", 443);
+        db.ensureRoot(other, "https", "other.com", 443);
+        Node a = db.upsertNode(root, NodeType.INTERFACE, "GET /api/a", root + "|GET|/api/a", FactStatus.OBSERVED, 1, "b", null, Map.of());
+        Node b = db.upsertNode(root, NodeType.INTERFACE, "GET /api/b", root + "|GET|/api/b", FactStatus.OBSERVED, 1, "b", null, Map.of());
+        db.upsertNode(other, NodeType.INTERFACE, "GET /x", other + "|GET|/x", FactStatus.OBSERVED, 1, "b", null, Map.of());
+        db.upsertEdge(root, a.id(), b.id(), EdgeType.RELATED_TO, FactStatus.OBSERVED, 1, "b", null, Map.of());
+
+        assertThat(db.listNodes(root, 100)).extracting(Node::name)
+                .containsExactly("GET /api/a", "GET /api/b");
+        assertThat(db.listEdges(root, 100)).hasSize(1);
+        assertThat(db.listEdges(root, 100).get(0).relationType()).isEqualTo(EdgeType.RELATED_TO);
+        assertThat(db.listNodes(other, 100)).hasSize(1);
+    }
+
+    @Test
     @DisplayName("证据写入与按节点查询")
     void evidence_lifecycle() {
         String root = "https://t.com:443";

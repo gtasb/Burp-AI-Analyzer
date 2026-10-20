@@ -117,20 +117,27 @@ public class ReActAgentRuntime implements AgentRuntime {
 
             // 每请求一个 agent，用后即关（AutoCloseable）
             try (ReActAgent agent = builder.build()) {
-                agent.streamEvents(asMessages, ctx)
-                        .doOnSubscribe(subRef::set)
-                        .doOnNext(event -> translate(event, listener))
-                        .doOnComplete(() -> {
-                            subRef.set(null);
-                            listener.onComplete();
-                        })
-                        .doOnError(error -> {
-                            subRef.set(null);
-                            listener.onEvent(RuntimeEvent.error(error));
-                            listener.onError(error);
-                            future.completeExceptionally(error);
-                        })
-                        .blockLast(timeout());
+                reactor.core.publisher.Flux<AgentEvent> stream =
+                        agent.streamEvents(asMessages, ctx)
+                                .doOnSubscribe(subRef::set)
+                                .doOnNext(event -> translate(event, listener))
+                                .doOnComplete(() -> {
+                                    subRef.set(null);
+                                    listener.onComplete();
+                                })
+                                .doOnError(error -> {
+                                    subRef.set(null);
+                                    listener.onEvent(RuntimeEvent.error(error));
+                                    listener.onError(error);
+                                    future.completeExceptionally(error);
+                                });
+                // blockLast(Duration) 内部直接调 timeout.toNanos()，传 null 会 NPE；
+                // 不限时（chatTimeoutMs <= 0，默认）必须用无参重载（仍可经订阅取消打断）。
+                if (timeout() != null) {
+                    stream.blockLast(timeout());
+                } else {
+                    stream.blockLast();
+                }
             }
             future.complete(null);
         } catch (Exception e) {

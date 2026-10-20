@@ -330,6 +330,23 @@ public final class GraphStore {
         return db().getNode(nodeId);
     }
 
+    // ============ 结构化读取（UI 可视化用） ============
+
+    /** 已建立的 root（origin）列表，最新在前。 */
+    public List<String> listRoots() {
+        return db().listRoots();
+    }
+
+    /** 某 root 的节点快照（上限 limit）。 */
+    public List<Node> listNodes(String rootId, int limit) {
+        return db().listNodes(rootId, limit);
+    }
+
+    /** 某 root 的边快照（上限 limit）。 */
+    public List<Edge> listEdges(String rootId, int limit) {
+        return db().listEdges(rootId, limit);
+    }
+
     public String getRootText(String origin) {
         String orig = origin == null ? "" : origin.trim();
         return "origin: " + orig + "\n" + db().listRoots().stream().filter(o -> o.equals(orig)).count() + " 个 root";

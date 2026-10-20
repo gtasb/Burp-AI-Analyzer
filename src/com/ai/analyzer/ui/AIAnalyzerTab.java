@@ -180,6 +180,9 @@ public class AIAnalyzerTab extends JPanel {
         settingsPanel.setActiveAnalysisPanel(activeAnalysisPanel);
         settingsPanel.addTabsTo(mainTabbedPane);
 
+        // 知识图谱可视化：按 Origin 查看当前 SQLite 资产图谱
+        mainTabbedPane.addTab("知识图谱", new GraphViewerPanel());
+
         JPanel mcpTrafficPanel = createMcpTrafficTabPanel();
         mainTabbedPane.addTab("Logger", mcpTrafficPanel);
 
