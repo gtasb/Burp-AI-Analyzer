@@ -27,6 +27,10 @@ class PassiveScanTaskTest {
         mockResponse = mock(HttpResponse.class);
         when(mockRequestResponse.request()).thenReturn(mockRequest);
         when(mockRequestResponse.response()).thenReturn(mockResponse);
+        // 静态过滤器是全局配置，每个用例从干净的默认状态开始
+        PassiveScanTask.setCustomSkipExtensions("");
+        PassiveScanTask.setDomainBlacklist("");
+        PassiveScanTask.setDomainWhitelist("");
     }
 
     @Nested
@@ -107,6 +111,58 @@ class PassiveScanTaskTest {
         void should_return_false_when_url_is_api_endpoint() {
             when(mockRequest.url()).thenReturn("https://example.com/api/users");
             when(mockRequest.method()).thenReturn("GET");
+            assertThat(PassiveScanTask.shouldSkipRequest(mockRequestResponse)).isFalse();
+        }
+
+        @Test
+        @DisplayName("域名白名单非空时只扫描匹配主机")
+        void whitelist_limits_scanning_to_matching_hosts() {
+            PassiveScanTask.setDomainWhitelist("*.example.com\nexample.com");
+            when(mockRequest.method()).thenReturn("GET");
+
+            when(mockRequest.url()).thenReturn("https://example.com/api/users");
+            assertThat(PassiveScanTask.shouldSkipRequest(mockRequestResponse)).isFalse();
+
+            when(mockRequest.url()).thenReturn("https://evil.com/api/users");
+            assertThat(PassiveScanTask.shouldSkipRequest(mockRequestResponse)).isTrue();
+
+            PassiveScanTask.setDomainWhitelist("");
+        }
+
+        @Test
+        @DisplayName("白名单可直接粘贴 URL；白名单匹配后黑名单仍生效")
+        void whitelist_accepts_url_and_blacklist_still_applies() {
+            PassiveScanTask.setDomainWhitelist("https://api.example.com/v1");
+            PassiveScanTask.setDomainBlacklist("*.example.com");
+            when(mockRequest.method()).thenReturn("GET");
+            when(mockRequest.url()).thenReturn("https://api.example.com/order");
+            // 先判白名单：匹配后仍会走黑名单（黑名单随后生效）
+            assertThat(PassiveScanTask.shouldSkipRequest(mockRequestResponse)).isTrue();
+            // 换一个只被白名单允许、不在黑名单的主机
+            PassiveScanTask.setDomainBlacklist("");
+            assertThat(PassiveScanTask.shouldSkipRequest(mockRequestResponse)).isFalse();
+            PassiveScanTask.setDomainWhitelist("");
+        }
+
+        @Test
+        @DisplayName("query 中出现静态路径不应误跳过动态请求")
+        void query_static_path_does_not_skip_dynamic_request() {
+            when(mockRequest.method()).thenReturn("GET");
+            when(mockRequest.url()).thenReturn("https://example.com/api/order?next=/static/app.js");
+            assertThat(PassiveScanTask.shouldSkipRequest(mockRequestResponse)).isFalse();
+        }
+
+        @Test
+        @DisplayName("自定义扩展名忽略注释并大小写不敏感")
+        void custom_extensions_ignore_comments_and_case() {
+            PassiveScanTask.setCustomSkipExtensions("# 图片\n.PNG");
+            when(mockRequest.method()).thenReturn("GET");
+
+            when(mockRequest.url()).thenReturn("https://example.com/a.PNG?x=1");
+            assertThat(PassiveScanTask.shouldSkipRequest(mockRequestResponse)).isTrue();
+
+            // 自定义列表替换默认值：.js 不再被扩展名规则命中
+            when(mockRequest.url()).thenReturn("https://example.com/a.js");
             assertThat(PassiveScanTask.shouldSkipRequest(mockRequestResponse)).isFalse();
         }
 

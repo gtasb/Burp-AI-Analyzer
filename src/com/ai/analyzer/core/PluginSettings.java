@@ -99,6 +99,8 @@ public class PluginSettings implements Serializable {
     // 被动扫描过滤配置
     private String passiveScanSkipExtensions = "";
     private String passiveScanDomainBlacklist = "";
+    /** 域名白名单：非空时只扫描匹配的主机（优先于黑名单） */
+    private String passiveScanDomainWhitelist = "";
 
     // 自定义 MCP 服务器配置（JSON 字符串，简版数组格式）
     private String customMcpConfigJson = "";
@@ -150,6 +152,7 @@ public class PluginSettings implements Serializable {
 
         if (passiveScanSkipExtensions == null) passiveScanSkipExtensions = "";
         if (passiveScanDomainBlacklist == null) passiveScanDomainBlacklist = "";
+        if (passiveScanDomainWhitelist == null) passiveScanDomainWhitelist = "";
         if (customMcpConfigJson == null) customMcpConfigJson = "";
         // 注意：不再根据 customMcpConfigJson 非空强制 enableCustomMcp=true。
         // 该兜底会导致用户显式关闭自定义 MCP 后重启回弹为启用（“关掉不保存” bug）。
@@ -747,6 +750,14 @@ public class PluginSettings implements Serializable {
     
     public void setPassiveScanDomainBlacklist(String v) {
         this.passiveScanDomainBlacklist = v != null ? v : "";
+    }
+
+    public String getPassiveScanDomainWhitelist() {
+        return passiveScanDomainWhitelist != null ? passiveScanDomainWhitelist : "";
+    }
+
+    public void setPassiveScanDomainWhitelist(String v) {
+        this.passiveScanDomainWhitelist = v != null ? v : "";
     }
 
     public String getCustomMcpConfigJson() {

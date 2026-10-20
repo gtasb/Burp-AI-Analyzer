@@ -92,6 +92,7 @@ public class SettingsPanel {
     private JTextArea passiveSystemPromptArea;
     private JTextArea passiveScanSkipExtensionsArea;
     private JTextArea passiveScanDomainBlacklistArea;
+    private JTextArea passiveScanDomainWhitelistArea;
 
     // 联网搜索配置
     private JComboBox<String> searchModeComboBox;
@@ -204,6 +205,7 @@ public class SettingsPanel {
     public String getPassiveSystemPrompt() { return passiveSystemPromptArea != null ? passiveSystemPromptArea.getText() : ""; }
     public String getPassiveScanSkipExtensions() { return passiveScanSkipExtensionsArea != null ? passiveScanSkipExtensionsArea.getText() : ""; }
     public String getPassiveScanDomainBlacklist() { return passiveScanDomainBlacklistArea != null ? passiveScanDomainBlacklistArea.getText() : ""; }
+    public String getPassiveScanDomainWhitelist() { return passiveScanDomainWhitelistArea != null ? passiveScanDomainWhitelistArea.getText() : ""; }
     public int getSearchModeIndex() { return searchModeComboBox != null ? searchModeComboBox.getSelectedIndex() : 0; }
     public String getSearchMode() {
         if (searchModeComboBox == null) return "enableSearch";
@@ -1658,13 +1660,28 @@ public class SettingsPanel {
         JScrollPane extScroll = new JScrollPane(passiveScanSkipExtensionsArea);
         panel.add(extScroll, gbc);
 
-        // 域名黑名单
+        // 域名白名单
         gbc.gridy = 2; gbc.weighty = 0; gbc.fill = GridBagConstraints.HORIZONTAL;
+        JLabel whitelistLabel = new JLabel("被动扫描域名白名单（每行一个，留空=全部；非空时只扫描匹配的主机，优先于黑名单）:");
+        whitelistLabel.setFont(whitelistLabel.getFont().deriveFont(Font.BOLD));
+        panel.add(whitelistLabel, gbc);
+
+        gbc.gridy = 3; gbc.weighty = 0.35; gbc.fill = GridBagConstraints.BOTH;
+        passiveScanDomainWhitelistArea = new JTextArea(4, 40);
+        passiveScanDomainWhitelistArea.setLineWrap(true);
+        passiveScanDomainWhitelistArea.setWrapStyleWord(true);
+        passiveScanDomainWhitelistArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        passiveScanDomainWhitelistArea.setToolTipText("每行一个域名模式，# 开头为注释。如：\n*.example.com\nexample.com\n也可直接粘贴 URL");
+        JScrollPane whitelistScroll = new JScrollPane(passiveScanDomainWhitelistArea);
+        panel.add(whitelistScroll, gbc);
+
+        // 域名黑名单
+        gbc.gridy = 4; gbc.weighty = 0; gbc.fill = GridBagConstraints.HORIZONTAL;
         JLabel domainLabel = new JLabel("被动扫描域名黑名单（每行一个，支持通配符如 *.google.com）:");
         domainLabel.setFont(domainLabel.getFont().deriveFont(Font.BOLD));
         panel.add(domainLabel, gbc);
 
-        gbc.gridy = 3; gbc.weighty = 0.4; gbc.fill = GridBagConstraints.BOTH;
+        gbc.gridy = 5; gbc.weighty = 0.4; gbc.fill = GridBagConstraints.BOTH;
         passiveScanDomainBlacklistArea = new JTextArea(PassiveScanTask.getDefaultDomainBlacklistText());
         passiveScanDomainBlacklistArea.setLineWrap(true);
         passiveScanDomainBlacklistArea.setWrapStyleWord(true);
@@ -1674,14 +1691,15 @@ public class SettingsPanel {
         panel.add(domainScroll, gbc);
 
         // 恢复默认 + 立即应用
-        gbc.gridy = 4; gbc.weighty = 0; gbc.fill = GridBagConstraints.NONE;
+        gbc.gridy = 6; gbc.weighty = 0; gbc.fill = GridBagConstraints.NONE;
         gbc.anchor = GridBagConstraints.EAST;
         JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         JButton resetFiltersButton = new JButton("恢复默认过滤配置");
-        resetFiltersButton.setToolTipText("扩展名与域名黑名单均恢复为内置默认值");
+        resetFiltersButton.setToolTipText("扩展名与域名黑名单恢复为内置默认值（白名单清空）");
         resetFiltersButton.addActionListener(e -> {
             passiveScanSkipExtensionsArea.setText(PassiveScanTask.getDefaultSkipExtensionsText());
             passiveScanDomainBlacklistArea.setText(PassiveScanTask.getDefaultDomainBlacklistText());
+            passiveScanDomainWhitelistArea.setText("");
         });
         JButton applyFiltersButton = new JButton("立即应用过滤规则");
         applyFiltersButton.addActionListener(e -> applyPassiveScanFilters());
@@ -1690,14 +1708,15 @@ public class SettingsPanel {
         panel.add(btnPanel, gbc);
 
         // 说明
-        gbc.gridy = 5; gbc.weighty = 0.2; gbc.fill = GridBagConstraints.BOTH;
+        gbc.gridy = 7; gbc.weighty = 0.2; gbc.fill = GridBagConstraints.BOTH;
         gbc.anchor = GridBagConstraints.NORTHWEST;
         JTextArea hint = new JTextArea(
             "说明：\n" +
-            "• 扩展名列表用于过滤被动扫描中的静态资源请求（如图片、字体、脚本等）\n" +
-            "• 域名黑名单中的主机将被完全跳过扫描，支持通配符 * 和 ?\n" +
-            "• 修改后需点击「立即应用」或「保存设置」后生效\n" +
-            "• 留空扩展名列表将使用内置默认值");
+            "• 扩展名列表用于过滤被动扫描中的静态资源请求（如图片、字体、脚本等）；填写后会【完全替换】默认的扩展名与路径规则，留空恢复默认\n" +
+            "• 以 / 开头且以 / 结尾的条目按路径匹配（如 /images/），只匹配 URL 的 path，不受 query 影响\n" +
+            "• 域名白名单非空时，只有匹配的主机才会被扫描；黑名单在其后生效\n" +
+            "• 域名规则支持通配符 * 和 ?，也可直接粘贴 URL，每行一条，# 开头为注释\n" +
+            "• 修改后需点击「立即应用」或「保存设置」后生效");
         hint.setEditable(false);
         hint.setOpaque(false);
         hint.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
@@ -1712,6 +1731,8 @@ public class SettingsPanel {
         String defaultText = PassiveScanTask.getDefaultSkipExtensionsText();
         PassiveScanTask.setCustomSkipExtensions(extText.equals(defaultText) ? null : extText);
         PassiveScanTask.setDomainBlacklist(passiveScanDomainBlacklistArea.getText());
+        PassiveScanTask.setDomainWhitelist(
+                passiveScanDomainWhitelistArea != null ? passiveScanDomainWhitelistArea.getText() : "");
         api.logging().logToOutput("[PassiveScan] 过滤规则已应用");
     }
 
@@ -2012,6 +2033,9 @@ public class SettingsPanel {
                 String blacklist = passiveScanDomainBlacklistArea.getText();
                 settings.setPassiveScanDomainBlacklist(
                     blacklist.isBlank() ? PassiveScanTask.getDefaultDomainBlacklistText() : blacklist);
+            }
+            if (passiveScanDomainWhitelistArea != null) {
+                settings.setPassiveScanDomainWhitelist(passiveScanDomainWhitelistArea.getText().trim());
             }
 
             // 应用系统提示词到 API 客户端
@@ -2335,13 +2359,22 @@ public class SettingsPanel {
         }
 
         // 被动扫描过滤配置
-        if (passiveScanSkipExtensionsArea != null) passiveScanSkipExtensionsArea.setText(settings.getPassiveScanSkipExtensions());
+        if (passiveScanSkipExtensionsArea != null) {
+            String savedExt = settings.getPassiveScanSkipExtensions();
+            // 空串表示「使用默认」；必须把默认值回显出来，否则重启后输入框是空的，
+            // 用户会误以为扩展名过滤没生效。
+            passiveScanSkipExtensionsArea.setText(
+                savedExt.isBlank() ? PassiveScanTask.getDefaultSkipExtensionsText() : savedExt);
+        }
         if (passiveScanDomainBlacklistArea != null) {
             String savedBlacklist = settings.getPassiveScanDomainBlacklist();
             passiveScanDomainBlacklistArea.setText(
                 savedBlacklist.isBlank()
                     ? PassiveScanTask.getDefaultDomainBlacklistText()
                     : savedBlacklist);
+        }
+        if (passiveScanDomainWhitelistArea != null) {
+            passiveScanDomainWhitelistArea.setText(settings.getPassiveScanDomainWhitelist());
         }
         applyPassiveScanFilters();
     }

@@ -123,6 +123,29 @@ class GraphDatabaseTest {
     }
 
     @Test
+    @DisplayName("冲突更新返回正确节点 id（SQLite getGeneratedKeys 会返回过期 rowid）")
+    void upsert_node_returns_own_id_after_conflict() {
+        String rootA = "https://a.com:443";
+        String rootB = "https://b.com:443";
+        db.ensureRoot(rootA, "https", "a.com", 443);
+        db.ensureRoot(rootB, "https", "b.com", 443);
+
+        Node a1 = db.upsertNode(rootA, NodeType.INTERFACE, "GET /a", rootA + "|GET|/a", FactStatus.OBSERVED, 1, "b", null, Map.of());
+        Node b1 = db.upsertNode(rootB, NodeType.INTERFACE, "GET /b", rootB + "|GET|/b", FactStatus.OBSERVED, 1, "b", null, Map.of());
+        // 在 B 的冲突更新之前插入一个新行，让 last_insert_rowid 指向 A 的新节点
+        db.upsertNode(rootA, NodeType.INTERFACE, "GET /a2", rootA + "|GET|/a2", FactStatus.OBSERVED, 1, "b", null, Map.of());
+
+        Node b2 = db.upsertNode(rootB, NodeType.INTERFACE, "GET /b", rootB + "|GET|/b", FactStatus.OBSERVED, 1, "b", null, Map.of());
+        assertThat(b2.id()).isEqualTo(b1.id());
+        assertThat(b2.rootId()).isEqualTo(rootB);
+        assertThat(b2.id()).isNotEqualTo(a1.id());
+
+        Edge e = db.upsertEdge(rootB, b1.id(), b1.id(), EdgeType.RELATED_TO, FactStatus.INFERRED, 1, "agent", null, Map.of());
+        assertThat(e.sourceNodeId()).isEqualTo(b1.id());
+        assertThat(e.targetNodeId()).isEqualTo(b1.id());
+    }
+
+    @Test
     @DisplayName("证据写入与按节点查询")
     void evidence_lifecycle() {
         String root = "https://t.com:443";

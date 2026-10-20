@@ -58,6 +58,46 @@ public class GraphDatabase implements AutoCloseable {
             st.execute("PRAGMA foreign_keys=ON");
         }
         createSchema();
+        repairCorruptEdges();
+    }
+
+    /**
+     * 清理历史版本写入的脏边：端点与边不属于同一 root，或自环。
+     *
+     * <p>旧实现依赖 {@code getGeneratedKeys()} 解析 ON CONFLICT UPDATE 的节点 id，
+     * SQLite 会返回连接上上一次 INSERT 的 rowid，导致边指向其他 root 的节点/自环。
+     * 节点本身是正确的，删除这些边后由后续流量重新观测即可。
+     */
+    private void repairCorruptEdges() throws SQLException {
+        int deletedEdges;
+        int deletedParams;
+        try (Statement st = conn.createStatement()) {
+            deletedEdges = st.executeUpdate("""
+                    DELETE FROM graph_edges
+                    WHERE source_node_id = target_node_id
+                       OR source_node_id NOT IN (SELECT id FROM graph_nodes WHERE root_id = graph_edges.root_id)
+                       OR target_node_id NOT IN (SELECT id FROM graph_nodes WHERE root_id = graph_edges.root_id)
+                    """);
+            // 参数节点的 canonical key 形如 "<interfaceId>|location|name"。旧 id 错误会让 key
+            // 指向别的 root 的节点，留下永远挂不上的孤儿参数；下次观测会按正确 id 重建。
+            deletedParams = st.executeUpdate("""
+                    DELETE FROM graph_nodes
+                    WHERE type='PARAMETER'
+                      AND canonical_key GLOB '[0-9]*|*'
+                      AND NOT EXISTS (
+                        SELECT 1 FROM graph_nodes i
+                        WHERE i.type='INTERFACE'
+                          AND i.root_id = graph_nodes.root_id
+                          AND i.id = CAST(substr(graph_nodes.canonical_key, 1,
+                                                instr(graph_nodes.canonical_key, '|') - 1) AS INTEGER)
+                      )
+                    """);
+        }
+        if (deletedEdges > 0 || deletedParams > 0) {
+            com.ai.analyzer.util.DebugContext.log("GraphDatabase", "corrupt_graph_data_removed",
+                    java.util.Map.of("edges", String.valueOf(deletedEdges),
+                            "parameters", String.valueOf(deletedParams), "db", dbPath));
+        }
     }
 
     public String dbPath() {
@@ -213,11 +253,18 @@ public class GraphDatabase implements AutoCloseable {
             ps.setString(10, t);
             ps.setString(11, t);
             ps.executeUpdate();
+            // SQLite 对 ON CONFLICT DO UPDATE 不会产生新 rowid，getGeneratedKeys()
+            // 返回的是连接上「上一次 INSERT」的 rowid——跨 root 时会拿到别的节点 id，
+            // 造成边连到错误节点甚至自环。这里一律按自然键回查真实 id。
+            Node resolved = getNodeByCanonical(rootId, type, canonicalKey);
+            if (resolved != null) {
+                return resolved;
+            }
             long id;
             try (ResultSet keys = ps.getGeneratedKeys()) {
-                id = keys.next() ? keys.getLong(1) : getNodeByCanonical(rootId, type, canonicalKey).id();
+                id = keys.next() ? keys.getLong(1) : -1;
             }
-            return getNode(id);
+            return id > 0 ? getNode(id) : null;
         } catch (SQLException e) {
             throw new IllegalStateException("upsertNode failed: " + e.getMessage(), e);
         }
@@ -364,11 +411,16 @@ public class GraphDatabase implements AutoCloseable {
             ps.setString(10, t);
             ps.setString(11, t);
             ps.executeUpdate();
+            // 同 upsertNode：冲突更新后不能用 getGeneratedKeys() 的 rowid
+            Edge resolved = getEdge(rootId, sourceNodeId, targetNodeId, relation);
+            if (resolved != null) {
+                return resolved;
+            }
             long id;
             try (ResultSet keys = ps.getGeneratedKeys()) {
-                id = keys.next() ? keys.getLong(1) : getEdge(rootId, sourceNodeId, targetNodeId, relation).id();
+                id = keys.next() ? keys.getLong(1) : -1;
             }
-            return getEdge(id);
+            return id > 0 ? getEdge(id) : null;
         } catch (SQLException e) {
             throw new IllegalStateException("upsertEdge failed: " + e.getMessage(), e);
         }

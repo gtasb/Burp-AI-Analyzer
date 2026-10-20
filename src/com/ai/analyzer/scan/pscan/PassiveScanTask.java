@@ -64,6 +64,8 @@ public final class PassiveScanTask {
     private static volatile Set<String> customExtensions = null;
     private static volatile String[] customStaticPaths = null;
     private static final CopyOnWriteArrayList<Pattern> domainBlacklist = new CopyOnWriteArrayList<>();
+    /** 非空时只扫描匹配的主机；匹配优先于黑名单 */
+    private static final CopyOnWriteArrayList<Pattern> domainWhitelist = new CopyOnWriteArrayList<>();
 
     /**
      * 获取默认的域名黑名单文本（供 UI 显示）
@@ -95,18 +97,21 @@ public final class PassiveScanTask {
         List<String> paths = new ArrayList<>();
         for (String raw : text.split("[,\\s]+")) {
             String s = raw.trim();
-            if (s.isEmpty()) continue;
+            if (s.isEmpty() || s.startsWith("#")) continue; // 允许注释
+            s = s.toLowerCase(java.util.Locale.ROOT);
             if (s.startsWith("/")) {
-                paths.add(s.toLowerCase());
+                paths.add(s);
                 continue;
             }
-            String ext = s.toLowerCase();
-            if (!ext.startsWith(".")) ext = "." + ext;
+            String ext = s.startsWith(".") ? s : "." + s;
             exts.add(ext);
         }
 
-        customExtensions = exts.isEmpty() ? null : exts;
-        customStaticPaths = paths.isEmpty() ? null : paths.toArray(new String[0]);
+        // 只要用户填了自定义列表，就完全替换默认规则（扩展名 + 路径）。
+        // 用空集合而不是 null 表示「这一类规则为空」，否则会回落到默认值，
+        // 导致用户删掉 .js 后仍被默认的 /js/ 路径规则跳过。
+        customExtensions = exts;
+        customStaticPaths = paths.toArray(new String[0]);
     }
 
     /**
@@ -125,6 +130,38 @@ public final class PassiveScanTask {
                 domainBlacklist.add(Pattern.compile(regex, Pattern.CASE_INSENSITIVE));
             } catch (Exception ignored) {}
         }
+    }
+
+    /**
+     * 设置域名白名单（每行一个模式，支持通配符如 *.example.com）。
+     * 非空时只扫描匹配的主机；空白行与 # 注释忽略。
+     */
+    public static void setDomainWhitelist(String text) {
+        domainWhitelist.clear();
+        if (text == null || text.isBlank()) return;
+
+        for (String line : text.split("[\\r\\n]+")) {
+            String pattern = line.trim();
+            if (pattern.isEmpty() || pattern.startsWith("#")) continue;
+            // 用户可能直接粘贴 URL，这里只取主机部分
+            if (pattern.contains("://")) {
+                pattern = RequestFingerprint.extractHost(pattern);
+            }
+            pattern = pattern.toLowerCase(java.util.Locale.ROOT);
+            try {
+                domainWhitelist.add(Pattern.compile(globToRegex(pattern), Pattern.CASE_INSENSITIVE));
+            } catch (Exception ignored) {}
+        }
+    }
+
+    /** 白名单为空表示不限制；非空时主机必须匹配其中之一。 */
+    public static boolean isDomainWhitelisted(String host) {
+        if (domainWhitelist.isEmpty()) return true;
+        if (host == null || host.isEmpty()) return false;
+        for (Pattern p : domainWhitelist) {
+            if (p.matcher(host).matches()) return true;
+        }
+        return false;
     }
 
     /**
@@ -164,8 +201,10 @@ public final class PassiveScanTask {
         String url = requestResponse.request().url();
         if (url == null) return true;
 
-        // 域名黑名单检查
+        // 域名白名单优先：非空时只扫描匹配的主机
         String host = RequestFingerprint.extractHost(url);
+        if (!isDomainWhitelisted(host)) return true;
+        // 域名黑名单检查
         if (isDomainBlacklisted(host)) return true;
 
         String lowerUrl = url.toLowerCase();
@@ -204,9 +243,10 @@ public final class PassiveScanTask {
     }
 
     private static boolean isStaticResourceStatic(String url) {
-        String path = url;
-        int queryIndex = url.indexOf('?');
-        if (queryIndex > 0) path = url.substring(0, queryIndex);
+        String lowerUrl = url.toLowerCase(java.util.Locale.ROOT);
+        String path = lowerUrl;
+        int queryIndex = path.indexOf('?');
+        if (queryIndex > 0) path = path.substring(0, queryIndex);
         int fragmentIndex = path.indexOf('#');
         if (fragmentIndex > 0) path = path.substring(0, fragmentIndex);
 
@@ -221,14 +261,17 @@ public final class PassiveScanTask {
             }
         }
 
+        // 路径规则只看 path，不能看完整 URL：query 里的 "?redirect=/static/"
+        // 会让动态请求被误判为静态资源而跳过。
+        // 自定义列表生效时，路径规则同样以用户输入为准（可能为空 = 不做路径过滤）。
         String[] paths = customStaticPaths;
         if (paths != null) {
             for (String sp : paths) {
-                if (url.contains(sp)) return true;
+                if (path.contains(sp)) return true;
             }
         } else {
             for (String sp : DEFAULT_STATIC_PATHS) {
-                if (url.contains(sp)) return true;
+                if (path.contains(sp)) return true;
             }
         }
 
