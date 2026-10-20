@@ -768,6 +768,7 @@ public class ChatPanel extends JPanel {
             String content = (String) entry[1];
             boolean isUser = (Boolean) entry[2];
             if (content == null) continue;
+            if (isTestHistoryArtifact(content)) continue;
             if ("AI助手".equals(sender) && content.length() > 100) {
                 appendMarkdownToChat(sender, content);
             } else {
@@ -1001,6 +1002,20 @@ public class ChatPanel extends JPanel {
     private static final int MAX_MESSAGE_PERSIST_LENGTH = 8000;
     /** 测试可指向临时文件，避免把断言用的消息写进用户真实聊天历史 */
     private static final String CHAT_HISTORY_PATH_PROPERTY = "burp.ai.chatHistoryFile";
+    /**
+     * 侧栏回归测试（SharedChatHistoryCursorTest）用于验证“消息立即渲染”的标记文本。
+     * 旧版本测试曾把它写进用户真实历史文件，插件启动后会当作历史回放。
+     * 这里在加载/保存/渲染三处过滤，兼容已被污染的历史文件与运行中的内存历史。
+     */
+    private static final String TEST_HISTORY_MARKER = "这条消息必须立刻可见";
+
+    private static boolean isTestHistoryArtifact(String content) {
+        if (content == null) return false;
+        String trimmed = content.trim();
+        if (trimmed.isEmpty()) return false;
+        // 允许同一标记重复多行（多点几次发送会形成多行气泡）
+        return trimmed.lines().allMatch(line -> line.trim().equals(TEST_HISTORY_MARKER));
+    }
     
     private File getChatHistoryFile() {
         String override = System.getProperty(CHAT_HISTORY_PATH_PROPERTY);
@@ -1018,6 +1033,9 @@ public class ChatPanel extends JPanel {
                 String sender = (String) entry[0];
                 String content = (String) entry[1];
                 boolean isUser = (Boolean) entry[2];
+                if (isTestHistoryArtifact(content)) {
+                    continue;
+                }
                 if (content != null && content.length() > MAX_MESSAGE_PERSIST_LENGTH) {
                     content = content.substring(0, MAX_MESSAGE_PERSIST_LENGTH) + "\n...[已截断]";
                 }
@@ -1043,6 +1061,9 @@ public class ChatPanel extends JPanel {
             List<ChatMessage> loaded = (List<ChatMessage>) ois.readObject();
             if (loaded != null && !loaded.isEmpty()) {
                 for (ChatMessage msg : loaded) {
+                    if (isTestHistoryArtifact(msg.getContent())) {
+                        continue;
+                    }
                     boolean isUser = "user".equals(msg.getRole());
                     String sender = isUser ? "你" : ("assistant".equals(msg.getRole()) ? "AI助手" : "系统");
                     apiClient.addChatUiEntryDirect(new Object[]{sender, msg.getContent(), isUser});

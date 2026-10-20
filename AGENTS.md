@@ -92,3 +92,6 @@ src/com/ai/analyzer/
 - Plugin has multiple constructors with long parameter lists — prefer setter chaining over new constructors
 - `AgentConfig` vs `PluginSettings` vs direct fields on `PassiveScanApiClient`: three ways of storing the same config. Don't add a fourth
 - Markdown rendering in ChatPanel uses `org.commonmark` + custom `MarkdownRenderer.appendMarkdown()` — expensive, so streaming uses line-buffered incremental render with 60ms throttle
+- **Never let tests touch the real chat history** (`~/.burp_ai_chat_history.dat`). Any test that constructs `ChatPanel` must set
+  `-Dburp.ai.chatHistoryFile=<temp>` first (see `SharedChatHistoryCursorTest`), otherwise assertion text is persisted and the
+  running Burp instance replays it as chat history on next start. `ChatPanel` also filters the legacy test marker on load/save/render.

@@ -2,10 +2,13 @@ package com.ai.analyzer.core;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.ObjectOutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
@@ -44,6 +47,11 @@ class SharedChatHistoryCursorTest {
         }
     }
 
+    @BeforeEach
+    void resetTempHistory() throws Exception {
+        java.nio.file.Files.deleteIfExists(tempHistoryFile.toPath());
+    }
+
     @Test
     @DisplayName("sent_user_message_should_be_rendered_immediately")
     void sentUserMessageIsRenderedImmediately() throws Exception {
@@ -61,17 +69,37 @@ class SharedChatHistoryCursorTest {
         Method appendToChatAndShare = com.ai.analyzer.ui.ChatPanel.class
                 .getDeclaredMethod("appendToChatAndShare", String.class, String.class, boolean.class);
         appendToChatAndShare.setAccessible(true);
-        appendToChatAndShare.invoke(panel, "你", "这条消息必须立刻可见", true);
+        appendToChatAndShare.invoke(panel, "你", "测试消息-立即渲染", true);
 
         // 关键断言：已发送的用户消息在同一次调用后就能从 UI 文本里读到，
         // 而不需要重载插件后由 loadChatHistory() 重放
         javax.swing.JTextPane chatArea = (javax.swing.JTextPane) readField(panel, "chatArea");
         assertThat(chatArea.getText())
                 .as("已发送的用户消息必须立即渲染到聊天区")
-                .contains("这条消息必须立刻可见");
+                .contains("测试消息-立即渲染");
 
         // 同时历史里也确实多了一条，供其它侧栏同步
         assertThat(client.getSharedChatUiHistorySize()).isEqualTo(sizeBefore + 1);
+    }
+
+    @Test
+    @DisplayName("legacy test marker in history file must not be replayed")
+    void legacyTestMarkerIsFilteredOnLoad() throws Exception {
+        // 旧版测试曾把该标记写进真实历史文件，插件启动时会回放；现在加载时必须过滤
+        try (ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(tempHistoryFile))) {
+            out.writeObject(java.util.List.of(
+                    new com.ai.analyzer.ui.ChatPanel.ChatMessage("user", "这条消息必须立刻可见"),
+                    new com.ai.analyzer.ui.ChatPanel.ChatMessage("user", "正常消息")));
+        }
+        burp.api.montoya.MontoyaApi mockApi = org.mockito.Mockito.mock(burp.api.montoya.MontoyaApi.class);
+        org.mockito.Mockito.when(mockApi.logging())
+                .thenReturn(org.mockito.Mockito.mock(burp.api.montoya.logging.Logging.class));
+        AgentApiClient client = new AgentApiClient(mockApi, "http://localhost", "k");
+        com.ai.analyzer.ui.ChatPanel panel = new com.ai.analyzer.ui.ChatPanel(mockApi, client);
+
+        javax.swing.JTextPane chatArea = (javax.swing.JTextPane) readField(panel, "chatArea");
+        assertThat(chatArea.getText()).contains("正常消息").doesNotContain("这条消息必须立刻可见");
+        assertThat(client.getSharedChatUiHistorySize()).isEqualTo(1);
     }
 
     private static Object readField(Object target, String name) throws Exception {
