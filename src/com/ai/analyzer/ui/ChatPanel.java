@@ -1018,12 +1018,21 @@ public class ChatPanel extends JPanel {
     }
     
     private File getChatHistoryFile() {
+        // 路径在构造时固定：延迟保存的 Swing Timer 可能在测试清掉系统属性之后才触发，
+        // 若此时再读属性会回落到真实 user.home，把测试消息写进用户历史。
+        return chatHistoryFile;
+    }
+
+    private static File resolveChatHistoryFile() {
         String override = System.getProperty(CHAT_HISTORY_PATH_PROPERTY);
         if (override != null && !override.isBlank()) {
             return new File(override.trim());
         }
         return new File(System.getProperty("user.home"), CHAT_HISTORY_FILENAME);
     }
+
+    /** 构造时解析一次，之后不再受系统属性变化影响（尤其是延迟保存定时器）。 */
+    private final File chatHistoryFile = resolveChatHistoryFile();
     
     private void saveChatHistory() {
         try {
