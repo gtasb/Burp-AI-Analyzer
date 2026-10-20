@@ -1013,8 +1013,8 @@ public class AgentApiClient {
                                     thinkingNoticeShown[0] = true;
                                 }
                                 emitModelBehavior("THINKING", thinkingDelta != null ? thinkingDelta : "");
-                                DebugContext.log("AgentApiClient", "thinking",
-                                        java.util.Map.of("len", String.valueOf(thinkingDelta != null ? thinkingDelta.length() : 0)));
+                                // 不要按 chunk 写 Debug 日志：一次推理会产生上千条 thinking 增量，
+                                // 会把 Logger/Debug 面板刷满，掩盖真正重要的工具与错误事件。
                             }
                             case TOOL_START -> {
                                 AppLogBuffer.tool("AgentApiClient", event.toolName() != null ? event.toolName() : "");

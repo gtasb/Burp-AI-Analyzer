@@ -59,6 +59,29 @@ class AgentScopeModelFactoryTest {
         }
 
         @Test
+        @DisplayName("should_detect_deepseek_by_model_or_endpoint")
+        void should_detect_deepseek() {
+            assertThat(AgentScopeModelFactory.isDeepSeekEndpoint(
+                    "https://api.deepseek.com/v1", "deepseek-chat")).isTrue();
+            assertThat(AgentScopeModelFactory.isDeepSeekEndpoint(
+                    "https://api.example.com/v1", "deepseek-reasoner")).isTrue();
+            assertThat(AgentScopeModelFactory.isDeepSeekEndpoint(
+                    "https://api.deepseek.com/v1", "gpt-4o")).isTrue();
+            assertThat(AgentScopeModelFactory.isDeepSeekEndpoint(
+                    "https://api.openai.com/v1", "gpt-4o")).isFalse();
+            assertThat(AgentScopeModelFactory.isDeepSeekEndpoint(null, null)).isFalse();
+        }
+
+        @Test
+        @DisplayName("should_build_deepseek_model_with_bearer provider defaults")
+        void should_build_deepseek_model() {
+            var model = AgentScopeModelFactory.create(
+                    ApiProvider.OPENAI_COMPATIBLE, "sk-test",
+                    "https://api.deepseek.com/v1", "deepseek-chat", false, null);
+            assertThat(model).isNotNull();
+        }
+
+        @Test
         @DisplayName("should_create_Anthropic_model_for_ANTHROPIC_provider")
         void should_create_Anthropic_model_for_ANTHROPIC_provider() {
             var model = AgentScopeModelFactory.create(

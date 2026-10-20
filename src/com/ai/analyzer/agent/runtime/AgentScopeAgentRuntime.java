@@ -448,13 +448,12 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
             if (delta != null && !delta.isEmpty()) {
                 listener.onEvent(RuntimeEvent.textDelta(delta));
             }
-            DebugContext.log("AgentScopeAgentRuntime", "text_delta", Map.of("len", String.valueOf(delta != null ? delta.length() : 0)));
         } else if (event instanceof ThinkingBlockDeltaEvent e) {
             String delta = e.getDelta();
             if (delta != null && !delta.isEmpty()) {
                 listener.onEvent(RuntimeEvent.thinking(delta));
             }
-            DebugContext.log("AgentScopeAgentRuntime", "thinking_delta", Map.of("len", String.valueOf(delta != null ? delta.length() : 0)));
+            // 不按增量写 Debug 日志（会刷屏上千条）；思考内容已通过 RuntimeEvent 送到 UI
         } else if (event instanceof io.agentscope.core.event.ToolCallDeltaEvent e) {
             // 累积流式的工具调用参数
             toolCallArgBuffers.computeIfAbsent(e.getToolCallId(), k -> new StringBuilder())

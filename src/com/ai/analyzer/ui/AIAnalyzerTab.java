@@ -629,6 +629,12 @@ public class AIAnalyzerTab extends JPanel {
             SwingUtilities.invokeLater(() -> updatePassiveScanTable(result));
         });
 
+        // 入队回调此前从未注册：低流量下要等会话批次窗口（默认 30s）到期才会出现第一行，
+        // 看起来像“被动扫描什么都没做”。入队即插行（状态=等待中），用户能立刻看到流量被接收。
+        passiveScanManager.setOnNewRequestQueued(result -> {
+            SwingUtilities.invokeLater(() -> updatePassiveScanTable(result));
+        });
+
         passiveScanManager.setOnStatusChanged(status -> {
             SwingUtilities.invokeLater(() -> {
                 passiveScanStatusLabel.setText(status);
@@ -965,6 +971,13 @@ public class AIAnalyzerTab extends JPanel {
             }
         } else {
             passiveScanTableModel.addRow(rowData);
+            // 第一行自动选中：否则结果面板一直空白，看起来像“扫描没反应”
+            if (passiveScanTable.getSelectedRow() < 0) {
+                int viewRow = passiveScanTable.convertRowIndexToView(passiveScanTableModel.getRowCount() - 1);
+                if (viewRow >= 0) {
+                    passiveScanTable.setRowSelectionInterval(viewRow, viewRow);
+                }
+            }
         }
 
         // 结果定稿后立刻释放流式缓冲：之前只有点开该行才会释放，

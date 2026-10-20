@@ -100,13 +100,27 @@ public class AgentScopeModelFactory {
         GenerateOptions defaultOptions = applyCustomParameters(
                 GenerateOptions.builder().temperature(0.7), customParameters).build();
 
-        return OpenAIChatModel.builder()
+        OpenAIChatModel.Builder builder = OpenAIChatModel.builder()
                 .apiKey(apiKey)
                 .baseUrl(baseUrl)
                 .modelName(modelName)
                 .stream(true)
-                .generateOptions(defaultOptions)
-                .build();
+                .generateOptions(defaultOptions);
+        if (isDeepSeekEndpoint(baseUrl, modelName)) {
+            // DeepSeek 思考模式要求把上一轮 assistant 的 reasoning_content 原样回传，
+            // 默认 OpenAI 格式化器会丢弃，导致工具调用后的下一次请求 400：
+            // "The `reasoning_content` in the thinking mode must be passed back to the API."
+            builder.formatter(new io.agentscope.extensions.model.openai.formatter.DeepSeekFormatter());
+            builder.nativeStructuredOutput(false);
+        }
+        return builder.build();
+    }
+
+    /** DeepSeek 端点/模型判定（用于启用其专用的消息格式化器）。 */
+    static boolean isDeepSeekEndpoint(String apiUrl, String modelName) {
+        String url = apiUrl == null ? "" : apiUrl.toLowerCase(java.util.Locale.ROOT);
+        String name = modelName == null ? "" : modelName.toLowerCase(java.util.Locale.ROOT);
+        return name.startsWith("deepseek") || url.contains("deepseek");
     }
 
     // ========== Anthropic ==========

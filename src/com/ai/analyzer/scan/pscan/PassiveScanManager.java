@@ -229,8 +229,8 @@ public class PassiveScanManager {
         // 注意：不加载历史记录，只扫描开启后新到达的流量
         // （原 loadExistingHistory() 已移除，符合“仅扫描新增流量”的设计）
         
-        notifyStatusChanged("被动扫描已启动 - 监听中...");
-        logInfo("被动扫描已启动，等待新流量...");
+        notifyStatusChanged("被动扫描已启动 - 仅监听 Proxy 流量，等待请求…");
+        logInfo("被动扫描已启动，等待新流量...（仅 ToolType.PROXY；Repeater/Intruder 流量默认不扫描）");
     }
     
     /**
@@ -361,6 +361,11 @@ public class PassiveScanManager {
             try {
                 for (SessionBatchCollector.Batch batch : batchCollector.expire(System.currentTimeMillis())) {
                     submitBatch(batch);
+                }
+                // 会话窗口未到期时也要让用户看到“流量已收到”，否则低流量下界面长时间无反馈
+                int pending = batchCollector.pendingRequestCount();
+                if (pending > 0) {
+                    notifyStatusChanged("被动扫描中 - 已收集 " + pending + " 个请求，等待会话窗口到期…");
                 }
             } catch (Exception e) {
                 logError("批次调度异常: " + e.getMessage());
