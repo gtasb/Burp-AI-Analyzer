@@ -35,6 +35,9 @@ public class ActiveAuditManager {
     private final Scanner scanner;
     private final Supplier<AuditConfiguration> configSupplier;
     private final List<Audit> activeAudits = new CopyOnWriteArrayList<>();
+    /** 插件发起审计的目标 host/URL；用于过滤 Burp 自身扫描产生的问题 */
+    private final Set<String> pluginAuditHosts = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final Set<String> pluginAuditUrls = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final Registration registration;
     /** 被动扫描高危结果自动入队的待审计目标（按 URL 去重） */
     private final List<HttpRequestResponse> pendingQueue = new CopyOnWriteArrayList<>();
@@ -83,6 +86,7 @@ public class ActiveAuditManager {
             }
             try {
                 audit.addRequestResponse(target);
+                rememberAuditTarget(target);
                 added++;
             } catch (Exception e) {
                 notifyStatus("加入审计目标失败: " + e.getMessage());
@@ -99,8 +103,13 @@ public class ActiveAuditManager {
 
     private void handleNewAuditIssue(AuditIssue issue) {
         // 只有插件主动发起的审计（activeAudits 非空）才处理问题；
-        // 全局注册的 handler 可能在插件未发起的扫描期间收到问题，直接丢弃
+        // 全局注册的 handler 可能在插件未发起的扫描期间收到问题，直接丢弃。
         if (issue == null || onIssueFound == null || activeAudits.isEmpty()) {
+            return;
+        }
+        // activeAudits 无法得知审计何时完成，仅凭非空判断会把用户自己发起的 Burp 扫描
+        // 结果也收进来。这里再按插件审计目标 host 过滤。
+        if (!belongsToPluginAudit(issue)) {
             return;
         }
         try {
@@ -108,6 +117,40 @@ public class ActiveAuditManager {
         } catch (Exception e) {
             notifyStatus("处理主动审计问题失败: " + e.getMessage());
         }
+    }
+
+    private void rememberAuditTarget(HttpRequestResponse target) {
+        try {
+            String url = target.request() != null ? target.request().url() : null;
+            if (url == null || url.isBlank()) return;
+            pluginAuditUrls.add(url);
+            java.net.URI uri = java.net.URI.create(url);
+            if (uri.getHost() != null) {
+                pluginAuditHosts.add(uri.getHost().toLowerCase(java.util.Locale.ROOT));
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private boolean belongsToPluginAudit(AuditIssue issue) {
+        try {
+            if (issue.baseUrl() != null && pluginAuditUrls.contains(issue.baseUrl())) {
+                return true;
+            }
+            for (HttpRequestResponse rr : issue.requestResponses()) {
+                if (rr == null || rr.request() == null) continue;
+                String url = rr.request().url();
+                if (url == null) continue;
+                if (pluginAuditUrls.contains(url)) return true;
+                java.net.URI uri = java.net.URI.create(url);
+                String host = uri.getHost();
+                if (host != null && pluginAuditHosts.contains(host.toLowerCase(java.util.Locale.ROOT))) {
+                    return true;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return false;
     }
 
     public boolean hasActiveTasks() {

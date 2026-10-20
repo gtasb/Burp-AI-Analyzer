@@ -71,7 +71,15 @@ public class AgentScopeMcpManager {
         }
         McpClientWrapper created = factory.get();
         McpClientWrapper raced = SHARED_CLIENTS.putIfAbsent(key, created);
-        return raced != null ? raced : created;
+        if (raced != null) {
+            // 并发初始化竞争失败：关闭自己刚建的客户端，避免泄漏一条 MCP 连接
+            try {
+                created.close();
+            } catch (Exception ignored) {
+            }
+            return raced;
+        }
+        return created;
     }
 
     @FunctionalInterface
@@ -141,6 +149,7 @@ public class AgentScopeMcpManager {
         String[] modes = resolveTransportModes(url, transportType);
         Exception firstFailure = null;
         for (String mode : modes) {
+            McpClientWrapper client = null;
             try {
                 // 必须先设置传输再应用 configure：header() 仅在 transportConfig 为
                 // HttpTransportConfig 时生效，先 configure 后设传输会导致 Authorization 头被静默丢弃
@@ -153,10 +162,17 @@ public class AgentScopeMcpManager {
                 if (configure != null) {
                     configure.accept(builder);
                 }
-                McpClientWrapper client = builder.buildSync();
+                client = builder.buildSync();
                 client.initialize().block();
                 return client;
             } catch (Exception e) {
+                // 构建成功但握手失败：关闭该客户端，避免每次回退尝试泄漏 socket
+                if (client != null) {
+                    try {
+                        client.close();
+                    } catch (Exception ignored) {
+                    }
+                }
                 Exception wrapped = new Exception("模式[" + mode + "]连接失败: " + url, e);
                 if (firstFailure == null) {
                     firstFailure = wrapped;
@@ -221,6 +237,11 @@ public class AgentScopeMcpManager {
      */
     public static List<McpClientWrapper> registerBurpMcp(
             Toolkit toolkit, String burpMcpUrl, String authorization) {
+        return registerBurpMcp(toolkit, burpMcpUrl, authorization, "burp-mcp");
+    }
+
+    public static List<McpClientWrapper> registerBurpMcp(
+            Toolkit toolkit, String burpMcpUrl, String authorization, String logSource) {
 
         List<McpClientWrapper> clients = new ArrayList<>();
         if (burpMcpUrl == null || burpMcpUrl.trim().isEmpty()) return clients;
@@ -240,7 +261,7 @@ public class AgentScopeMcpManager {
             if (client == null) {
                 throw new RuntimeException("MCP 客户端构建失败: " + url);
             }
-            toolkit.registerMcpClient(client).block();
+            toolkit.registerMcpClient(new LoggingMcpClientWrapper(logSource, client)).block();
             clients.add(client);
             recordRegistration(key);
             AppLogBuffer.info("AgentScopeMcpManager", "Burp MCP registered (shared): " + url);
@@ -269,6 +290,13 @@ public class AgentScopeMcpManager {
     public static McpClientWrapper registerCustomMcp(
             Toolkit toolkit, String serverName, String transportType,
             String urlOrCommand, List<String> args, Map<String, String> headers) {
+        return registerCustomMcp(toolkit, serverName, transportType, urlOrCommand, args, headers,
+                serverName);
+    }
+
+    public static McpClientWrapper registerCustomMcp(
+            Toolkit toolkit, String serverName, String transportType,
+            String urlOrCommand, List<String> args, Map<String, String> headers, String logSource) {
 
         if (serverName == null || serverName.trim().isEmpty()) return null;
         if (urlOrCommand == null || urlOrCommand.trim().isEmpty()) return null;
@@ -288,7 +316,7 @@ public class AgentScopeMcpManager {
             if (client == null) {
                 throw new RuntimeException("MCP 客户端构建失败: " + serverName);
             }
-            toolkit.registerMcpClient(client).block();
+            toolkit.registerMcpClient(new LoggingMcpClientWrapper(logSource, client)).block();
             recordRegistration(key);
             AppLogBuffer.info("AgentScopeMcpManager", "Custom MCP registered (shared): " + serverName + " (" + transportType + ")");
             DebugContext.log("AgentScopeMcpManager", "custom_mcp_registered", Map.of("server", serverName, "transport", String.valueOf(transportType)));
@@ -306,16 +334,24 @@ public class AgentScopeMcpManager {
      * 为 RAG MCP 服务器创建客户端并注册到 Toolkit。
      */
     public static McpClientWrapper registerRagMcp(Toolkit toolkit, String ragMcpUrl) {
+        return registerRagMcp(toolkit, ragMcpUrl, "rag-mcp");
+    }
+
+    public static McpClientWrapper registerRagMcp(Toolkit toolkit, String ragMcpUrl, String logSource) {
         if (ragMcpUrl == null || ragMcpUrl.trim().isEmpty()) return null;
-        return registerCustomMcp(toolkit, "rag-mcp", "sse", ragMcpUrl.trim(), null, null);
+        return registerCustomMcp(toolkit, "rag-mcp", "sse", ragMcpUrl.trim(), null, null, logSource);
     }
 
     /**
      * 为 Chrome MCP 服务器创建客户端并注册到 Toolkit。
      */
     public static McpClientWrapper registerChromeMcp(Toolkit toolkit, String chromeMcpUrl) {
+        return registerChromeMcp(toolkit, chromeMcpUrl, "chrome-mcp");
+    }
+
+    public static McpClientWrapper registerChromeMcp(Toolkit toolkit, String chromeMcpUrl, String logSource) {
         if (chromeMcpUrl == null || chromeMcpUrl.trim().isEmpty()) return null;
-        return registerCustomMcp(toolkit, "chrome-mcp", "streamableHttp", chromeMcpUrl.trim(), null, null);
+        return registerCustomMcp(toolkit, "chrome-mcp", "streamableHttp", chromeMcpUrl.trim(), null, null, logSource);
     }
 
     /**

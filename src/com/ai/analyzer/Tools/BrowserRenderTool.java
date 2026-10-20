@@ -66,32 +66,48 @@ public class BrowserRenderTool {
             pb.redirectErrorStream(true);
             Process process = pb.start();
 
+            // 必须异步读 stdout：先 readLine 到 EOF 再 waitFor 会在 Chrome 不关管道时永久阻塞，
+            // waitMs 形同虚设。读取线程持续排空管道（截断后也继续读，避免子进程写满缓冲区卡死）。
             StringBuilder output = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    if (output.length() + line.length() + 1 > maxDom) {
-                        output.append(line, 0, Math.max(0, maxDom - output.length() - 1));
-                        output.append("\n...[DOM 已截断]");
-                        break;
+            java.util.concurrent.atomic.AtomicBoolean truncated = new java.util.concurrent.atomic.AtomicBoolean(false);
+            Thread readerThread = new Thread(() -> {
+                try (BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        synchronized (output) {
+                            if (truncated.get()) continue;
+                            if (output.length() + line.length() + 1 > maxDom) {
+                                output.append(line, 0, Math.max(0, maxDom - output.length() - 1));
+                                output.append("\n...[DOM 已截断]");
+                                truncated.set(true);
+                            } else {
+                                output.append(line).append("\n");
+                            }
+                        }
                     }
-                    output.append(line).append("\n");
+                } catch (Exception ignored) {
                 }
-            }
+            }, "browser-render-reader");
+            readerThread.setDaemon(true);
+            readerThread.start();
 
             boolean finished = process.waitFor(wait + 5000, TimeUnit.MILLISECONDS);
             if (!finished) {
                 process.destroyForcibly();
                 return "渲染超时（等待 " + wait + "ms），页面可能加载过慢或存在死循环。";
             }
+            readerThread.join(2000);
 
             int exitCode = process.exitValue();
-            if (exitCode != 0 && output.length() == 0) {
+            String dom;
+            synchronized (output) {
+                dom = output.toString().trim();
+            }
+            if (exitCode != 0 && dom.isEmpty()) {
                 return "Chrome 退出码 " + exitCode + "，未产生 DOM 输出。可能 URL 不可达或 Chrome 版本不兼容。";
             }
 
-            String dom = output.toString().trim();
             if (dom.isEmpty()) {
                 return "Chrome 无 DOM 输出（退出码 " + exitCode + "），页面可能空白或需要登录。";
             }
@@ -99,7 +115,7 @@ public class BrowserRenderTool {
             return "[浏览器渲染结果]\n"
                     + "URL: " + url + "\n"
                     + "DOM 长度: " + dom.length() + " 字符\n"
-                    + (dom.length() >= maxDom ? "[DOM 已截断]\n" : "")
+                    + (truncated.get() ? "[DOM 已截断]\n" : "")
                     + "\n" + dom;
 
         } catch (Exception e) {

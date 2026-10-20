@@ -23,8 +23,16 @@ import static org.mockito.Mockito.*;
 class ActiveAuditManagerTest {
 
     private HttpRequestResponse rr() {
+        return rr(null);
+    }
+
+    private HttpRequestResponse rr(String url) {
         HttpRequestResponse item = mock(HttpRequestResponse.class);
-        when(item.request()).thenReturn(mock(HttpRequest.class));
+        HttpRequest request = mock(HttpRequest.class);
+        if (url != null) {
+            when(request.url()).thenReturn(url);
+        }
+        when(item.request()).thenReturn(request);
         return item;
     }
 
@@ -99,9 +107,10 @@ class ActiveAuditManagerTest {
         // 生产实现仅在存在「插件主动发起的审计」时才回读 issue（activeAudits 非空）
         Audit audit = mock(Audit.class);
         when(scanner.startAudit(any())).thenReturn(audit);
-        manager.startAudit(List.of(rr()));
+        manager.startAudit(List.of(rr("https://target/a")));
 
         AuditIssue issue = mock(AuditIssue.class);
+        when(issue.baseUrl()).thenReturn("https://target/a");
         handlerCaptor.getValue().handleNewAuditIssue(issue);
 
         assertThat(received).containsExactly(issue);

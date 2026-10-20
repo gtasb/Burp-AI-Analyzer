@@ -340,8 +340,9 @@ public class ScanResult {
      * 优先级：严重 > 高 > 中 > 低 > 信息 > 无
      *
      * 解析策略：
-     * 1. 先检查否定语句（"未发现"/"没有"/"不存在"等 + "漏洞"/"问题"/"风险"）
-     * 2. 再检查"严重程度: X"格式的明确等级标注（优先于关键词匹配）
+     * 1. 先检查"严重程度: X"格式的明确等级标注（最高优先级；明确等级不应被正文里的
+     *    “未发现…”字样覆盖，否则「未发现明显问题，但存在 SQL 注入，严重程度: 高」会被降为无）
+     * 2. 再检查否定语句（"未发现"/"没有"/"不存在"等 + "漏洞"/"问题"/"风险"）
      * 3. 最后按优先级匹配风险关键词
      */
     private RiskLevel parseRiskLevelFromResult(String result) {
@@ -351,15 +352,15 @@ public class ScanResult {
 
         String lower = result.toLowerCase();
 
-        // 第一步：检查否定语句——AI 明确表示没有发现漏洞/问题/风险
-        if (isNegativeAssessment(lower)) {
-            return RiskLevel.NONE;
-        }
-
-        // 第二步：检查"严重程度: X" / "severity: X"格式的明确等级标注
+        // 第一步：明确等级标注优先
         RiskLevel explicitLevel = parseExplicitSeverityLabel(lower);
         if (explicitLevel != null) {
             return explicitLevel;
+        }
+
+        // 第二步：检查否定语句——AI 明确表示没有发现漏洞/问题/风险
+        if (isNegativeAssessment(lower)) {
+            return RiskLevel.NONE;
         }
 
         // 第三步：按优先级检查风险关键词（排除已被"严重程度:"模式覆盖的误匹配）

@@ -68,6 +68,13 @@ public class BatchFuzzTool {
         List<String> anomalies = new ArrayList<>();
         HttpService service = HttpService.httpService(host, port, https);
 
+        // 参数在请求中不存在时不要发送：否则整批都是未修改的原始请求，却会被计为“成功”
+        if (!substituteParam(requestContent, paramName, "__probe__").equals(requestContent)) {
+            // 可替换，继续
+        } else {
+            return "批量爆破未执行：在请求中找不到参数 \"" + paramName + "\"（不会发送未修改的请求）。";
+        }
+
         for (String payload : payloads) {
             try {
                 String reqBody = substituteParam(requestContent, paramName, payload);
@@ -100,13 +107,24 @@ public class BatchFuzzTool {
     static String substituteParam(String requestContent, String paramName, String newValue) {
         if (paramName == null || paramName.isEmpty()) return requestContent;
         String s = requestContent;
-        String jsonPat = "\"" + Pattern.quote(paramName) + "\"\\s*:\\s*\"[^\"]*\"";
-        java.util.regex.Matcher m = Pattern.compile(jsonPat).matcher(s);
+        String quoted = Pattern.quote(paramName);
+        // JSON 字符串值
+        String jsonStringPat = "\"" + quoted + "\"\\s*:\\s*\"[^\"]*\"";
+        java.util.regex.Matcher m = Pattern.compile(jsonStringPat).matcher(s);
         if (m.find()) {
             return s.substring(0, m.start()) + "\"" + paramName + "\":\"" + newValue.replace("\"", "\\\"") + "\""
                     + s.substring(m.end());
         }
-        String formPat = "(?<![\\w-])" + Pattern.quote(paramName) + "=([^&\\s]*)";
+        // JSON 非字符串值（数字/布尔/null/数组/对象）：整值替换，数字 payload 保持数字类型
+        String jsonAnyPat = "\"" + quoted + "\"\\s*:\\s*(\"[^\"]*\"|true|false|null|-?\\d+(?:\\.\\d+)?|\\[[^\\]]*\\]|\\{[^}]*\\})";
+        m = Pattern.compile(jsonAnyPat).matcher(s);
+        if (m.find()) {
+            String encoded = newValue.matches("-?\\d+(?:\\.\\d+)?")
+                    ? newValue
+                    : "\"" + newValue.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+            return s.substring(0, m.start()) + "\"" + paramName + "\":" + encoded + s.substring(m.end());
+        }
+        String formPat = "(?<![\\w-])" + quoted + "=([^&\\s]*)";
         m = Pattern.compile(formPat).matcher(s);
         if (m.find()) {
             return s.substring(0, m.start()) + paramName + "=" + newValue + s.substring(m.end());

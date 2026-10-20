@@ -1,12 +1,18 @@
 package com.ai.analyzer.core;
 
 import com.ai.analyzer.core.AgentConfig.ApiProvider;
+import com.google.gson.Gson;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.model.Model;
 import io.agentscope.extensions.model.anthropic.AnthropicChatModel;
 import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
 import io.agentscope.extensions.model.dashscope.EndpointType;
 import io.agentscope.extensions.model.openai.OpenAIChatModel;
+
+import java.util.Set;
 
 /**
  * AgentScope {@link Model} 统一工厂。
@@ -17,6 +23,14 @@ import io.agentscope.extensions.model.openai.OpenAIChatModel;
  * <p>迁移完成后，{@link ChatModelFactory} 将被移除，此类成为唯一的模型工厂。
  */
 public class AgentScopeModelFactory {
+
+    private static final Gson GSON = new Gson();
+    /** 已映射到 GenerateOptions 字段的键；其余自定义键原样放进 additionalBodyParams */
+    private static final Set<String> KNOWN_PARAMS = Set.of(
+            "temperature", "top_p", "topP", "top_k", "topK", "max_tokens", "maxTokens",
+            "max_completion_tokens", "frequency_penalty", "presence_penalty",
+            "thinking_budget", "reasoning_effort", "seed", "parallel_tool_calls",
+            "cache_control", "stream");
 
     private AgentScopeModelFactory() {}
 
@@ -44,26 +58,25 @@ public class AgentScopeModelFactory {
         }
 
         if (provider == ApiProvider.OPENAI_COMPATIBLE) {
-            return createOpenAIModel(apiKey, apiUrl, model);
+            return createOpenAIModel(apiKey, apiUrl, model, customParameters);
         }
         if (provider == ApiProvider.ANTHROPIC) {
-            return createAnthropicModel(apiKey, apiUrl, model);
+            return createAnthropicModel(apiKey, apiUrl, model, customParameters);
         }
-        return createDashScopeModel(apiKey, apiUrl, model, enableSearch);
+        return createDashScopeModel(apiKey, apiUrl, model, enableSearch, customParameters);
     }
 
     // ========== DashScope ==========
 
     private static Model createDashScopeModel(
             String apiKey, String apiUrl, String model,
-            boolean enableSearch) {
+            boolean enableSearch, String customParameters) {
 
         String baseUrl = normalizeUrl(apiUrl, "https://dashscope.aliyuncs.com/api/v1");
         String modelName = isBlank(model) ? "qwen-max" : model.trim();
 
-        GenerateOptions defaultOptions = GenerateOptions.builder()
-                .temperature(0.7)
-                .build();
+        GenerateOptions defaultOptions = applyCustomParameters(
+                GenerateOptions.builder().temperature(0.7), customParameters).build();
 
         return DashScopeChatModel.builder()
                 .apiKey(apiKey)
@@ -79,14 +92,13 @@ public class AgentScopeModelFactory {
     // ========== OpenAI 兼容 ==========
 
     private static Model createOpenAIModel(
-            String apiKey, String apiUrl, String model) {
+            String apiKey, String apiUrl, String model, String customParameters) {
 
         String baseUrl = normalizeUrl(apiUrl, "https://api.openai.com/v1");
         String modelName = isBlank(model) ? "gpt-3.5-turbo" : model.trim();
 
-        GenerateOptions defaultOptions = GenerateOptions.builder()
-                .temperature(0.7)
-                .build();
+        GenerateOptions defaultOptions = applyCustomParameters(
+                GenerateOptions.builder().temperature(0.7), customParameters).build();
 
         return OpenAIChatModel.builder()
                 .apiKey(apiKey)
@@ -100,14 +112,12 @@ public class AgentScopeModelFactory {
     // ========== Anthropic ==========
 
     private static Model createAnthropicModel(
-            String apiKey, String apiUrl, String model) {
+            String apiKey, String apiUrl, String model, String customParameters) {
 
         String modelName = isBlank(model) ? "claude-sonnet-4-5-20250514" : model.trim();
 
-        GenerateOptions defaultOptions = GenerateOptions.builder()
-                .temperature(0.7)
-                .maxTokens(4096)
-                .build();
+        GenerateOptions defaultOptions = applyCustomParameters(
+                GenerateOptions.builder().temperature(0.7).maxTokens(4096), customParameters).build();
 
         var builder = AnthropicChatModel.builder()
                 .apiKey(apiKey)
@@ -123,6 +133,60 @@ public class AgentScopeModelFactory {
     }
 
     // ========== 辅助 ==========
+
+    /**
+     * 把 UI 的「自定义参数」JSON 应用到 GenerateOptions。未知键作为 additionalBodyParams
+     * 原样发给 provider；非法 JSON 静默忽略，避免一个手误让整个模型初始化失败。
+     */
+    private static GenerateOptions.Builder applyCustomParameters(GenerateOptions.Builder builder,
+                                                                 String customParameters) {
+        if (isBlank(customParameters)) {
+            return builder;
+        }
+        try {
+            JsonElement root = JsonParser.parseString(customParameters);
+            if (!root.isJsonObject()) {
+                return builder;
+            }
+            JsonObject obj = root.getAsJsonObject();
+            if (has(obj, "temperature")) builder.temperature(obj.get("temperature").getAsDouble());
+            if (has(obj, "top_p")) builder.topP(obj.get("top_p").getAsDouble());
+            if (has(obj, "topP")) builder.topP(obj.get("topP").getAsDouble());
+            if (has(obj, "top_k")) builder.topK(obj.get("top_k").getAsInt());
+            if (has(obj, "topK")) builder.topK(obj.get("topK").getAsInt());
+            if (has(obj, "max_tokens")) builder.maxTokens(obj.get("max_tokens").getAsInt());
+            if (has(obj, "maxTokens")) builder.maxTokens(obj.get("maxTokens").getAsInt());
+            if (has(obj, "max_completion_tokens")) {
+                builder.maxCompletionTokens(obj.get("max_completion_tokens").getAsInt());
+            }
+            if (has(obj, "frequency_penalty")) {
+                builder.frequencyPenalty(obj.get("frequency_penalty").getAsDouble());
+            }
+            if (has(obj, "presence_penalty")) {
+                builder.presencePenalty(obj.get("presence_penalty").getAsDouble());
+            }
+            if (has(obj, "thinking_budget")) builder.thinkingBudget(obj.get("thinking_budget").getAsInt());
+            if (has(obj, "reasoning_effort")) builder.reasoningEffort(obj.get("reasoning_effort").getAsString());
+            if (has(obj, "seed")) builder.seed(obj.get("seed").getAsLong());
+            if (has(obj, "parallel_tool_calls")) {
+                builder.parallelToolCalls(obj.get("parallel_tool_calls").getAsBoolean());
+            }
+            if (has(obj, "cache_control")) builder.cacheControl(obj.get("cache_control").getAsBoolean());
+            if (has(obj, "stream")) builder.stream(obj.get("stream").getAsBoolean());
+            for (var entry : obj.entrySet()) {
+                if (!KNOWN_PARAMS.contains(entry.getKey())) {
+                    builder.additionalBodyParam(entry.getKey(), GSON.fromJson(entry.getValue(), Object.class));
+                }
+            }
+        } catch (Exception ignored) {
+            // 非法 JSON / 类型不匹配：保持默认参数
+        }
+        return builder;
+    }
+
+    private static boolean has(JsonObject obj, String key) {
+        return obj.has(key) && !obj.get(key).isJsonNull();
+    }
 
     /**
      * 返回模型创建时的摘要描述，供调用方打日志。

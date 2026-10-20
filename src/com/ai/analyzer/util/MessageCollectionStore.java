@@ -258,11 +258,15 @@ public final class MessageCollectionStore {
                 }
                 try {
                     byte[] requestBytes = Base64.getDecoder().decode((String) requestB64);
+                    // 空串表示「原条目没有响应」；不能构造成空 HttpResponse，
+                    // 否则恢复后 hasResponse() 会显示为「是」并发送空响应段。
+                    Object responseB64 = item.get("responseB64");
+                    boolean hasResponse = responseB64 instanceof String s && !s.isEmpty();
                     HttpRequestResponse rr = HttpRequestResponse.httpRequestResponse(
                             HttpRequest.httpRequest(ByteArray.byteArray(requestBytes)),
-                            item.get("responseB64") instanceof String
+                            hasResponse
                                     ? HttpResponse.httpResponse(ByteArray.byteArray(
-                                            Base64.getDecoder().decode((String) item.get("responseB64"))))
+                                            Base64.getDecoder().decode((String) responseB64)))
                                     : null);
                     if (ENTRIES.size() < MAX_ITEMS && indexOf(rr) < 0) {
                         Object ts = item.get("ts");

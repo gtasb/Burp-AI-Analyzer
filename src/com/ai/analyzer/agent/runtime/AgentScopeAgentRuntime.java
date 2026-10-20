@@ -91,6 +91,10 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
 
     private volatile HarnessAgent harnessAgent;
     private final AtomicReference<Subscription> currentSubscription = new AtomicReference<>();
+    /** 串行化 chat：同一 HarnessAgent 不能被并发驱动；用独立锁而不是 synchronized(this)，
+     *  使 shutdown/resetSession 不必等待整轮对话结束（否则 EDT 上的设置操作会卡死）。 */
+    private final java.util.concurrent.locks.ReentrantLock chatLock = new java.util.concurrent.locks.ReentrantLock();
+    private final Object agentBuildLock = new Object();
     private volatile RequireConfirmHandler confirmHandler;
     /** 累积 ToolCallDeltaEvent 的部分参数字符串，key=toolCallId，在 ToolCallEndEvent 或 ToolResultStartEvent 时取用 */
     private final java.util.concurrent.ConcurrentHashMap<String, StringBuilder> toolCallArgBuffers = new java.util.concurrent.ConcurrentHashMap<>();
@@ -140,16 +144,27 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
     /**
      * 同步执行一轮 agent 会话。
      *
-     * <p>{@code synchronized} 的原因：本实现共享单个 {@link HarnessAgent} 与单个
-     * {@link #currentSubscription}，而被动扫描会用多线程并发调用 {@link #chat}，
-     * 并发下会互相覆盖 {@code currentSubscription}（取消 A 却取消 B）并并发操作
-     * 同一 HarnessAgent 的状态存储，导致取消失效/状态污染。用实例锁串行化后，
-     * 一次只跑一个流式会话，消除上述串写。长期应改为每请求一个运行时（DEC-01）。
+     * <p>用 {@link #chatLock} 串行化：本实现共享单个 {@link HarnessAgent} 与单个
+     * {@link #currentSubscription}，并发调用会互相覆盖订阅（取消 A 却取消 B）并并发操作
+     * 同一 HarnessAgent 的状态存储。注意不要改回 {@code synchronized(this)}——
+     * {@link #shutdown()} 会在 EDT 的设置操作中被调用，持有实例锁会把整轮对话时长
+     * 转嫁给 Swing 线程。
      */
     @Override
-    public synchronized StreamSession chat(List<com.ai.analyzer.agent.runtime.ChatMessage> messages,
+    public StreamSession chat(List<com.ai.analyzer.agent.runtime.ChatMessage> messages,
                               String sessionId,
                               RuntimeEventListener listener) {
+        chatLock.lock();
+        try {
+            return chatLocked(messages, sessionId, listener);
+        } finally {
+            chatLock.unlock();
+        }
+    }
+
+    private StreamSession chatLocked(List<com.ai.analyzer.agent.runtime.ChatMessage> messages,
+                                     String sessionId,
+                                     RuntimeEventListener listener) {
         CompletableFuture<String> future = new CompletableFuture<>();
         String userId = System.getProperty("user.name", "burp-user");
 
@@ -212,8 +227,12 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
             }
             future.complete(null);
         } catch (Exception e) {
-            listener.onEvent(RuntimeEvent.error(e));
-            listener.onError(e);
+            // 用户/设置变更触发的取消不应作为错误上报（重复报错会误导用户）；
+            // doOnError 已经上报过的异常也不再重复上报
+            if (!future.isCancelled() && !future.isDone()) {
+                listener.onEvent(RuntimeEvent.error(e));
+                listener.onError(e);
+            }
             future.completeExceptionally(e);
         }
 
@@ -264,19 +283,41 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
     }
 
     @Override
-    public synchronized void shutdown() {
+    public void shutdown() {
         Subscription sub = currentSubscription.getAndSet(null);
         if (sub != null) {
             sub.cancel();
         }
+        HarnessAgent agent = harnessAgent;
         harnessAgent = null;
+        if (agent != null) {
+            // 空闲时同步 close（「新会话」随后要立刻 purge 文件，Windows 下句柄未释放会删不掉）；
+            // 对话进行中则不能等锁（调用方可能是 EDT），交给守护线程异步关闭。
+            if (chatLock.tryLock()) {
+                try {
+                    agent.close();
+                } catch (Exception ignored) {
+                } finally {
+                    chatLock.unlock();
+                }
+            } else {
+                Thread closer = new Thread(() -> {
+                    try {
+                        agent.close();
+                    } catch (Exception ignored) {
+                    }
+                }, "harness-agent-close");
+                closer.setDaemon(true);
+                closer.start();
+            }
+        }
     }
 
     /**
      * 重置当前 Agent 会话上下文：释放并重建 agent（下一次请求会全新初始化），
      * 从而清空对话历史、长期记忆与任何挂起状态。
      */
-    public synchronized void resetSession() {
+    public void resetSession() {
         // 官方状态清理 API（AgentScope 2.0.1+）：清掉 HarnessAgent 的内存状态缓存
         // （挂起确认 ASKING、工具参数缓冲、会话上下文等），比只“置空重建”更彻底；
         // clearContext(agentId, sessionId) 的参数语义未经验证，这里只用无参全量缓存清理。
@@ -329,9 +370,11 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
     }
 
     public static void purgePersistentSessionData(Path workspacePath) {
-        if (workspacePath == null) return;
+        // workplace 未配置时 Harness 会使用默认 workspace（resolveEffectiveWorkspace 已复刻回退链），
+        // 此时也必须清理记忆，否则「新会话」仍会加载旧上下文。
+        Path workspace = resolveEffectiveWorkspace(workspacePath);
         deleteRecursivelyQuietly(resolveFileToolRoot(workspacePath));
-        deleteRecursivelyQuietly(workspacePath.resolve("agents").resolve(AGENT_NAME));
+        deleteRecursivelyQuietly(workspace.resolve("agents").resolve(AGENT_NAME));
     }
 
     private static void deleteRecursivelyQuietly(Path path) {
@@ -378,7 +421,10 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
                 .doOnNext(event -> dispatchAgentScopeEvent(event, listener, pendingConfirm))
                 .doOnComplete(() -> {
                     currentSubscription.set(null);
-                    listener.onComplete();
+                    // HITL 暂停轮次也会 complete：只有没有待确认调用时才是整轮会话结束
+                    if (pendingConfirm.isEmpty()) {
+                        listener.onComplete();
+                    }
                 })
                 .doOnError(error -> {
                     currentSubscription.set(null);
@@ -481,7 +527,7 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
 
     private HarnessAgent getOrCreateHarnessAgent() {
         if (harnessAgent == null) {
-            synchronized (this) {
+            synchronized (agentBuildLock) {
                 if (harnessAgent == null) {
                     var builder = HarnessAgent.builder()
                             .name(AGENT_NAME)

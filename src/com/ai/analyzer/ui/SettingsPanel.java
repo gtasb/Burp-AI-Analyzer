@@ -1807,6 +1807,7 @@ public class SettingsPanel {
             psClient.setApiKey(apiClient.getApiKey());
             psClient.setModel(apiClient.getModel());
             psClient.setMaxTokens(apiClient.getMaxTokens());
+            psClient.setCustomParameters(apiClient.getConfig().getCustomParameters());
             psClient.setApiProvider(apiClient.getApiProvider().getDisplayName());
             psClient.setEnableSearch(apiClient.isEnableSearch());
             psClient.setSearchMode(apiClient.getConfig().getSearchMode());
@@ -1927,6 +1928,10 @@ public class SettingsPanel {
             // 自定义 MCP 配置
             settings.setEnableCustomMcp(enableCustomMcpCheckBox != null && enableCustomMcpCheckBox.isSelected());
             settings.setCustomMcpConfigJson(customMcpConfigArea != null ? customMcpConfigArea.getText() : "");
+            // RAG/Chrome MCP 没有独立输入框：保留运行中的值，避免每次保存把旧配置清零
+            settings.setRagMcpUrl(apiClient.getRagMcpUrl());
+            settings.setEnableChromeMcp(apiClient.isEnableChromeMcp());
+            settings.setChromeMcpUrl(apiClient.getChromeMcpUrl());
             apiClient.setCustomMcpConfigJson(settings.isEnableCustomMcp() ? settings.getCustomMcpConfigJson() : "");
             if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
                 passiveScanManager.getApiClient().setCustomMcpConfigJson(settings.isEnableCustomMcp() ? settings.getCustomMcpConfigJson() : "");
@@ -2021,14 +2026,10 @@ public class SettingsPanel {
             // 应用被动扫描过滤规则
             applyPassiveScanFilters();
 
-            ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream("ai_analyzer_settings.dat"));
-            oos.writeObject(settings);
-            oos.close();
+            settings.saveTo(new File("ai_analyzer_settings.dat"));
             // 同时写用户主目录，防止 Burp 工作目录变化导致配置漂移（加载时 CWD 优先）
             java.io.File homeSettingsFile = new java.io.File(System.getProperty("user.home"), ".burp_ai_analyzer_settings");
-            try (ObjectOutputStream homeOut = new ObjectOutputStream(new FileOutputStream(homeSettingsFile))) {
-                homeOut.writeObject(settings);
-            }
+            settings.saveTo(homeSettingsFile);
             setApiKeySecretAndMask(effectiveApiKey);
 
             // 保存即生效：核心 API 配置推送到运行中的客户端（触发 runtime 重建，
@@ -2047,6 +2048,7 @@ public class SettingsPanel {
                 psClient.setApiKey(effectiveApiKey);
                 psClient.setModel(getModelText());
                 psClient.setMaxTokens(maxTokensField.getText().trim());
+                psClient.setCustomParameters(customParametersField.getText().trim());
             }
 
             api.logging().logToOutput("设置已保存");
@@ -2248,6 +2250,8 @@ public class SettingsPanel {
         apiClient.setBurpMcpAuthorization(settings.getBurpMcpAuthorization());
         apiClient.setEnableRagMcp(settings.isEnableRagMcp());
         apiClient.setRagMcpUrl(settings.getRagMcpUrl());
+        apiClient.setEnableChromeMcp(settings.isEnableChromeMcp());
+        apiClient.setChromeMcpUrl(settings.getChromeMcpUrl());
         apiClient.setRagMcpDocumentsPath(settings.getRagMcpDocumentsPath());
         apiClient.setCustomMcpConfigJson(settings.isEnableCustomMcp() ? settings.getCustomMcpConfigJson() : "");
         apiClient.setEnableFileSystemAccess(settings.isEnableFileSystemAccess());
@@ -2354,14 +2358,23 @@ public class SettingsPanel {
      * 手动加载设置（用户点击"加载设置"按钮时调用）
      */
     private void loadSettings() {
+        java.io.File local = new java.io.File("ai_analyzer_settings.dat");
+        java.io.File home = new java.io.File(System.getProperty("user.home"), ".burp_ai_analyzer_settings");
+        java.io.File source = local.exists() ? local : (home.exists() ? home : null);
+        if (source == null) {
+            flashStatusMessage("未找到配置文件");
+            api.logging().logToError("加载设置失败: 当前目录与用户主目录均无配置文件");
+            return;
+        }
         try {
-            PluginSettings settings = PluginSettings.loadCompat(new java.io.File("ai_analyzer_settings.dat"));
-
+            PluginSettings settings = PluginSettings.loadCompat(source);
             applySettings(settings);
 
-            api.logging().logToOutput("设置已加载");
+            api.logging().logToOutput("设置已加载: " + source.getAbsolutePath());
+            flashStatusMessage("设置已加载 ✔");
         } catch (Exception e) {
             api.logging().logToError("加载设置失败: " + e.getMessage());
+            flashStatusMessage("加载设置失败: " + e.getMessage());
         }
     }
 

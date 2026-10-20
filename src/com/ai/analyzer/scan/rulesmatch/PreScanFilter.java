@@ -86,28 +86,41 @@ public class PreScanFilter {
                 ? requestResponse.response().toString() 
                 : "";
             
-            // 合并请求和响应用于扫描
+            // 合并请求和响应用于扫描；限制输入长度——正则超时无法被 interrupt 打断，
+            // 数 MB 的响应会让回溯规则长时间占满线程，这里先截断到 512KB。
             String combinedContent = requestStr + "\n" + responseStr;
-            
+            int maxScanChars = 512 * 1024;
+            if (combinedContent.length() > maxScanChars) {
+                combinedContent = combinedContent.substring(0, maxScanChars);
+            }
+
             // 分批扫描（每个线程处理一部分规则）
             List<Future<List<ScanMatch>>> futures = new ArrayList<>();
             int rulesPerThread = Math.max(1, rules.size() / threadPoolSize);
-            
+            final String scanContent = combinedContent;
+
             for (int i = 0; i < rules.size(); i += rulesPerThread) {
                 int start = i;
                 int end = Math.min(i + rulesPerThread, rules.size());
                 List<VulnerabilityRule> batchRules = rules.subList(start, end);
-                
-                Future<List<ScanMatch>> future = executorService.submit(() -> 
-                    scanWithRules(combinedContent, batchRules));
+
+                Future<List<ScanMatch>> future = executorService.submit(() ->
+                    scanWithRules(scanContent, batchRules));
                 futures.add(future);
             }
-            
-            // 收集结果（带超时）
+
+            // 收集结果（整轮共用一个截止时间；原来的实现每个批次各等 timeout，总耗时 N×timeout）
             List<ScanMatch> allMatches = new ArrayList<>();
+            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
             for (Future<List<ScanMatch>> future : futures) {
+                long remainingMs = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
+                if (remainingMs <= 0) {
+                    future.cancel(true);
+                    api.logging().logToOutput("[PreScanFilter] 扫描超时");
+                    continue;
+                }
                 try {
-                    List<ScanMatch> matches = future.get(timeoutMs, TimeUnit.MILLISECONDS);
+                    List<ScanMatch> matches = future.get(remainingMs, TimeUnit.MILLISECONDS);
                     allMatches.addAll(matches);
                 } catch (TimeoutException e) {
                     future.cancel(true);
@@ -132,6 +145,10 @@ public class PreScanFilter {
         List<ScanMatch> matches = new ArrayList<>();
         
         for (VulnerabilityRule rule : rulesToScan) {
+            // 正则匹配本身不响应 interrupt；在规则之间检查中断，尽量缩短取消后的空转
+            if (Thread.currentThread().isInterrupted()) {
+                break;
+            }
             for (VulnerabilityRule.CompiledPattern compiledPattern : rule.getPatterns()) {
                 if (compiledPattern.getPattern() == null) {
                     continue;

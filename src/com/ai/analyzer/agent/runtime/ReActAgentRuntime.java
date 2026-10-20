@@ -58,6 +58,8 @@ public class ReActAgentRuntime implements AgentRuntime {
     private final long chatTimeoutMs;
     private final int maxIters;
     private final List<io.agentscope.core.skill.repository.AgentSkillRepository> skillRepositories;
+    /** 正在执行的订阅（被动侧多请求并发）；stop 时可被外部取消，真正中断 LLM/工具调用。 */
+    private final java.util.Set<Subscription> activeSubscriptions = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     private ReActAgentRuntime(Builder builder) {
         this.agentName = builder.agentName;
@@ -119,14 +121,19 @@ public class ReActAgentRuntime implements AgentRuntime {
             try (ReActAgent agent = builder.build()) {
                 reactor.core.publisher.Flux<AgentEvent> stream =
                         agent.streamEvents(asMessages, ctx)
-                                .doOnSubscribe(subRef::set)
+                                .doOnSubscribe(sub -> {
+                                    subRef.set(sub);
+                                    activeSubscriptions.add(sub);
+                                })
                                 .doOnNext(event -> translate(event, listener))
                                 .doOnComplete(() -> {
-                                    subRef.set(null);
+                                    Subscription sub = subRef.getAndSet(null);
+                                    if (sub != null) activeSubscriptions.remove(sub);
                                     listener.onComplete();
                                 })
                                 .doOnError(error -> {
-                                    subRef.set(null);
+                                    Subscription sub = subRef.getAndSet(null);
+                                    if (sub != null) activeSubscriptions.remove(sub);
                                     listener.onEvent(RuntimeEvent.error(error));
                                     listener.onError(error);
                                     future.completeExceptionally(error);
@@ -141,8 +148,11 @@ public class ReActAgentRuntime implements AgentRuntime {
             }
             future.complete(null);
         } catch (Exception e) {
-            listener.onEvent(RuntimeEvent.error(e));
-            listener.onError(e);
+            // doOnError 已经把同一个异常上报并 completeExceptionally，这里不要重复上报
+            if (!future.isDone()) {
+                listener.onEvent(RuntimeEvent.error(e));
+                listener.onError(e);
+            }
             future.completeExceptionally(e);
         }
 
@@ -151,7 +161,18 @@ public class ReActAgentRuntime implements AgentRuntime {
 
     @Override
     public void shutdown() {
-        // 无持久资源；ReActAgent 在每次 chat 结束即关闭，这里无需额外清理
+        cancelAll();
+    }
+
+    /** 取消所有在途订阅：停止被动扫描时真正中断 LLM 调用与工具执行，而不是只丢弃事件。 */
+    public void cancelAll() {
+        for (Subscription sub : activeSubscriptions) {
+            try {
+                sub.cancel();
+            } catch (Exception ignored) {
+            }
+        }
+        activeSubscriptions.clear();
     }
 
     /** 将 AgentScope 类型化事件翻译为 UI/扫描管理器关注的 {@link RuntimeEvent}。 */

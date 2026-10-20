@@ -200,5 +200,57 @@ class PluginSettingsTest {
             PluginSettings loaded = PluginSettings.loadCompat(tmp);
             assertThat(loaded.isEnableFileSystemSandbox()).isTrue();
         }
+
+        @Test
+        @DisplayName("JSON round-trip preserves all values")
+        void jsonRoundTripPreservesFields() throws Exception {
+            PluginSettings settings = new PluginSettings();
+            settings.setApiUrl("https://example.com/v1");
+            settings.setModel("test-model");
+            settings.setTavilyApiKey("tvly-test");
+            settings.setWorkplaceDirectoryPath("D:/ws");
+            settings.setActiveMaxIters(42);
+            settings.setPassiveMaxIters(7);
+
+            java.io.File tmp = java.io.File.createTempFile("settings-json", ".json");
+            tmp.deleteOnExit();
+            settings.saveTo(tmp);
+
+            PluginSettings loaded = PluginSettings.loadCompat(tmp);
+            assertThat(loaded.getApiUrl()).isEqualTo("https://example.com/v1");
+            assertThat(loaded.getModel()).isEqualTo("test-model");
+            assertThat(loaded.getTavilyApiKey()).isEqualTo("tvly-test");
+            assertThat(loaded.getWorkplaceDirectoryPath()).isEqualTo("D:/ws");
+            assertThat(loaded.getActiveMaxIters()).isEqualTo(42);
+            assertThat(loaded.getPassiveMaxIters()).isEqualTo(7);
+        }
+
+        @Test
+        @DisplayName("JSON with missing/unknown fields keeps defaults and does not fail")
+        void jsonToleratesSchemaDrift() throws Exception {
+            java.io.File tmp = java.io.File.createTempFile("settings-drift", ".json");
+            tmp.deleteOnExit();
+            java.nio.file.Files.writeString(tmp.toPath(),
+                    "{\"apiUrl\":\"https://x/v1\",\"futureUnknownField\":123}");
+
+            PluginSettings loaded = PluginSettings.loadCompat(tmp);
+            assertThat(loaded.getApiUrl()).isEqualTo("https://x/v1");
+            assertThat(loaded.getModel()).isEqualTo("qwen3-max");
+            assertThat(loaded.getActiveMaxIters()).isPositive();
+            assertThat(loaded.getPassiveMaxIters()).isPositive();
+        }
+
+        @Test
+        @DisplayName("JSON invalid iter values are clamped to legal defaults")
+        void jsonClampsInvalidIterValues() throws Exception {
+            java.io.File tmp = java.io.File.createTempFile("settings-invalid", ".json");
+            tmp.deleteOnExit();
+            java.nio.file.Files.writeString(tmp.toPath(),
+                    "{\"activeMaxIters\":0,\"passiveMaxIters\":-5}");
+
+            PluginSettings loaded = PluginSettings.loadCompat(tmp);
+            assertThat(loaded.getActiveMaxIters()).isPositive();
+            assertThat(loaded.getPassiveMaxIters()).isPositive();
+        }
     }
 }

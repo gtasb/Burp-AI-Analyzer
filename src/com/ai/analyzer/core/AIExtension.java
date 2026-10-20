@@ -38,6 +38,14 @@ public class AIExtension implements BurpExtension {
         api.userInterface().registerHttpRequestEditorProvider(sidePanelProvider);
         api.userInterface().registerHttpResponseEditorProvider(sidePanelProvider);
 
+        // 注册卸载清理：释放 SQLite 连接（知识图谱）与 WAL 文件句柄
+        api.extension().registerUnloadingHandler(() -> {
+            try {
+                com.ai.analyzer.graph.GraphStore.getInstance().close();
+            } catch (Exception ignored) {
+            }
+        });
+
         // 输出日志到 Burp 的 Output 标签页
         api.logging().logToOutput("AI漏洞分析助手插件已成功加载！");
         api.logging().logToOutput("使用方法：");

@@ -59,11 +59,23 @@ public class RestrictedReadTool {
             return "错误：路径无效: " + e.getMessage();
         }
 
-        // 目录穿越 / 越界防护：目标必须落在工作区 .cache/ 之内
-        if (!target.startsWith(allowedRoot)) {
+        // 目录穿越 / 越界防护：先解析真实路径，防止 .cache 内的符号链接/junction 指向外部
+        Path realTarget;
+        try {
+            realTarget = target.toRealPath();
+        } catch (Exception e) {
+            return "错误：文件不存在或不是普通文件: " + target;
+        }
+        Path realRoot;
+        try {
+            realRoot = allowedRoot.toRealPath();
+        } catch (Exception e) {
+            realRoot = allowedRoot.toAbsolutePath().normalize();
+        }
+        if (!realTarget.startsWith(realRoot)) {
             return "拒绝：仅允许读取工作区 .cache/ 目录内的文件（" + allowedRoot + "）。";
         }
-        if (!Files.isRegularFile(target)) {
+        if (!Files.isRegularFile(realTarget)) {
             return "错误：文件不存在或不是普通文件: " + target;
         }
 

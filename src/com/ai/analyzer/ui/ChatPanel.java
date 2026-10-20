@@ -36,10 +36,13 @@ public class ChatPanel extends JPanel {
     private boolean isStreaming = false;
     private SwingWorker<Void, String> currentWorker;
     private volatile int streamRunId = 0;
-    private boolean debugEnabled = false;
+    /** 「模型行为」开关默认打开（见行为按钮初始选中状态），日志收集也必须默认开启 */
+    private boolean debugEnabled = true;
     private JTextArea debugLogArea;
     private JScrollPane debugLogScrollPane;
     private int lastSyncedHistorySize = 0;
+    /** 上次同步时共享历史的第 0 条；容量满后裁剪最旧条目靠它检测下标漂移 */
+    private Object[] lastFirstHistoryEntry;
     private javax.swing.Timer saveDebouncerTimer;
     private final Runnable sharedHistoryListener;
     /** 模型行为订阅（add/remove 成对使用，避免覆盖其他订阅者） */
@@ -65,6 +68,25 @@ public class ChatPanel extends JPanel {
         sharedHistoryListener = () ->
             SwingUtilities.invokeLater(this::syncChatAreaFromSharedHistory);
         apiClient.addChatUiListener(sharedHistoryListener);
+        // 面板从窗口层级移除后注销监听，避免 Burp 反复创建编辑器导致监听器/实例泄漏
+        addHierarchyListener(e -> {
+            if ((e.getChangeFlags() & java.awt.event.HierarchyEvent.DISPLAYABILITY_CHANGED) != 0
+                    && !isDisplayable()) {
+                dispose();
+            }
+        });
+    }
+
+    private boolean disposed;
+
+    /** 注销共享历史与模型行为监听（幂等，可重复调用）。 */
+    public void dispose() {
+        if (disposed) return;
+        disposed = true;
+        if (apiClient != null) {
+            apiClient.removeChatUiListener(sharedHistoryListener);
+            apiClient.removeModelBehaviorConsumer(modelBehaviorConsumer);
+        }
     }
     
     /**
@@ -569,6 +591,8 @@ public class ChatPanel extends JPanel {
                         // （否则普通消息在 listener 触发的 sync 里会被跳过），所以这里必须显式补上，
                         // 否则 addChatUiEntry 触发的 sharedHistoryListener 会把同一条回复再追加一遍。
                         lastSyncedHistorySize = apiClient.getSharedChatUiHistorySize();
+                        lastFirstHistoryEntry = lastSyncedHistorySize > 0
+                                ? apiClient.getSharedChatUiHistoryEntry(0) : null;
                         debouncedSave();
                     }
                     
@@ -595,6 +619,8 @@ public class ChatPanel extends JPanel {
             }
         };
 
+        currentThinking.setLength(0);
+        thinkingLineStart = -1;
         currentWorker.execute();
     }
 
@@ -610,6 +636,8 @@ public class ChatPanel extends JPanel {
             isStreaming = false;
             sendButton.setEnabled(true);
             stopButton.setEnabled(false);
+            // 思考增量可能停在半行：先落盘再清空，避免下一轮把旧思考拼到新输出前
+            flushThinking();
             appendToChatAndShare("AI助手", "[输出已中断]", false);
         }
     }
@@ -719,13 +747,18 @@ public class ChatPanel extends JPanel {
 
         // 共享历史上限 MAX_SHARED_UI_HISTORY，超出后 addChatUiEntry 会裁掉最旧条目，
         // 此时下标发生偏移，游标会比列表更长。若不处理，currentSize <= lastSyncedHistorySize
-        // 会永久成立，后续消息再也不渲染。这里直接从当前历史整体重建一次。
-        if (currentSize < lastSyncedHistorySize) {
+        // 会永久成立，后续消息再也不渲染。容量满后长度恒为 200，不能只比较长度，
+        // 还要比较第 0 条是否变化，变了就整体重建一次。
+        Object[] firstEntry = currentSize > 0 ? apiClient.getSharedChatUiHistoryEntry(0) : null;
+        boolean shifted = lastFirstHistoryEntry != null
+                && !java.util.Objects.deepEquals(firstEntry, lastFirstHistoryEntry);
+        if (currentSize < lastSyncedHistorySize || shifted) {
             lastSyncedHistorySize = 0;
             try {
                 chatArea.setText("");
             } catch (Exception ignored) { }
         }
+        lastFirstHistoryEntry = firstEntry;
 
         if (currentSize <= lastSyncedHistorySize) return;
         for (int i = lastSyncedHistorySize; i < currentSize; i++) {
@@ -779,6 +812,8 @@ public class ChatPanel extends JPanel {
         
         apiClient.clearSharedChatUiHistory();
         lastSyncedHistorySize = 0;
+        lastFirstHistoryEntry = null;
+        flushThinking();
         chatArea.setText("");
         resetDefaultParagraphAlignment();
         deleteChatHistoryFile();
@@ -800,6 +835,8 @@ public class ChatPanel extends JPanel {
         apiClient.startNewSession();
         apiClient.clearSharedChatUiHistory();
         lastSyncedHistorySize = 0;
+        lastFirstHistoryEntry = null;
+        flushThinking();
         chatArea.setText("");
         resetDefaultParagraphAlignment();
         deleteChatHistoryFile();
@@ -1012,6 +1049,8 @@ public class ChatPanel extends JPanel {
                     }
                 }
                 lastSyncedHistorySize = apiClient.getSharedChatUiHistorySize();
+                lastFirstHistoryEntry = lastSyncedHistorySize > 0
+                        ? apiClient.getSharedChatUiHistoryEntry(0) : null;
                 resetDefaultParagraphAlignment();
                 api.logging().logToOutput("[ChatPanel] 已恢复 " + loaded.size() + " 条聊天历史");
             }

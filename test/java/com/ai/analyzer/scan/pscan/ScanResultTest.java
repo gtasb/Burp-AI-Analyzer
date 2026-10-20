@@ -259,6 +259,15 @@ class ScanResultTest {
             result.markCompleted("没有发现风险点");
             assertThat(result.getRiskLevel()).isEqualTo(ScanResult.RiskLevel.NONE);
         }
+
+        @Test
+        @DisplayName("explicit severity label wins over negative wording")
+        void explicit_severity_wins_over_negative_wording() {
+            // 正文里的“未发现…”不能覆盖明确等级标注，否则真实高危会被降为“无”
+            ScanResult result = new ScanResult(1, mockRequestResponse);
+            result.markCompleted("未发现明显问题，但存在 SQL 注入，严重程度: 高");
+            assertThat(result.getRiskLevel()).isEqualTo(ScanResult.RiskLevel.HIGH);
+        }
     }
 
     @Nested

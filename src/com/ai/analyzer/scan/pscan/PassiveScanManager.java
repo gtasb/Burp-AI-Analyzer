@@ -52,6 +52,15 @@ public class PassiveScanManager {
     // 消费者线程池
     private ExecutorService consumerExecutor;
     private int threadCount = DEFAULT_THREAD_COUNT;
+
+    /** 图谱观测串行执行：避免在 Burp 的 HTTP handler 线程同步写多条 SQLite 事务 */
+    private final ExecutorService graphObserveExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "graph-observe");
+        t.setDaemon(true);
+        return t;
+    });
+    private final AtomicInteger graphObservePending = new AtomicInteger();
+    private static final int GRAPH_OBSERVE_QUEUE_CAPACITY = 2000;
     
     // HTTP 处理器注册（用于注销）
     private HttpHandler httpHandler;
@@ -201,11 +210,12 @@ public class PassiveScanManager {
         
         logInfo("========== 启动被动扫描（生产者-消费者模型）==========");
         
-        // 重置状态
+        // 重置本轮计数（结果列表保留；total/completed 只描述本次运行）
         isRunning.set(true);
         cancelFlag.set(false);
         completedCount.set(0);
         queuedCount.set(0);
+        totalCount.set(0);
         
         // 1. 启动消费者线程池
         startConsumers();
@@ -236,6 +246,11 @@ public class PassiveScanManager {
         // 设置停止标志
         isRunning.set(false);
         cancelFlag.set(true);
+        // 真正取消在途 LLM/工具调用（ReActAgentRuntime 持有订阅）
+        try {
+            if (apiClient != null) apiClient.cancelInFlight();
+        } catch (Exception ignored) {
+        }
         
         // 1. 停止生产者（注销 HTTP 处理器）
         stopProducer();
@@ -374,14 +389,9 @@ public class PassiveScanManager {
      */
     private void stopConsumers() {
         if (consumerExecutor != null && !consumerExecutor.isShutdown()) {
+            // 不在这里 awaitTermination：该方法由 EDT 的「停止扫描」直接调用，
+            // 等待 5 秒会冻结整个 Burp UI。取消订阅后线程会自行退出。
             consumerExecutor.shutdownNow();
-            try {
-                if (!consumerExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
-                    logError("消费者线程池未能在5秒内关闭");
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
             consumerExecutor = null;
             logInfo("消费者已停止");
         }
@@ -403,8 +413,8 @@ public class PassiveScanManager {
                     continue;
                 }
                 
-                // 更新队列计数
-                queuedCount.decrementAndGet();
+                // 更新队列计数（stop 会清空队列，消费者可能已 poll 到元素，避免减成负数）
+                queuedCount.updateAndGet(v -> v > 0 ? v - 1 : 0);
                 
                 // 检查是否已取消
                 if (cancelFlag.get()) {
@@ -451,10 +461,20 @@ public class PassiveScanManager {
             return;
         }
 
-        // 资产知识图谱观测：自动建立 Origin→接口→参数（静默失败，不影响扫描队列）
-        try {
-            com.ai.analyzer.graph.GraphStore.getInstance().observe(requestResponse);
-        } catch (Exception ignored) {
+        // 资产知识图谱观测：自动建立 Origin→接口→参数（静默失败，不影响扫描队列）。
+        // 放到后台单线程执行：每个请求要写多条 autocommit SQLite 事务，
+        // 在 Burp 的流量线程同步执行会直接抬高代理延迟。
+        if (graphObservePending.incrementAndGet() <= GRAPH_OBSERVE_QUEUE_CAPACITY) {
+            graphObserveExecutor.submit(() -> {
+                try {
+                    com.ai.analyzer.graph.GraphStore.getInstance().observe(requestResponse);
+                } catch (Exception ignored) {
+                } finally {
+                    graphObservePending.decrementAndGet();
+                }
+            });
+        } else {
+            graphObservePending.decrementAndGet();
         }
 
         // L3 会话批次聚合：请求先进入会话窗口，满批次或窗口过期时打包为一次序列级分析。
@@ -479,13 +499,25 @@ public class PassiveScanManager {
 
         // PriorityBlockingQueue 无界且 offer 恒成功；用显式 size 检查保留「队列已满」回压，
         // 避免极端负载下无界堆积（L4 限流 + L1 去重已在前置削峰）。
-        if (scanQueue.size() >= QUEUE_CAPACITY) {
+        // 检查与入队必须原子，否则并发生产者可同时通过检查突破上限。
+        boolean dropped = false;
+        synchronized (scanQueue) {
+            if (scanQueue.size() >= QUEUE_CAPACITY) {
+                dropped = true;
+            } else {
+                scanQueue.offer(result);
+                queuedCount.incrementAndGet();
+            }
+        }
+        if (dropped) {
             logError("扫描队列已满，丢弃批次: " + result.getShortUrl());
             result.markError("队列已满");
+            // 已计入 total，必须同时计入 completed 并通知 UI，否则进度永远到不了 100%
+            completedCount.incrementAndGet();
+            notifyResultUpdated(result);
+            updateStatus();
             return;
         }
-        scanQueue.offer(result);
-        queuedCount.incrementAndGet();
         if (onNewRequestQueued != null) {
             try {
                 onNewRequestQueued.accept(result);
@@ -589,14 +621,24 @@ public class PassiveScanManager {
      * 即使被动扫描未启动也能独立分析，结果通过 onResultUpdated 回调通知 UI。
      */
     public void analyzeSingleRequest(HttpRequestResponse requestResponse) {
-        ScanResult result = addRequest(requestResponse);
-        if (result != null) {
-            new Thread(() -> scanRequest(result), "pscan-direct-" + result.getId()).start();
-        }
+        analyzeAddedRequest(addRequest(requestResponse));
     }
 
-    public ScanResult addRequest(HttpRequestResponse requestResponse) {
-        ScanResult result = new ScanResult(nextId.getAndIncrement(), requestResponse);
+    /**
+     * 启动一个已经通过 {@link #addRequest} 加入列表的请求。
+     *
+     * <p>不能在这里再次调用 addRequest：调用方已经加过一次，去重键命中会返回 null，
+     * 导致「被动扫描停止时手动发送到 AI 分析」永远不启动（行一直停在“分析中...”）。
+     */
+    public void analyzeAddedRequest(ScanResult result) {
+        if (result == null) return;
+        // 被动扫描运行中时 addRequest 已入队，交给队列消费者处理，避免重复分析
+        if (isRunning.get()) return;
+        if (result.getStatus() != ScanResult.ScanStatus.PENDING) return;
+        new Thread(() -> scanRequest(result), "pscan-direct-" + result.getId()).start();
+    }
+
+    public ScanResult addRequest(HttpRequestResponse requestResponse) {        ScanResult result = new ScanResult(nextId.getAndIncrement(), requestResponse);
         String dedupeKey = result.getDeduplicationKey();
         
         if (scannedKeys.contains(dedupeKey)) {
@@ -610,14 +652,21 @@ public class PassiveScanManager {
         result.setPriority(computePriority(result));
         
         if (isRunning.get()) {
-            if (scanQueue.size() >= QUEUE_CAPACITY) {
-                result.markError("队列已满");
-            } else {
-                scanQueue.offer(result);
-                queuedCount.incrementAndGet();
-                if (onNewRequestQueued != null) {
-                    onNewRequestQueued.accept(result);
+            boolean dropped = false;
+            synchronized (scanQueue) {
+                if (scanQueue.size() >= QUEUE_CAPACITY) {
+                    dropped = true;
+                } else {
+                    scanQueue.offer(result);
+                    queuedCount.incrementAndGet();
                 }
+            }
+            if (dropped) {
+                result.markError("队列已满");
+                completedCount.incrementAndGet();
+                notifyResultUpdated(result);
+            } else if (onNewRequestQueued != null) {
+                onNewRequestQueued.accept(result);
             }
         }
         updateStatus();
@@ -699,8 +748,43 @@ public class PassiveScanManager {
     /**
      * 清空扫描结果
      */
-    public void clearResults() {
-        if (isRunning.get()) {
+    /**
+     * 删除单条结果（UI「删除选中」）。同时释放去重键与计数，
+     * 否则该请求无法再次加入、统计信息与表格不一致。
+     */
+    public void removeResult(int id) {
+        ScanResult removed = null;
+        synchronized (scanResults) {
+            for (ScanResult r : scanResults) {
+                if (r.getId() == id) {
+                    removed = r;
+                    break;
+                }
+            }
+            if (removed != null) {
+                scanResults.remove(removed);
+            }
+        }
+        if (removed == null) return;
+        try {
+            HttpRequestResponse rr = removed.getRequestResponse();
+            if (rr != null) {
+                scannedKeys.remove(RequestFingerprint.of(rr));
+            }
+        } catch (Exception ignored) {
+        }
+        totalCount.updateAndGet(v -> v > 0 ? v - 1 : 0);
+        boolean finalized = removed.getAnalysisResult() != null
+                || removed.getErrorMessage() != null
+                || (removed.getStatus() != ScanResult.ScanStatus.PENDING
+                    && removed.getStatus() != ScanResult.ScanStatus.SCANNING);
+        if (finalized) {
+            completedCount.updateAndGet(v -> v > 0 ? v - 1 : 0);
+        }
+        updateStatus();
+    }
+
+    public void clearResults() {        if (isRunning.get()) {
             stopPassiveScan();
         }
         

@@ -49,8 +49,12 @@ public class AgentApiClient {
     private PreScanFilterManager preScanFilterManager;
 
     // ========== AgentScope 运行时 ==========
-    private AgentScopeAgentRuntime agentScopeRuntime;
-    private Toolkit asToolkit;
+    private volatile AgentScopeAgentRuntime agentScopeRuntime;
+    /** 串行化运行时构建：3 个被动消费者/多个入口可能同时触发初始化 */
+    private final Object agentScopeInitLock = new Object();
+    /** 设置变更代数：构建期间发生的 invalidate 会让新 runtime 作废，避免发布旧配置实例 */
+    private final java.util.concurrent.atomic.AtomicLong runtimeGeneration = new java.util.concurrent.atomic.AtomicLong();
+    private volatile Toolkit asToolkit;
     /** 共享 Notebook 工具（知识黑板）。主动与被动 Agent 指向同一 {@link com.ai.analyzer.tools.NotebookUtils.NotebookStore} 单例 */
     private com.ai.analyzer.tools.NotebookTool notebookTool;
     /** Notebook 广播订阅是否已注册（避免运行时重建导致重复订阅） */
@@ -116,7 +120,7 @@ public class AgentApiClient {
      * 撤销后重新生成，让暂停→继续可在同一会话上下文内恢复。
      * 值格式：agent-session-<UUID>，UUID 在 startNewSession 时刷新。
      */
-    private volatile String currentSessionId;
+    private volatile String currentSessionId = "agent-session-" + java.util.UUID.randomUUID();
 
     // ========== 系统提示词缓存 ==========
     private volatile String cachedSystemPrompt;
@@ -329,6 +333,8 @@ public class AgentApiClient {
             if (!normalized.isEmpty()) {
                 logInfo("显式 max_tokens 已更新: " + normalized);
             }
+            // maxContextTokens 在构建 HarnessAgent 时固化，必须重建运行时才会生效
+            invalidateAgentScopeRuntime();
         }
     }
 
@@ -535,6 +541,8 @@ public class AgentApiClient {
         if (!java.util.Objects.equals(config.getCustomSystemPrompt(), normalized)) {
             config.setCustomSystemPrompt(normalized);
             cachedSystemPrompt = null;
+            // 系统提示词在构建 HarnessAgent 时固化，仅清缓存不够
+            invalidateAgentScopeRuntime();
         }
     }
 
@@ -562,16 +570,34 @@ public class AgentApiClient {
     }
 
     private void invalidateAgentScopeRuntime() {
-        if (agentScopeRuntime != null) {
-            try { agentScopeRuntime.shutdown(); } catch (Exception ignored) {}
-            agentScopeRuntime = null;
-        }
+        // 先递增代数再关闭：即使此刻另一线程正在构建 runtime，它也不会把旧配置实例发布出来
+        runtimeGeneration.incrementAndGet();
+        AgentScopeAgentRuntime old = agentScopeRuntime;
+        agentScopeRuntime = null;
         asToolkit = null;
+        if (old != null) {
+            try { old.shutdown(); } catch (Exception ignored) {}
+        }
     }
 
     // ========== AgentScope 运行时初始化 ==========
 
     private void ensureAgentScopeInitialized() {
+        if (agentScopeRuntime != null) return;
+        synchronized (agentScopeInitLock) {
+            if (agentScopeRuntime != null) return;
+            long generation = runtimeGeneration.get();
+            ensureAgentScopeInitializedLocked();
+            if (generation != runtimeGeneration.get() && agentScopeRuntime != null) {
+                // 构建期间设置被修改：丢弃这个按旧配置构建的实例，下次请求重建
+                try { agentScopeRuntime.shutdown(); } catch (Exception ignored) {}
+                agentScopeRuntime = null;
+                asToolkit = null;
+            }
+        }
+    }
+
+    private void ensureAgentScopeInitializedLocked() {
         if (agentScopeRuntime != null) return;
 
         try {
@@ -635,15 +661,15 @@ public class AgentApiClient {
             if (config.hasAnyMcpEnabled()) {
                 // Burp MCP
                 if (config.isEnableMcp() && config.getBurpMcpUrl() != null && !config.getBurpMcpUrl().trim().isEmpty()) {
-                    AgentScopeMcpManager.registerBurpMcp(asToolkit, config.getBurpMcpUrl(), config.getBurpMcpAuthorization());
+                    AgentScopeMcpManager.registerBurpMcp(asToolkit, config.getBurpMcpUrl(), config.getBurpMcpAuthorization(), "active-mcp");
                 }
                 // RAG MCP
                 if (config.isEnableRagMcp()) {
-                    AgentScopeMcpManager.registerRagMcp(asToolkit, config.getRagMcpUrl());
+                    AgentScopeMcpManager.registerRagMcp(asToolkit, config.getRagMcpUrl(), "active-mcp");
                 }
                 // Chrome MCP
                 if (config.isEnableChromeMcp()) {
-                    AgentScopeMcpManager.registerChromeMcp(asToolkit, config.getChromeMcpUrl());
+                    AgentScopeMcpManager.registerChromeMcp(asToolkit, config.getChromeMcpUrl(), "active-mcp");
                 }
                 // 自定义 MCP 服务器
                 for (var customConfig : config.getCustomMcpConfigs()) {
@@ -664,7 +690,8 @@ public class AgentApiClient {
                             transportType,
                             urlOrCommand,
                             args,
-                            headers);
+                            headers,
+                            "active-mcp");
                 }
             }
 
@@ -805,6 +832,13 @@ public class AgentApiClient {
     }
 
     private void applySettings(PluginSettings settings, String defaultApiUrl, String defaultModel) {
+        // 与 SettingsPanel.saveSettings 保存的字段保持一致，避免“保存了但重启后丢失”
+        config.setApiProvider(ApiProvider.fromDisplayName(settings.getApiProvider()));
+        config.setMaxTokens(settings.getMaxTokens());
+        config.setCustomParameters(settings.getCustomParameters());
+        config.setEnableMcp(settings.isEnableMcp());
+        config.setEnablePlanMode(settings.isEnablePlanMode());
+        config.setCustomSystemPrompt(settings.getCustomActiveSystemPrompt());
         config.setApiUrl(settings.getApiUrl() != null && !settings.getApiUrl().isEmpty()
             ? settings.getApiUrl() : defaultApiUrl);
         config.setApiKey(settings.getApiKey() != null ? settings.getApiKey() : "");
@@ -945,7 +979,8 @@ public class AgentApiClient {
         logInfo("模型: " + (config.getModel() != null ? config.getModel() : "qwen-max"));
 
         ensureAgentScopeInitialized();
-        if (agentScopeRuntime == null) {
+        AgentScopeAgentRuntime runtime = agentScopeRuntime;
+        if (runtime == null) {
             throw new Exception("AgentScope 运行时初始化失败，请检查API Key和URL配置");
         }
 
@@ -953,7 +988,7 @@ public class AgentApiClient {
         final int[] contentChunkCount = {0};
         final long streamId = streamGeneration.incrementAndGet();
 
-        com.ai.analyzer.agent.runtime.StreamSession session = agentScopeRuntime.chat(
+        com.ai.analyzer.agent.runtime.StreamSession session = runtime.chat(
                 userContent,
                 currentSessionId,
                 new RuntimeEventListener() {

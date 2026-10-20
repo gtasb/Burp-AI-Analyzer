@@ -48,9 +48,19 @@ public class SkillManager {
 
     public void setSkillsDirectoryPath(String path) {
         this.skillsDirectoryPath = path;
-        if (path != null && !path.isEmpty()) {
-            loadSkills();
+        if (path == null || path.isEmpty()) {
+            // 清空目录设置时必须清掉旧的技能列表，否则设置页仍显示并“启用”已删除的技能
+            clearSkills();
+            return;
         }
+        loadSkills();
+    }
+
+    private void clearSkills() {
+        skills.clear();
+        enabledSkillNames.clear();
+        repository = null;
+        cachedSkillsCatalogue = null;
     }
 
     public String getSkillsDirectoryPath() { return skillsDirectoryPath; }
@@ -64,12 +74,15 @@ public class SkillManager {
     public void loadSkills() {
         if (skillsDirectoryPath == null || skillsDirectoryPath.isEmpty()) {
             logInfo("Skills 目录未配置，跳过加载");
+            clearSkills();
             return;
         }
 
         Path dirPath = Paths.get(skillsDirectoryPath);
         if (!Files.exists(dirPath) || !Files.isDirectory(dirPath)) {
             logError("Skills 目录不存在或不是目录: " + skillsDirectoryPath);
+            // 目录被删除/改名后不能继续保留旧技能与旧仓库路径
+            clearSkills();
             return;
         }
 

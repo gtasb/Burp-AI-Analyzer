@@ -34,6 +34,12 @@ public class WebSearchTools {
             .followRedirects(HttpClient.Redirect.NORMAL)
             .build();
 
+    /** fetch_url 专用：手动跟随重定向，每一跳都重新做内网地址校验。 */
+    private static final HttpClient FETCH_CLIENT = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(15))
+            .followRedirects(HttpClient.Redirect.NEVER)
+            .build();
+
     private static final Gson GSON = new Gson();
 
     private final String provider;
@@ -177,10 +183,17 @@ public class WebSearchTools {
     }
 
     private String searchTavily(String query) {
+        String key = apiKey != null ? apiKey.trim() : "";
+        if (key.isEmpty()) {
+            return "搜索失败: 未配置 Tavily API Key";
+        }
+        // Tavily 现行鉴权只认 Authorization: Bearer；旧的 body.api_key 字段已被弃用
+        if (key.regionMatches(true, 0, "Bearer ", 0, 7)) {
+            key = key.substring(7).trim();
+        }
         String url = (baseUrl != null && !baseUrl.trim().isEmpty()) ? baseUrl.trim() : "https://api.tavily.com/search";
         try {
             JsonObject body = new JsonObject();
-            body.addProperty("api_key", apiKey);
             body.addProperty("query", query);
             body.addProperty("max_results", 5);
             body.addProperty("include_answer", true);
@@ -188,6 +201,7 @@ public class WebSearchTools {
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + key)
                     .timeout(Duration.ofSeconds(30))
                     .POST(HttpRequest.BodyPublishers.ofString(GSON.toJson(body)))
                     .build();
@@ -386,16 +400,53 @@ public class WebSearchTools {
         int maxFetchChars = (maxChars != null) ? Math.min(Math.max(1000, maxChars), MAX_FETCH_INLINE_CHARS) : MAX_FETCH_INLINE_CHARS;
 
         try {
-            HttpRequest req = HttpRequest.newBuilder(uri.normalize())
-                    .timeout(Duration.ofSeconds(35))
-                    .header("User-Agent", FETCH_UA)
-                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
-                    .header("Accept-Language", "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7")
-                    .GET()
-                    .build();
+            URI currentUri = uri.normalize();
+            HttpResponse<InputStream> resp = null;
+            int status = 0;
+            // 手动跟随重定向：HttpClient 自动跟随会绕过 host 校验，
+            // 攻击者可用 302 把 fetch_url 引向内网地址。
+            for (int hop = 0; hop <= 5; hop++) {
+                String hopHost = currentUri.getHost();
+                if (hopHost == null || hopHost.isEmpty()) {
+                    return "抓取失败: 无法解析主机名";
+                }
+                String hopBlocked = resolveAndCheckBlocked(hopHost);
+                if (hopBlocked != null) {
+                    return "抓取失败: " + hopBlocked;
+                }
+                HttpRequest req = HttpRequest.newBuilder(currentUri)
+                        .timeout(Duration.ofSeconds(35))
+                        .header("User-Agent", FETCH_UA)
+                        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
+                        .header("Accept-Language", "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7")
+                        .GET()
+                        .build();
 
-            HttpResponse<InputStream> resp = HTTP_CLIENT.send(req, HttpResponse.BodyHandlers.ofInputStream());
-            int status = resp.statusCode();
+                resp = FETCH_CLIENT.send(req, HttpResponse.BodyHandlers.ofInputStream());
+                status = resp.statusCode();
+                if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
+                    String location = resp.headers().firstValue("Location").orElse(null);
+                    try {
+                        resp.body().close();
+                    } catch (Exception ignored) {
+                    }
+                    if (location == null || location.isBlank()) {
+                        return "抓取失败: HTTP " + status + " 重定向缺少 Location 头";
+                    }
+                    URI next = currentUri.resolve(location.trim());
+                    String nextScheme = next.getScheme();
+                    if (nextScheme == null
+                            || (!nextScheme.equalsIgnoreCase("http") && !nextScheme.equalsIgnoreCase("https"))) {
+                        return "抓取失败: 重定向目标协议不允许 (" + location + ")";
+                    }
+                    currentUri = next.normalize();
+                    continue;
+                }
+                break;
+            }
+            if (status >= 300 && status < 400) {
+                return "抓取失败: 重定向次数过多";
+            }
             if (status < 200 || status >= 300) {
                 return "抓取失败: HTTP " + status
                         + "\n提示：该页面可能需要登录、被拦截或已不可用，可尝试用 web_search 搜索快照/备用来源。";
@@ -422,7 +473,7 @@ public class WebSearchTools {
             }
 
             text = normalizeWs(text);
-            String header = "[来源] " + uri + "\n[HTTP " + status + "]\n";
+            String header = "[来源] " + currentUri + "\n[HTTP " + status + "]\n";
             if (!title.isEmpty()) header += "[标题] " + title + "\n";
             header += "\n";
 
@@ -508,13 +559,65 @@ public class WebSearchTools {
         if (h.contains(":")) {
             return h.equals("::1") || h.startsWith("fc") || h.startsWith("fd") || h.startsWith("fe8");
         }
-        // 必须先确认是 IPv4 字面量（4 段纯数字），域名/主机名直接放行
+        // inet_aton 形式（127.1 / 2130706433 / 0x7f000001 / 0177.0.0.1）
+        long numeric = parseIpv4Numeric(h);
+        if (numeric >= 0) {
+            String ip = ((numeric >> 24) & 255) + "." + ((numeric >> 16) & 255) + "."
+                    + ((numeric >> 8) & 255) + "." + (numeric & 255);
+            return isPrivateIpV4(ip);
+        }
+        // 普通四段十进制 IPv4
         String[] parts = h.split("\\.");
         if (parts.length != 4) return false;
         for (String p : parts) {
             if (p.isEmpty() || !p.chars().allMatch(Character::isDigit)) return false;
         }
         return isPrivateIpV4(h);
+    }
+
+    /**
+     * 解析 inet_aton 风格的数字地址：a / a.b / a.b.c / a.b.c.d，
+     * 每段支持十进制、0x 十六进制、0 开头八进制。非数字主机名返回 -1。
+     */
+    private static long parseIpv4Numeric(String host) {
+        String h = host.trim();
+        if (h.isEmpty()) return -1;
+        String[] parts = h.split("\\.", -1);
+        if (parts.length > 4) return -1;
+        long[] vals = new long[parts.length];
+        for (int i = 0; i < parts.length; i++) {
+            String p = parts[i];
+            if (p.isEmpty()) return -1;
+            int radix = 10;
+            String digits = p;
+            if (p.length() > 2 && (p.startsWith("0x") || p.startsWith("0X"))) {
+                radix = 16;
+                digits = p.substring(2);
+            } else if (p.length() > 1 && p.startsWith("0")) {
+                radix = 8;
+                digits = p.substring(1);
+            }
+            if (digits.isEmpty()) {
+                if (p.equals("0")) {
+                    vals[i] = 0;
+                    continue;
+                }
+                return -1;
+            }
+            try {
+                vals[i] = Long.parseLong(digits, radix);
+            } catch (NumberFormatException e) {
+                return -1;
+            }
+            if (vals[i] < 0 || vals[i] > 0xFFFFFFFFL) return -1;
+        }
+        long value = switch (parts.length) {
+            case 1 -> vals[0];
+            case 2 -> (vals[0] << 24) | vals[1];
+            case 3 -> (vals[0] << 24) | (vals[1] << 16) | vals[2];
+            default -> (vals[0] << 24) | (vals[1] << 16) | (vals[2] << 8) | vals[3];
+        };
+        return value >= 0 && value <= 0xFFFFFFFFL ? value : -1;
     }
 
     private static String extractHtmlTitle(String html) {

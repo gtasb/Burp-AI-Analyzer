@@ -250,9 +250,12 @@ public class GraphDatabase implements AutoCloseable {
 
     public synchronized List<Node> findNodes(String rootId, NodeType type, String keyword, int limit) {
         List<Node> out = new ArrayList<>();
+        // limit<=0 表示不限量。不能把 0 直接拼进 LIMIT：SQLite 的 LIMIT 0 返回空集，
+        // 会让 findInterfaces 的 module/entity 过滤分支永远“未找到匹配接口”。
+        boolean limited = limit > 0;
         String sql = "SELECT * FROM graph_nodes WHERE root_id=?" + (type != null ? " AND type=?" : "")
                 + (keyword != null && !keyword.isBlank() ? " AND (name LIKE ? OR canonical_key LIKE ?)" : "")
-                + " ORDER BY id DESC LIMIT ?";
+                + " ORDER BY id DESC" + (limited ? " LIMIT ?" : "");
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             int i = 1;
             ps.setString(i++, rootId);
@@ -264,7 +267,9 @@ public class GraphDatabase implements AutoCloseable {
                 ps.setString(i++, like);
                 ps.setString(i++, like);
             }
-            ps.setInt(i, limit);
+            if (limited) {
+                ps.setInt(i, limit);
+            }
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     out.add(readNode(rs));

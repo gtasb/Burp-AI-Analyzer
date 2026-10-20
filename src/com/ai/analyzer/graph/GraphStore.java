@@ -68,11 +68,32 @@ public final class GraphStore {
     }
 
     /** 设置工作区目录；图谱数据库落在 {@code <workspace>/knowledge-graph.db}。 */
-    public void setWorkplaceDirectory(String dir) {
-        if (dir == null || dir.trim().isEmpty()) {
-            baseDir = null;
-        } else {
-            baseDir = Path.of(dir.trim()).toAbsolutePath().normalize();
+    public synchronized void setWorkplaceDirectory(String dir) {
+        Path next = (dir == null || dir.trim().isEmpty())
+                ? null
+                : Path.of(dir.trim()).toAbsolutePath().normalize();
+        if (java.util.Objects.equals(next, baseDir)) {
+            return;
+        }
+        baseDir = next;
+        // 工作区变了必须换库：否则后续 observe/graph_* 仍读写旧 knowledge-graph.db
+        if (db != null) {
+            try {
+                db.close();
+            } catch (Exception ignored) {
+            }
+            db = null;
+        }
+    }
+
+    /** 关闭底层数据库（插件卸载时调用，释放 SQLite 连接与 WAL 文件句柄）。 */
+    public synchronized void close() {
+        if (db != null) {
+            try {
+                db.close();
+            } catch (Exception ignored) {
+            }
+            db = null;
         }
     }
 

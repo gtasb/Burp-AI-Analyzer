@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 /**
  * HTTP 请求/响应格式化工具类
@@ -19,6 +20,8 @@ public class HttpFormatter {
 
     /** 超长 HTTP 内容落盘目录（工作区 .cache/ 下），agent 用原生 read_file 读回 */
     private static volatile Path cacheDir;
+    private static final java.util.concurrent.atomic.AtomicLong CACHE_SEQ = new java.util.concurrent.atomic.AtomicLong();
+    private static final int CACHE_MAX_FILES = 300;
 
     /**
      * HTTP内容压缩结果
@@ -85,8 +88,12 @@ public class HttpFormatter {
                 Files.createDirectories(cacheDir);
                 String safeLabel = cacheLabel == null ? "" : cacheLabel.trim().replaceAll("[^a-zA-Z0-9._-]+", "-");
                 if (safeLabel.length() > 48) safeLabel = safeLabel.substring(0, 48);
-                Path file = cacheDir.resolve(System.currentTimeMillis() + (safeLabel.isEmpty() ? "" : "-" + safeLabel) + ".txt");
+                // createTempFile 保证唯一：同一毫秒内并发的多个请求不会再互相覆盖缓存文件
+                String prefix = System.currentTimeMillis() + "-" + CACHE_SEQ.incrementAndGet()
+                        + (safeLabel.isEmpty() ? "-" : "-" + safeLabel + "-");
+                Path file = Files.createTempFile(cacheDir, prefix, ".txt");
                 Files.writeString(file, httpContent, StandardCharsets.UTF_8);
+                maybePruneCache(cacheDir);
 
                 CompressResult preview = compressIfTooLong(httpContent, PROMPT_PREVIEW_MAX_LENGTH);
                 String inline = preview.content
@@ -101,6 +108,32 @@ public class HttpFormatter {
         return new PromptPrepareResult(compressed.content, false, originalLength);
     }
     
+    /**
+     * 缓存目录长期只增不减；每 50 次写入清理一次，保留最新的 CACHE_MAX_FILES 个文件。
+     */
+    private static void maybePruneCache(Path dir) {
+        if (CACHE_SEQ.get() % 50 != 0) return;
+        try (var files = Files.list(dir)) {
+            List<Path> all = files.filter(Files::isRegularFile)
+                    .sorted(java.util.Comparator.comparingLong(p -> {
+                        try {
+                            return Files.getLastModifiedTime((Path) p).toMillis();
+                        } catch (IOException e) {
+                            return 0L;
+                        }
+                    }))
+                    .toList();
+            int remove = all.size() - CACHE_MAX_FILES;
+            for (int i = 0; i < remove; i++) {
+                try {
+                    Files.deleteIfExists(all.get(i));
+                } catch (IOException ignored) {
+                }
+            }
+        } catch (IOException ignored) {
+        }
+    }
+
     /**
      * 如果HTTP内容过长则压缩，保留请求头完整，截断请求体和响应体
      */

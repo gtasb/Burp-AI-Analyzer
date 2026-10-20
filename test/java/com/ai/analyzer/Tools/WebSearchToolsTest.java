@@ -84,6 +84,11 @@ class WebSearchToolsTest {
         WebSearchTools tools = WebSearchTools.duckDuckGo();
         assertThat(tools.fetchUrl("http://127.0.0.1/")).contains("不允许访问");
         assertThat(tools.fetchUrl("http://192.168.1.1/")).contains("不允许访问");
+        // inet_aton 整数形式会被解析为 127.0.0.1，必须按内网拦截
+        assertThat(tools.fetchUrl("http://2130706433/")).contains("不允许访问");
+        // 短写/十六进制形式无法通过 URI 主机解析，同样会被拒绝（不会发出请求）
+        assertThat(tools.fetchUrl("http://127.1/")).startsWith("抓取失败");
+        assertThat(tools.fetchUrl("http://0x7f000001/")).startsWith("抓取失败");
     }
 
     @Test

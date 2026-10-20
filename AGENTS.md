@@ -57,10 +57,16 @@ Relative paths passed to file tools get a **namespace prefix** (`user.name`) inj
 - **Windows shell paths**: `SkillToolExecutor.tokenizeArgs()` used to eat backslashes (fixed). Backslash only escapes before `"`, `\`, `'`
 - **Shell/Python toggle conflation**: `disableShellTool()` was gated on `!enableCliTool && !enablePythonScript` (fixed to `!enableCliTool`)
 - **PassiveScanApiClient**: `enableThinking` was a dead field (deleted). System prompt cache hash was missing MCP/filesystem toggles (fixed). `apiProvider` was not restored from settings (fixed)
-- **Serialized settings** (`ai_analyzer_settings.dat`) use Java serialization with `serialVersionUID = 9L`. `PluginSettings.loadCompat()` handles UID mismatch
-- **`useAgentScope`** was a serialized dead field never read anywhere (deleted). Remove any future dead field from PluginSettings or it pollutes the binary forever
+- **Settings file** (`ai_analyzer_settings.dat` + `~/.burp_ai_analyzer_settings`) is **JSON** via
+  `PluginSettings.saveTo()` / `loadCompat()`. Adding/removing fields is safe: Gson invokes the no-arg
+  constructor (missing fields keep defaults) and `normalize()` clamps invalid values. Old Java-
+  serialized files are still readable — `loadCompat` detects the `0xACED` magic and reads them
+  natively, falling back to local-descriptor substitution only on `InvalidClassException`.
+  `serialVersionUID = 9L` remains only for that legacy path; do not go back to `ObjectOutputStream`
+  for settings.
+- **`useAgentScope`** was a serialized dead field never read anywhere (deleted). Remove any future dead field from PluginSettings or it pollutes the file forever
 - **`enableUnrestrictedCliTool`** was another one (deleted): stored in settings, shuttled between both API clients, drove a checkbox — but neither the Harness native `execute` tool nor our `ShellExecTool` ever read it. **There is no command-level whitelist anywhere.** The CLI tab's「工具白名单」is only injected as a soft suggestion into the system prompt (`cliToolPrompt`/`cliWhitelist`); nothing intercepts commands. Don't let the UI imply enforcement
-- **Removing a serialized field needs no `serialVersionUID` bump** — Java deserialization silently ignores extra fields in the stream, and `loadCompat()` forces the local descriptor anyway
+- **Legacy Java-serialized settings**: removing a field needs no `serialVersionUID` bump; native deserialization ignores extra stream fields. The substitution fallback only exists for UID mismatches.
 
 ## Project structure
 

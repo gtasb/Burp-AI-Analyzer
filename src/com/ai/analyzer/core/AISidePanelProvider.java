@@ -16,24 +16,18 @@ import burp.api.montoya.ui.editor.extension.HttpResponseEditorProvider;
 import burp.api.montoya.ui.editor.extension.EditorCreationContext;
 import burp.api.montoya.core.ToolType;
 import java.io.File;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 侧栏 AI 面板提供者（Request/Response 编辑器）。
  *
- * <p>按工具类型（Repeater/Extensions/…）共享同一个 AI 助手实例是既定设计：
- * 每个 {@link ChatPanel} 都从同一个共享 {@code AgentApiClient} 的聊天历史渲染并订阅变更，
- * 因此同一工具的所有编辑器页签看到的是同一份连续对话。这里只做「按工具类型避免重复
- * 建编辑器实例」的缓存，并精简日志（不再逐调用刷屏）。
+ * <p>共享同一个 AI 助手实例是既定设计：每个 {@link ChatPanel} 都从同一个共享
+ * {@code AgentApiClient} 的聊天历史渲染并订阅变更，因此同一工具的所有编辑器页签
+ * 看到的是同一份连续对话。编辑器组件本身每次调用都新建——Swing 组件不能同时挂载
+ * 在多个容器中，缓存复用会导致标签页互相抢面板。
  */
 public class AISidePanelProvider implements HttpRequestEditorProvider, HttpResponseEditorProvider {
     private final MontoyaApi api;
     private volatile AIAnalyzerTab analyzerTab;
-
-    // Editor 实例缓存：键 = ToolType.toolName()，同一工具共享一个侧栏 AI 助手实例
-    private final Map<String, ExtensionProvidedHttpRequestEditor> requestEditorCache = new ConcurrentHashMap<>();
-    private final Map<String, ExtensionProvidedHttpResponseEditor> responseEditorCache = new ConcurrentHashMap<>();
 
     public AISidePanelProvider(MontoyaApi api) {
         this.api = api;
@@ -99,13 +93,10 @@ public class AISidePanelProvider implements HttpRequestEditorProvider, HttpRespo
 
     @Override
     public ExtensionProvidedHttpRequestEditor provideHttpRequestEditor(EditorCreationContext creationContext) {
+        // 每次调用都必须新建：Swing 组件只能挂在一个容器里，缓存复用会让
+        // 多个 Repeater 标签互相抢同一个面板，且 currentRequestResponse 后写覆盖前写。
         String key = cacheKey(creationContext);
-        ExtensionProvidedHttpRequestEditor cached = requestEditorCache.get(key);
-        if (cached != null) {
-            return cached;
-        }
         AISidePanelRequestEditor editor = new AISidePanelRequestEditor(api, newChatPanel());
-        requestEditorCache.put(key, editor);
         api.logging().logToOutput("[AISidePanel] 新建 Request 侧栏编辑器: " + key);
         return editor;
     }
@@ -113,22 +104,16 @@ public class AISidePanelProvider implements HttpRequestEditorProvider, HttpRespo
     @Override
     public ExtensionProvidedHttpResponseEditor provideHttpResponseEditor(EditorCreationContext creationContext) {
         String key = cacheKey(creationContext);
-        ExtensionProvidedHttpResponseEditor cached = responseEditorCache.get(key);
-        if (cached != null) {
-            return cached;
-        }
         AISidePanelResponseEditor editor = new AISidePanelResponseEditor(api, newChatPanel());
-        responseEditorCache.put(key, editor);
         api.logging().logToOutput("[AISidePanel] 新建 Response 侧栏编辑器: " + key);
         return editor;
     }
 
     /**
-     * 清理缓存（调试 / 重置用）。
+     * 清理缓存（调试 / 重置用）。编辑器改为每次新建后已无缓存；
+     * 面板在从窗口移除时会自行注销监听。
      */
     public void clearCache() {
-        requestEditorCache.clear();
-        responseEditorCache.clear();
-        api.logging().logToOutput("[AISidePanel] Editor 缓存已清理");
+        api.logging().logToOutput("[AISidePanel] 无缓存需要清理");
     }
 }

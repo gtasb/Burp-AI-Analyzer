@@ -1,6 +1,8 @@
 package com.ai.analyzer.core;
 
 import com.ai.analyzer.agent.mcpclient.CustomMcpConfig;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -8,14 +10,28 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectStreamClass;
 import java.io.Serializable;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
 public class PluginSettings implements Serializable {
-    
-    // IMPORTANT: 为了向下兼容已落盘的配置文件，请勿再修改 serialVersionUID
+
+    // IMPORTANT: 旧版配置使用 Java 序列化落盘，保留该 UID 仅用于读取历史文件；
+    // 新配置一律以 JSON 保存（见 saveTo/loadCompat），新增字段不再影响旧配置加载。
     private static final long serialVersionUID = 9L;
+
+    /** JSON 配置格式（自描述：新增/删除字段都能安全读取）。 */
+    private static final Gson SETTINGS_GSON = new GsonBuilder()
+            .setPrettyPrinting()
+            .disableHtmlEscaping()
+            .create();
+    /** Java 序列化流魔数 0xACED。 */
+    private static final int JAVA_STREAM_MAGIC = 0xACED;
     private String apiUrl;
     private String apiKey;
     private String model;
@@ -90,7 +106,14 @@ public class PluginSettings implements Serializable {
 
     private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
         in.defaultReadObject();
+        normalize();
+    }
 
+    /**
+     * 补齐缺省值并修正非法值。Java 反序列化不会执行构造器，新增字段会得到 0/null；
+     * JSON 读取虽然会走无参构造器，但为了防御手工编辑的配置文件，同样统一归一化。
+     */
+    private void normalize() {
         if (apiUrl == null) apiUrl = "https://dashscope.aliyuncs.com/api/v1";
         if (apiKey == null) apiKey = "";
         if (model == null) model = "qwen3-max";
@@ -114,6 +137,10 @@ public class PluginSettings implements Serializable {
         if (cliWhitelist == null) cliWhitelist = "";
         if (cliToolPrompt == null) cliToolPrompt = "";
         // 旧配置文件反序列化后为 false，等价于「关闭沙箱」，与历史行为一致
+        // 旧配置没有 ReAct 单轮上限字段（反序列化为 0），必须回落到合法默认值
+        if (activeMaxIters <= 0) activeMaxIters = com.ai.analyzer.agent.runtime.AgentScopeAgentRuntime.DEFAULT_MAX_ITERS;
+        if (passiveMaxIters <= 0) passiveMaxIters = 15;
+        if (tokenBudgetTokens < 0) tokenBudgetTokens = 0;
 
         if (searchMode == null) searchMode = "enableSearch";
         if (tavilyApiKey == null) tavilyApiKey = "";
@@ -130,16 +157,61 @@ public class PluginSettings implements Serializable {
     }
 
     /**
-     * 兼容加载（解决历史版本 serialVersionUID 变更导致的 InvalidClassException）。
-     * 注意：这属于 Java 序列化的兼容兜底，仅用于迁移旧配置。
+     * 以 JSON 保存配置。相比 Java 序列化，新增/删除字段都能向后兼容，
+     * 不会再因为类结构变化导致旧配置文件整体失效。
+     */
+    public void saveTo(File settingsFile) throws IOException {
+        Path target = settingsFile.toPath().toAbsolutePath();
+        Path parent = target.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        Path tmp = target.resolveSibling(target.getFileName() + ".tmp");
+        Files.writeString(tmp, SETTINGS_GSON.toJson(this), StandardCharsets.UTF_8);
+        try {
+            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    /**
+     * 兼容加载：JSON 配置直接解析；历史 Java 序列化文件先按原始描述符读取，
+     * 仅在 serialVersionUID 不匹配时退回本地描述符（老版本迁移路径）。
      */
     public static PluginSettings loadCompat(File settingsFile) throws IOException, ClassNotFoundException {
+        if (!hasJavaStreamMagic(settingsFile)) {
+            String json = Files.readString(settingsFile.toPath(), StandardCharsets.UTF_8);
+            PluginSettings settings = SETTINGS_GSON.fromJson(json, PluginSettings.class);
+            if (settings == null) {
+                throw new IOException("配置文件为空: " + settingsFile);
+            }
+            settings.normalize();
+            return settings;
+        }
+        try {
+            return readLegacy(settingsFile, false);
+        } catch (java.io.InvalidClassException e) {
+            return readLegacy(settingsFile, true);
+        }
+    }
+
+    private static boolean hasJavaStreamMagic(File file) throws IOException {
+        try (java.io.InputStream in = new FileInputStream(file)) {
+            int hi = in.read();
+            int lo = in.read();
+            return ((hi << 8) | lo) == JAVA_STREAM_MAGIC;
+        }
+    }
+
+    private static PluginSettings readLegacy(File settingsFile, boolean forceLocalDescriptor)
+            throws IOException, ClassNotFoundException {
         try (FileInputStream fis = new FileInputStream(settingsFile);
              ObjectInputStream ois = new ObjectInputStream(fis) {
                  @Override
                  protected ObjectStreamClass readClassDescriptor() throws IOException, ClassNotFoundException {
                      ObjectStreamClass desc = super.readClassDescriptor();
-                     if ("com.ai.analyzer.core.PluginSettings".equals(desc.getName())) {
+                     if (forceLocalDescriptor && "com.ai.analyzer.core.PluginSettings".equals(desc.getName())) {
                          ObjectStreamClass local = ObjectStreamClass.lookup(PluginSettings.class);
                          if (local != null) return local;
                      }

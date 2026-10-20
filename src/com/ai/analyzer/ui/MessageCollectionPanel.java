@@ -100,12 +100,26 @@ public class MessageCollectionPanel extends JPanel {
             statusLabel.setText("当前没有可收藏的报文");
             return;
         }
-        if (MessageCollectionStore.add(current)) {
-            statusLabel.setText("已收藏");
-        } else {
-            statusLabel.setText("已在列表中或已满(" + MessageCollectionStore.MAX_ITEMS + ")");
-        }
-        refresh();
+        // add() 会对全部条目做 SHA-256 并重写整个 JSON 文件，不能放在 EDT
+        statusLabel.setText("正在收藏...");
+        new SwingWorker<Boolean, Void>() {
+            @Override
+            protected Boolean doInBackground() {
+                return MessageCollectionStore.add(current);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    statusLabel.setText(Boolean.TRUE.equals(get())
+                            ? "已收藏"
+                            : "已在列表中或已满(" + MessageCollectionStore.MAX_ITEMS + ")");
+                } catch (Exception e) {
+                    statusLabel.setText("收藏失败: " + e.getMessage());
+                }
+                refresh();
+            }
+        }.execute();
     }
 
     private void sendSelected() {
@@ -150,15 +164,40 @@ public class MessageCollectionPanel extends JPanel {
         for (int row : rows) {
             toRemove.add(tableModel.getEntry(table.convertRowIndexToModel(row)).getRequestResponse());
         }
-        int removed = MessageCollectionStore.removeAll(toRemove);
-        statusLabel.setText("已移除 " + removed + " 条");
-        refresh();
+        // 与 add 一样会重写整个持久化文件，放到后台执行
+        statusLabel.setText("正在移除...");
+        new SwingWorker<Integer, Void>() {
+            @Override
+            protected Integer doInBackground() {
+                return MessageCollectionStore.removeAll(toRemove);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    statusLabel.setText("已移除 " + get() + " 条");
+                } catch (Exception e) {
+                    statusLabel.setText("移除失败: " + e.getMessage());
+                }
+                refresh();
+            }
+        }.execute();
     }
 
     private void clearAll() {
-        MessageCollectionStore.clear();
-        statusLabel.setText("已清空");
-        refresh();
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() {
+                MessageCollectionStore.clear();
+                return null;
+            }
+
+            @Override
+            protected void done() {
+                statusLabel.setText("已清空");
+                refresh();
+            }
+        }.execute();
     }
 
     private void updateButtonState() {

@@ -110,6 +110,19 @@ class GraphDatabaseTest {
     }
 
     @Test
+    @DisplayName("findNodes limit<=0 表示不限量（模块/实体过滤依赖此语义）")
+    void find_nodes_zero_limit_returns_all() {
+        String root = "https://t.com:443";
+        db.ensureRoot(root, "https", "t.com", 443);
+        for (int i = 0; i < 3; i++) {
+            db.upsertNode(root, NodeType.INTERFACE, "GET /api/" + i,
+                    root + "|GET|/api/" + i, FactStatus.OBSERVED, 1, "b", null, Map.of());
+        }
+        assertThat(db.findNodes(root, NodeType.INTERFACE, null, 0)).hasSize(3);
+        assertThat(db.findNodes(root, NodeType.INTERFACE, null, 2)).hasSize(2);
+    }
+
+    @Test
     @DisplayName("证据写入与按节点查询")
     void evidence_lifecycle() {
         String root = "https://t.com:443";

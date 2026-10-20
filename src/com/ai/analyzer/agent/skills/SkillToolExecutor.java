@@ -63,6 +63,15 @@ public class SkillToolExecutor {
         ExecutionResult result = new ExecutionResult();
         result.setToolName(tool != null ? tool.getName() : "unknown");
         result.setStartTime(System.currentTimeMillis());
+        if (tool == null) {
+            result.setSuccess(false);
+            result.setError("工具为空");
+            result.setEndTime(System.currentTimeMillis());
+            return result;
+        }
+        if (paramValues == null) {
+            paramValues = java.util.Collections.emptyMap();
+        }
 
         try {
             // 安全策略校验
@@ -251,6 +260,7 @@ public class SkillToolExecutor {
 
         long startTime = System.currentTimeMillis();
         long timeoutMs = timeoutSeconds * 1000L;
+        boolean truncated = false;
 
         try (InputStream in = process.getInputStream()) {
             while ((read = in.read(buffer)) != -1) {
@@ -261,20 +271,26 @@ public class SkillToolExecutor {
                     return decodeOutput(buf.toByteArray()) + "\n[输出读取超时]";
                 }
 
-                if (totalRead + read > MAX_OUTPUT_SIZE) {
+                if (!truncated && totalRead + read > MAX_OUTPUT_SIZE) {
                     int remaining = MAX_OUTPUT_SIZE - totalRead;
                     if (remaining > 0) {
                         buf.write(buffer, 0, remaining);
                     }
-                    return decodeOutput(buf.toByteArray()) + "\n[输出已截断，超过最大限制 " + (MAX_OUTPUT_SIZE / 1024) + "KB]";
+                    truncated = true;
+                    totalRead = MAX_OUTPUT_SIZE;
+                } else if (!truncated) {
+                    buf.write(buffer, 0, read);
+                    totalRead += read;
                 }
-
-                buf.write(buffer, 0, read);
-                totalRead += read;
+                // 截断后继续排空 stdout：停止读取会让写满管道缓冲的子进程永久阻塞，
+                // 最终被误报为“执行超时”。
             }
         }
 
-        return decodeOutput(buf.toByteArray());
+        String output = decodeOutput(buf.toByteArray());
+        return truncated
+                ? output + "\n[输出已截断，超过最大限制 " + (MAX_OUTPUT_SIZE / 1024) + "KB]"
+                : output;
     }
 
     /**

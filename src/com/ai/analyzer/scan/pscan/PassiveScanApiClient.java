@@ -54,6 +54,7 @@ public class PassiveScanApiClient {
     @Getter
     private String model;
     private String maxTokens = "";
+    private String customParameters = "";
     @Getter
     private ApiProvider apiProvider = ApiProvider.DASHSCOPE;
 
@@ -124,8 +125,12 @@ public class PassiveScanApiClient {
     private static final int DEFAULT_MODEL_CONCURRENCY = 3;
 
     // ========== AgentScope 运行时 ==========
-    private ReActAgentRuntime agentScopeRuntime;
-    private Toolkit asToolkit;
+    private volatile ReActAgentRuntime agentScopeRuntime;
+    /** 串行化运行时构建：默认 3 个消费者线程会同时触发首次初始化 */
+    private final Object agentScopeInitLock = new Object();
+    /** 设置变更代数：构建期间发生的 invalidate 会让新 runtime 作废 */
+    private final java.util.concurrent.atomic.AtomicLong runtimeGeneration = new java.util.concurrent.atomic.AtomicLong();
+    private volatile Toolkit asToolkit;
     /** 共享 Notebook 工具（知识黑板）。主动与被动 Agent 指向同一 {@link com.ai.analyzer.tools.NotebookUtils.NotebookStore} 单例 */
     private com.ai.analyzer.tools.NotebookTool notebookTool;
     /** Notebook 广播订阅是否已注册（避免运行时重建导致重复订阅） */
@@ -167,11 +172,13 @@ public class PassiveScanApiClient {
     }
 
     private void invalidateAgentScopeRuntime() {
-        if (agentScopeRuntime != null) {
-            try { agentScopeRuntime.shutdown(); } catch (Exception ignored) {}
-            agentScopeRuntime = null;
-        }
+        runtimeGeneration.incrementAndGet();
+        ReActAgentRuntime old = agentScopeRuntime;
+        agentScopeRuntime = null;
         asToolkit = null;
+        if (old != null) {
+            try { old.shutdown(); } catch (Exception ignored) {}
+        }
     }
 
     // ========== 配置 Setter ==========
@@ -201,7 +208,19 @@ public class PassiveScanApiClient {
 
     public void setMaxTokens(String maxTokens) {
         if (maxTokens == null) maxTokens = "";
-        this.maxTokens = maxTokens.trim();
+        String normalized = maxTokens.trim();
+        if (!java.util.Objects.equals(this.maxTokens, normalized)) {
+            this.maxTokens = normalized;
+            invalidateAgentScopeRuntime();
+        }
+    }
+
+    public void setCustomParameters(String customParameters) {
+        String normalized = customParameters == null ? "" : customParameters;
+        if (!java.util.Objects.equals(this.customParameters, normalized)) {
+            this.customParameters = normalized;
+            invalidateAgentScopeRuntime();
+        }
     }
 
     public void setApiProvider(ApiProvider apiProvider) {
@@ -340,10 +359,16 @@ public class PassiveScanApiClient {
     public void setWorkplaceDirectoryPath(String workplaceDirectoryPath) {
         String normalized = workplaceDirectoryPath == null ? "" : workplaceDirectoryPath.trim();
         normalized = normalizePath(normalized);
+        boolean changed = !java.util.Objects.equals(this.workplaceDirectoryPath, normalized);
         com.ai.analyzer.util.HttpFormatter.setWorkplaceDirectory(normalized);
         com.ai.analyzer.tools.NotebookUtils.NotebookStore.getInstance().setWorkplaceDirectory(normalized);
         com.ai.analyzer.graph.GraphStore.getInstance().setWorkplaceDirectory(normalized);
         this.workplaceDirectoryPath = normalized;
+        // RestrictedReadTool / ShellExecTool 在构建时捕获了旧路径，必须重建 runtime，
+        // 否则 .cache 落盘内容会被旧的 allowedRoot 拒绝，Agent 只能看到预览。
+        if (changed) {
+            invalidateAgentScopeRuntime();
+        }
     }
 
     public void setCustomMcpConfigJson(String v) {
@@ -376,6 +401,20 @@ public class PassiveScanApiClient {
 
     private void ensureAgentScopeInitialized() {
         if (agentScopeRuntime != null) return;
+        synchronized (agentScopeInitLock) {
+            if (agentScopeRuntime != null) return;
+            long generation = runtimeGeneration.get();
+            ensureAgentScopeInitializedLocked();
+            if (generation != runtimeGeneration.get() && agentScopeRuntime != null) {
+                try { agentScopeRuntime.shutdown(); } catch (Exception ignored) {}
+                agentScopeRuntime = null;
+                asToolkit = null;
+            }
+        }
+    }
+
+    private void ensureAgentScopeInitializedLocked() {
+        if (agentScopeRuntime != null) return;
 
         try {
             // 1. 创建 AgentScope Model
@@ -385,7 +424,7 @@ public class PassiveScanApiClient {
                     apiUrl,
                     model,
                     isModelSearchEnabled(),
-                    ""); // custom parameters - TODO: add field
+                    mergeMaxTokensIntoCustomParameters(customParameters, maxTokens));
             logInfo("AgentScope Model 已创建: " + AgentScopeModelFactory.describeConfig(
                     apiProvider, apiUrl, model, isModelSearchEnabled()));
 
@@ -440,13 +479,13 @@ public class PassiveScanApiClient {
             // 3. 注册 MCP 客户端
             if (hasAnyMcpEnabled()) {
                 if (enableMcp && BurpMcpUrl != null && !BurpMcpUrl.trim().isEmpty()) {
-                    AgentScopeMcpManager.registerBurpMcp(asToolkit, BurpMcpUrl, burpMcpAuthorization);
+                    AgentScopeMcpManager.registerBurpMcp(asToolkit, BurpMcpUrl, burpMcpAuthorization, "passive-mcp");
                 }
                 if (enableRagMcp) {
-                    AgentScopeMcpManager.registerRagMcp(asToolkit, ragMcpUrl);
+                    AgentScopeMcpManager.registerRagMcp(asToolkit, ragMcpUrl, "passive-mcp");
                 }
                 if (enableChromeMcp) {
-                    AgentScopeMcpManager.registerChromeMcp(asToolkit, chromeMcpUrl);
+                    AgentScopeMcpManager.registerChromeMcp(asToolkit, chromeMcpUrl, "passive-mcp");
                 }
                 for (var customConfig : customMcpConfigs) {
                     if (!customConfig.isEnabled() || !customConfig.isValid()) continue;
@@ -465,7 +504,8 @@ public class PassiveScanApiClient {
                             transportType,
                             urlOrCommand,
                             args,
-                            headers);
+                            headers,
+                            "passive-mcp");
                 }
             }
 
@@ -576,6 +616,8 @@ public class PassiveScanApiClient {
         this.apiKey = settings.getApiKey() != null ? settings.getApiKey() : "";
         this.model = settings.getModel() != null && !settings.getModel().isEmpty()
             ? settings.getModel() : defaultModel;
+        this.maxTokens = settings.getMaxTokens();
+        this.customParameters = settings.getCustomParameters();
         this.apiProvider = ApiProvider.fromDisplayName(settings.getApiProvider());
         this.enableSearch = settings.isEnableSearch();
         this.searchMode = settings.getSearchMode();
@@ -605,6 +647,35 @@ public class PassiveScanApiClient {
         this.customMcpConfigs = CustomMcpConfigParser.parse(this.customMcpConfigJson);
         this.customSystemPrompt = settings.getCustomPassiveSystemPrompt();
         com.ai.analyzer.util.TokenUsageTracker.instance().setBudget(settings.getTokenBudgetTokens());
+    }
+
+    /**
+     * 被动侧没有独立的上下文预算，把 maxTokens 映射为模型的 max_tokens；
+     * 若自定义参数里已经显式写了 max_tokens 则以自定义值为准。
+     */
+    private static String mergeMaxTokensIntoCustomParameters(String customParameters, String maxTokens) {
+        int tokens;
+        try {
+            tokens = maxTokens == null || maxTokens.isBlank() ? 0 : Integer.parseInt(maxTokens.trim());
+        } catch (NumberFormatException e) {
+            tokens = 0;
+        }
+        String custom = customParameters == null ? "" : customParameters.trim();
+        if (tokens <= 0) {
+            return custom;
+        }
+        try {
+            com.google.gson.JsonObject obj = custom.isEmpty()
+                    ? new com.google.gson.JsonObject()
+                    : com.google.gson.JsonParser.parseString(custom).getAsJsonObject();
+            if (!obj.has("max_tokens") && !obj.has("maxTokens")) {
+                obj.addProperty("max_tokens", tokens);
+            }
+            return obj.toString();
+        } catch (Exception e) {
+            // 自定义 JSON 非法时仍传递 max_tokens
+            return "{\"max_tokens\":" + tokens + "}";
+        }
     }
 
     private PluginSettings loadSettingsFromFile(File settingsFile) {
@@ -713,7 +784,8 @@ public class PassiveScanApiClient {
     private String doAgentScopeAnalysis(String userContent, String sessionId, AtomicBoolean cancelFlag,
             Consumer<String> onChunk) throws Exception {
         ensureAgentScopeInitialized();
-        if (agentScopeRuntime == null) {
+        ReActAgentRuntime runtime = agentScopeRuntime;
+        if (runtime == null) {
             throw new Exception("AgentScope 运行时初始化失败，请检查API配置");
         }
 
@@ -728,10 +800,14 @@ public class PassiveScanApiClient {
         try {
             logDebug("使用 ReActAgent 发送流式请求（session=" + sessionId + "）");
 
-            com.ai.analyzer.agent.runtime.StreamSession session = agentScopeRuntime.chat(
-                    userContent,
-                    sessionId,
-                    new RuntimeEventListener() {
+            // chat() 内部同步 blockLast；放到独立线程执行，当前线程轮询取消信号，
+            // 这样「停止扫描」能真正取消订阅（中断 LLM/工具），而不是等整轮跑完。
+            Thread agentThread = new Thread(() -> {
+                try {
+                    runtime.chat(
+                            userContent,
+                            sessionId,
+                            new RuntimeEventListener() {
                         @Override
                         public void onEvent(RuntimeEvent event) {
                             if (cancelFlag != null && cancelFlag.get()) return;
@@ -797,6 +873,29 @@ public class PassiveScanApiClient {
                             futureResult.completeExceptionally(error);
                         }
                     });
+                } catch (Throwable t) {
+                    futureResult.completeExceptionally(t);
+                }
+            }, "pscan-agent-" + sessionId);
+            agentThread.setDaemon(true);
+            agentThread.start();
+
+            // 等待期间轮询取消信号：真正取消订阅，而不是只让消费线程丢弃事件
+            while (agentThread.isAlive()) {
+                if (cancelFlag != null && cancelFlag.get()) {
+                    runtime.cancelAll();
+                }
+                try {
+                    agentThread.join(200);
+                } catch (InterruptedException ie) {
+                    runtime.cancelAll();
+                    Thread.currentThread().interrupt();
+                    throw ie;
+                }
+            }
+            if (!futureResult.isDone() && cancelFlag != null && cancelFlag.get()) {
+                futureResult.complete(resultBuilder + "\n分析已取消。");
+            }
 
             // 等待结果
             String result = futureResult.get(10, TimeUnit.MINUTES);
@@ -814,6 +913,17 @@ public class PassiveScanApiClient {
      *
      * @return true 已拿到许可；false 表示等待期间被取消
      */
+    /**
+     * 取消所有在途的被动分析（停止扫描时调用）。ReActAgentRuntime 内部按订阅取消，
+     * 会真正中断 LLM 调用与工具执行。
+     */
+    public void cancelInFlight() {
+        ReActAgentRuntime runtime = agentScopeRuntime;
+        if (runtime != null) {
+            runtime.cancelAll();
+        }
+    }
+
     private boolean acquireModelPermit(AtomicBoolean cancelFlag) throws InterruptedException {
         while (true) {
             if (cancelFlag != null && cancelFlag.get()) {

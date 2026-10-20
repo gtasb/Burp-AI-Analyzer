@@ -141,6 +141,8 @@ public class AIAnalyzerTab extends JPanel {
     private static final long PSCAN_MD_MS = 2000;
     private final long[] pscanPlainTime = {0L};
     private final long[] pscanMdTime = {0L};
+    /** 主动分析运行时，被动流式渲染暂停（两者在被动模式下共用同一个结果面板） */
+    private volatile boolean activeAnalysisRunning;
     private static final String MODE_PASSIVE = "被动模式";
     private static final String MODE_ACTIVE = "主动模式";
     private static final String CARD_PASSIVE = "passive";
@@ -223,10 +225,19 @@ public class AIAnalyzerTab extends JPanel {
             public void setPromptTextForAllModes(String text) {
                 String prompt = text != null ? text : "";
                 if (passiveModePromptArea != null) passiveModePromptArea.setText(prompt);
+                if (activeAnalysisPanel != null && activeAnalysisPanel.getPromptArea() != null) {
+                    activeAnalysisPanel.getPromptArea().setText(prompt);
+                }
             }
 
             @Override
             public String getUserPromptText() {
+                // 按当前模式取对应输入框：主动模式的提示词此前既不被保存也不被恢复
+                boolean passive = analysisModeComboBox == null
+                        || MODE_PASSIVE.equals(analysisModeComboBox.getSelectedItem());
+                if (!passive && activeAnalysisPanel != null && activeAnalysisPanel.getPromptArea() != null) {
+                    return activeAnalysisPanel.getPromptArea().getText().trim();
+                }
                 return userPromptArea != null ? userPromptArea.getText().trim() : "";
             }
         };
@@ -676,6 +687,9 @@ public class AIAnalyzerTab extends JPanel {
      */
     private void renderPscanStream(int resultId) {
         if (passiveScanResultPane == null || passiveScanTable == null) return;
+        // 主动分析期间两者共用 passiveScanResultPane：主动侧的增量渲染会删除其后内容，
+        // 被动侧若继续写入会互相抹除。继续攒缓冲，等主动分析结束后再整体重绘。
+        if (activeAnalysisRunning) return;
         Integer selectedId = getSelectedPassiveScanId();
         if (selectedId == null || selectedId.intValue() != resultId) return;
 
@@ -781,6 +795,7 @@ public class AIAnalyzerTab extends JPanel {
             psClient.setApiKey(apiClient.getApiKey());
             psClient.setModel(apiClient.getModel());
             psClient.setMaxTokens(apiClient.getMaxTokens());
+            psClient.setCustomParameters(apiClient.getConfig().getCustomParameters());
             psClient.setApiProvider(apiClient.getApiProvider().getDisplayName());
             psClient.setEnableSearch(apiClient.isEnableSearch());
             psClient.setSearchMode(apiClient.getConfig().getSearchMode());
@@ -861,6 +876,15 @@ public class AIAnalyzerTab extends JPanel {
         passiveScanTableModel.setRowCount(0);
         passiveScanProgressBar.setValue(0);
         passiveScanStatusLabel.setText("就绪");
+        // 结果 id 会被 clearResults 从 1 重新分配；不清理缓冲会让新结果复用旧 id 的文本
+        pscanStreamBuffers.clear();
+        pscanRenderedLen.clear();
+        pscanSnapshotDone.clear();
+        pscanMdTime[0] = 0L;
+        pscanPlainTime[0] = 0L;
+        if (passiveScanResultPane != null) {
+            passiveScanResultPane.setText("");
+        }
     }
 
     private long parseTokenBudget(String text) {
@@ -942,6 +966,16 @@ public class AIAnalyzerTab extends JPanel {
         } else {
             passiveScanTableModel.addRow(rowData);
         }
+
+        // 结果定稿后立刻释放流式缓冲：之前只有点开该行才会释放，
+        // 长时间扫描会堆积 N×512KB，且清空后 id 复用会串流。
+        boolean finalized = result.getAnalysisResult() != null
+                || result.getErrorMessage() != null
+                || (result.getStatus() != ScanResult.ScanStatus.PENDING
+                    && result.getStatus() != ScanResult.ScanStatus.SCANNING);
+        if (finalized) {
+            discardPscanStreamBuffer(result.getId());
+        }
     }
 
     private JPanel createRequestListPanel() {
@@ -993,6 +1027,9 @@ public class AIAnalyzerTab extends JPanel {
                     StringBuilder buf = pscanStreamBuffers.get(id);
                     if (buf != null && buf.length() > 0 && result.getAnalysisResult() == null) {
                         passiveScanResultPane.setText("");
+                        // 面板刚被清空，已渲染长度必须归零，否则增量分支只补差异，前缀永久丢失
+                        pscanRenderedLen.remove(id);
+                        pscanSnapshotDone.remove(id);
                         renderPscanStream(id);
                     } else {
                         displayScanResult(result);
@@ -1112,6 +1149,10 @@ public class AIAnalyzerTab extends JPanel {
             Object idObj = passiveScanTableModel.getValueAt(modelRow, 0);
             if (idObj instanceof Integer id) {
                 discardPscanStreamBuffer(id);
+                // 只删表格行不够：后续 onResultUpdated 会把该 id 的行重新加回来
+                if (passiveScanManager != null) {
+                    passiveScanManager.removeResult(id);
+                }
             }
             passiveScanTableModel.removeRow(modelRow);
             clearHttpEditors();
@@ -1282,12 +1323,23 @@ public class AIAnalyzerTab extends JPanel {
     }
 
     private void onAnalysisStateChanged(boolean analyzing) {
+        activeAnalysisRunning = analyzing;
         if (analyzeButton != null) {
             analyzeButton.setEnabled(!analyzing);
             analyzeButton.setText(analyzing ? "分析中..." : "开始分析");
         }
         if (stopButton != null) {
             stopButton.setEnabled(analyzing);
+        }
+        if (!analyzing) {
+            // 主动分析结束后，把当前选中行的被动流式内容补回面板
+            Integer id = getSelectedPassiveScanId();
+            if (id != null && passiveScanResultPane != null && pscanStreamBuffers.containsKey(id)) {
+                pscanRenderedLen.remove(id);
+                pscanSnapshotDone.remove(id);
+                passiveScanResultPane.setText("");
+                renderPscanStream(id);
+            }
         }
     }
 
@@ -1412,7 +1464,8 @@ public class AIAnalyzerTab extends JPanel {
                     };
                     passiveScanTableModel.addRow(rowData);
                     // 立即异步分析，不阻塞用户操作，结果通过 onResultUpdated/onStreamingChunk 回填
-                    passiveScanManager.analyzeSingleRequest(requestResponse);
+                    // 注意传已加入的结果：analyzeSingleRequest 内部会二次 addRequest 命中去重而返回 null
+                    passiveScanManager.analyzeAddedRequest(scanResult);
                     // 主动选中新行：否则流式输出找不到「当前选中行」，用户看不到任何输出
                     selectPassiveScanRow(scanResult.getId());
                     api.logging().logToOutput("请求已发送到AI异步分析: " + method + " " + url);

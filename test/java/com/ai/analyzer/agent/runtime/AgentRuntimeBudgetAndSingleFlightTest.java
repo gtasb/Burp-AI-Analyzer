@@ -122,6 +122,10 @@ class AgentRuntimeBudgetAndSingleFlightTest {
     @DisplayName("client_should_release_channel_even_when_stream_fails")
     void releasesChannelOnFailure() throws Exception {
         AgentApiClient client = new AgentApiClient();
+        // 不依赖本机配置/网络：指向必然失败的本地端点，确保调用快速抛错
+        client.setApiUrl("http://127.0.0.1:1/v1");
+        client.setApiKey("test-key");
+        client.setModel("test-model");
         // 没有可用模型/网络，调用必然抛错；通道必须被释放，否则永久卡死
         assertThatThrownBy(() -> client.analyzeRequestStream("", "hi", c -> { }))
                 .isInstanceOf(Exception.class);

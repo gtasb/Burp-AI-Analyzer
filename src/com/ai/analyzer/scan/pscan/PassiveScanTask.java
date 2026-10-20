@@ -2,12 +2,11 @@ package com.ai.analyzer.scan.pscan;
 
 import burp.api.montoya.http.message.HttpRequestResponse;
 
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 /**
  * 被动扫描入口过滤 / 成本控制（静态配置 API）。
@@ -90,16 +89,21 @@ public final class PassiveScanTask {
             customStaticPaths = null;
             return;
         }
-        Set<String> exts = Arrays.stream(text.split("[,\\s]+"))
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .map(s -> s.startsWith(".") ? s.toLowerCase() : ("." + s.toLowerCase()))
-                .collect(Collectors.toSet());
-
-        List<String> paths = exts.stream()
-                .filter(s -> s.startsWith("/") && s.endsWith("/"))
-                .collect(Collectors.toList());
-        exts.removeAll(paths);
+        // 先按原始条目分类，不能统一加 "." 前缀："/images/" 加前缀会变成 "./images/"，
+        // 既不会被识别为路径，又会顶掉默认扩展名列表。
+        Set<String> exts = new java.util.HashSet<>();
+        List<String> paths = new ArrayList<>();
+        for (String raw : text.split("[,\\s]+")) {
+            String s = raw.trim();
+            if (s.isEmpty()) continue;
+            if (s.startsWith("/")) {
+                paths.add(s.toLowerCase());
+                continue;
+            }
+            String ext = s.toLowerCase();
+            if (!ext.startsWith(".")) ext = "." + ext;
+            exts.add(ext);
+        }
 
         customExtensions = exts.isEmpty() ? null : exts;
         customStaticPaths = paths.isEmpty() ? null : paths.toArray(new String[0]);
