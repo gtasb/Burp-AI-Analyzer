@@ -110,8 +110,12 @@ public class AgentScopeModelFactory {
             // DeepSeek 思考模式要求把上一轮 assistant 的 reasoning_content 原样回传，
             // 默认 OpenAI 格式化器会丢弃，导致工具调用后的下一次请求 400：
             // "The `reasoning_content` in the thinking mode must be passed back to the API."
-            builder.formatter(new io.agentscope.extensions.model.openai.formatter.DeepSeekFormatter());
+            builder.formatter(new io.agentscope.extensions.model.openai.compat.deepseek.DeepSeekFormatter());
             builder.nativeStructuredOutput(false);
+            com.ai.analyzer.util.AppLogBuffer.info("AgentScopeModelFactory",
+                    "DeepSeek thinking formatter enabled: " + modelName + " @ " + baseUrl);
+            com.ai.analyzer.util.DebugContext.log("AgentScopeModelFactory", "deepseek_formatter_enabled",
+                    java.util.Map.of("model", modelName, "url", baseUrl));
         }
         return builder.build();
     }
@@ -216,6 +220,16 @@ public class AgentScopeModelFactory {
     }
 
     private static String normalizeUrl(String url, String defaultUrl) {
-        return isBlank(url) ? defaultUrl : url.trim();
+        if (isBlank(url)) return defaultUrl;
+        String trimmed = url.trim();
+        // 用户常粘贴出 "https://host//v1" 这类双斜杠，避免拼出错误 endpoint
+        String scheme = "";
+        int schemeEnd = trimmed.indexOf("://");
+        if (schemeEnd > 0) {
+            scheme = trimmed.substring(0, schemeEnd + 3);
+            trimmed = trimmed.substring(schemeEnd + 3);
+        }
+        trimmed = trimmed.replaceAll("/{2,}", "/");
+        return scheme + trimmed;
     }
 }
