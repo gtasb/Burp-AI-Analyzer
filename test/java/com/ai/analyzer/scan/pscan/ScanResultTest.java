@@ -271,6 +271,37 @@ class ScanResultTest {
     }
 
     @Nested
+    @DisplayName("跳过扫描")
+    class Skip {
+
+        @Test
+        @DisplayName("late completion/error must not overwrite SKIPPED")
+        void lateResultsDoNotOverwriteSkipped() {
+            ScanResult result = new ScanResult(1, mockRequestResponse);
+            result.requestSkip("用户手动跳过");
+            assertThat(result.getStatus()).isEqualTo(ScanResult.ScanStatus.SKIPPED);
+
+            result.markScanning();
+            assertThat(result.getStatus()).isEqualTo(ScanResult.ScanStatus.SKIPPED);
+
+            result.markCompleted("## 风险等级: 高危\n存在 SQL 注入");
+            assertThat(result.getStatus()).isEqualTo(ScanResult.ScanStatus.SKIPPED);
+            assertThat(result.getAnalysisResult()).isNull();
+
+            result.markError("boom");
+            assertThat(result.getStatus()).isEqualTo(ScanResult.ScanStatus.SKIPPED);
+        }
+
+        @Test
+        @DisplayName("completion counted only once")
+        void completionCountedOnce() {
+            ScanResult result = new ScanResult(1, mockRequestResponse);
+            assertThat(result.markCompletionCounted()).isTrue();
+            assertThat(result.markCompletionCounted()).isFalse();
+        }
+    }
+
+    @Nested
     @DisplayName("RiskLevel.fromString")
     class RiskLevelFromString {
 

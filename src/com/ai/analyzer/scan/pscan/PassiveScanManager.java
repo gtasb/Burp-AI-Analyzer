@@ -427,6 +427,11 @@ public class PassiveScanManager {
                     notifyResultUpdated(result);
                     continue;
                 }
+                // 入队后（或刚 poll 到）被用户跳过：不发起分析
+                if (result.isSkipRequested()) {
+                    finishSkipped(result);
+                    continue;
+                }
                 
                 // 执行扫描
                 scanRequest(result);
@@ -541,11 +546,21 @@ public class PassiveScanManager {
             // 标记为扫描中
             result.markScanning();
             notifyResultUpdated(result);
-            
+
+            // 入队后被用户跳过：不再发起 LLM 调用
+            if (result.isSkipRequested()) {
+                finishSkipped(result);
+                return;
+            }
+
             // 调用 AI 分析（支持流式输出）：批次结果走序列级分析，单请求走单请求分析
             // 增量文本始终带 result id，UI 侧按 id 归位，不依赖任何「当前流式结果」共享状态
             final int resultId = result.getId();
             Consumer<String> streamHandler = chunk -> {
+                if (result.isSkipRequested()) {
+                    // 扫描途中被跳过：停止向该行追加流式内容
+                    return;
+                }
                 if (onStreamingChunk != null) {
                     try {
                         onStreamingChunk.accept(resultId, chunk);
@@ -562,10 +577,10 @@ public class PassiveScanManager {
             if (cancelFlag.get()) {
                 result.markCancelled();
             } else {
-                // 标记完成（会自动解析风险等级）
+                // 标记完成（会自动解析风险等级；跳过途中返回的结果不会覆盖 SKIPPED）
                 result.markCompleted(aiResponse);
             }
-            
+
         } catch (Exception e) {
             if (cancelFlag.get()) {
                 result.markCancelled();
@@ -575,18 +590,78 @@ public class PassiveScanManager {
                         + "\n" + com.ai.analyzer.util.AppLogBuffer.describeChain(e, 6));
             }
         }
-        
-        // 更新计数和通知
-        int completed = completedCount.incrementAndGet();
+
+        // 更新计数和通知（跳过与消费者并发时只计一次）
+        int completed;
+        if (result.markCompletionCounted()) {
+            completed = completedCount.incrementAndGet();
+        } else {
+            completed = completedCount.get();
+        }
         notifyResultUpdated(result);
-        notifyHighRiskIfApplicable(result);
+        if (!result.isSkipRequested()) {
+            notifyHighRiskIfApplicable(result);
+        }
         updateStatus();
-        
+
         // 通知进度
         int total = totalCount.get();
         if (total > 0) {
             notifyProgressChanged(completed * 100 / total);
         }
+    }
+
+    private void finishSkipped(ScanResult result) {
+        int completed;
+        if (result.markCompletionCounted()) {
+            completed = completedCount.incrementAndGet();
+        } else {
+            completed = completedCount.get();
+        }
+        notifyResultUpdated(result);
+        updateStatus();
+        int total = totalCount.get();
+        if (total > 0) {
+            notifyProgressChanged(completed * 100 / total);
+        }
+    }
+
+    /**
+     * 跳过某个结果的扫描（被动扫描 Tab 的「跳过扫描」按钮）。
+     *
+     * <p>等待中的结果会从队列移除，不再发起 LLM 调用；扫描中的结果会置位跳过标记，
+     * 停止向界面追加流式内容，并在本轮调用结束时保留「已跳过」状态（已发生的调用无法撤回）。
+     *
+     * @return true 表示本次操作生效
+     */
+    public boolean skipResult(int id) {
+        ScanResult result = getResultById(id);
+        if (result == null) return false;
+        ScanResult.ScanStatus status = result.getStatus();
+        if (status == ScanResult.ScanStatus.COMPLETED
+                || status == ScanResult.ScanStatus.ERROR
+                || status == ScanResult.ScanStatus.CANCELLED
+                || status == ScanResult.ScanStatus.SKIPPED) {
+            return false;
+        }
+        boolean removed = scanQueue.remove(result);
+        if (removed) {
+            queuedCount.updateAndGet(v -> v > 0 ? v - 1 : 0);
+        }
+        result.requestSkip("用户手动跳过");
+        if (status == ScanResult.ScanStatus.PENDING) {
+            // 不会再有消费者处理它，由这里完成计数；若恰好有直接扫描线程，
+            // markCompletionCounted 保证不会重复计数
+            if (result.markCompletionCounted()) {
+                completedCount.incrementAndGet();
+            }
+            notifyResultUpdated(result);
+            updateStatus();
+        } else {
+            notifyResultUpdated(result);
+        }
+        logInfo("已跳过扫描: " + result.getShortUrl());
+        return true;
     }
     
     /**

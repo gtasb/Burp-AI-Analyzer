@@ -118,6 +118,49 @@ class PassiveScanManagerTest {
     }
 
     @Nested
+    @DisplayName("跳过扫描")
+    class SkipScan {
+
+        private burp.api.montoya.http.message.HttpRequestResponse mockRequestResponse() {
+            burp.api.montoya.http.message.HttpRequestResponse rr =
+                    mock(burp.api.montoya.http.message.HttpRequestResponse.class);
+            burp.api.montoya.http.message.requests.HttpRequest req =
+                    mock(burp.api.montoya.http.message.requests.HttpRequest.class);
+            when(req.url()).thenReturn("https://example.com/api/skip");
+            when(req.method()).thenReturn("GET");
+            when(rr.request()).thenReturn(req);
+            return rr;
+        }
+
+        @Test
+        @DisplayName("should_mark_pending_result_as_skipped_and_count_completed")
+        void skipPendingResult() {
+            ScanResult result = manager.addRequest(mockRequestResponse());
+            assertThat(result).isNotNull();
+
+            assertThat(manager.skipResult(result.getId())).isTrue();
+            assertThat(result.getStatus()).isEqualTo(ScanResult.ScanStatus.SKIPPED);
+            assertThat(result.getSkipReason()).contains("跳过");
+            assertThat(manager.getTotalCount()).isEqualTo(1);
+            assertThat(manager.getCompletedCount()).isEqualTo(1);
+
+            // 重复跳过不再生效
+            assertThat(manager.skipResult(result.getId())).isFalse();
+            assertThat(manager.getCompletedCount()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("should_not_skip_completed_result")
+        void skipCompletedResultFails() {
+            ScanResult result = manager.addRequest(mockRequestResponse());
+            result.markCompleted("## 风险等级: 无");
+
+            assertThat(manager.skipResult(result.getId())).isFalse();
+            assertThat(result.getStatus()).isEqualTo(ScanResult.ScanStatus.COMPLETED);
+        }
+    }
+
+    @Nested
     @DisplayName("启动与停止")
     class StartStop {
 

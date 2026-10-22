@@ -45,6 +45,7 @@ public class AIAnalyzerTab extends JPanel {
     private JButton clearButton;
     private JButton deleteRequestButton;
     private JButton clearAllRequestsButton;
+    private JButton skipScanButton;
     private JButton stopButton;
     private JComboBox<String> analysisModeComboBox;
     private CardLayout centerModeCardLayout;
@@ -1035,10 +1036,12 @@ public class AIAnalyzerTab extends JPanel {
             if (id != null && passiveScanManager != null) {
                 ScanResult result = passiveScanManager.getResultById(id);
                 if (result != null) {
+                    updateSkipButtonState(result);
                     // 优先显示该行已累积的流式文本（分析中）；否则回落到 ScanResult 里的最终结果。
                     // 这样切换行不会把不同请求的输出混在一起。
                     StringBuilder buf = pscanStreamBuffers.get(id);
-                    if (buf != null && buf.length() > 0 && result.getAnalysisResult() == null) {
+                    if (buf != null && buf.length() > 0 && result.getAnalysisResult() == null
+                            && result.getStatus() != ScanResult.ScanStatus.SKIPPED) {
                         passiveScanResultPane.setText("");
                         // 面板刚被清空，已渲染长度必须归零，否则增量分支只补差异，前缀永久丢失
                         pscanRenderedLen.remove(id);
@@ -1047,10 +1050,13 @@ public class AIAnalyzerTab extends JPanel {
                     } else {
                         displayScanResult(result);
                     }
+                } else {
+                    updateSkipButtonState(null);
                 }
             } else {
                 clearHttpEditors();
                 passiveScanResultPane.setText("");
+                updateSkipButtonState(null);
             }
         });
 
@@ -1060,10 +1066,15 @@ public class AIAnalyzerTab extends JPanel {
         JPanel requestListButtonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 5));
         deleteRequestButton = new JButton("删除选中");
         clearAllRequestsButton = new JButton("清空所有");
+        skipScanButton = new JButton("跳过扫描");
+        skipScanButton.setToolTipText("跳过选中报文：等待中的不再发起分析；扫描中的停止输出并标记为已跳过");
+        skipScanButton.setEnabled(false);
 
         deleteRequestButton.addActionListener(e -> deleteSelectedPassiveScanResult());
         clearAllRequestsButton.addActionListener(e -> clearPassiveScanResults());
+        skipScanButton.addActionListener(e -> skipSelectedPassiveScanResult());
 
+        requestListButtonPanel.add(skipScanButton);
         requestListButtonPanel.add(deleteRequestButton);
         requestListButtonPanel.add(clearAllRequestsButton);
 
@@ -1135,7 +1146,13 @@ public class AIAnalyzerTab extends JPanel {
         }
 
         String analysisResult = result.getAnalysisResult();
-        if (analysisResult != null && !analysisResult.isEmpty()) {
+        if (result.getStatus() == ScanResult.ScanStatus.SKIPPED) {
+            discardPscanStreamBuffer(result.getId());
+            String reason = result.getSkipReason();
+            passiveScanResultPane.setText("已跳过该包的扫描"
+                    + (reason != null && !reason.isBlank() ? "（" + reason + "）" : "")
+                    + "。\n该报文不会进入 AI 分析流程。");
+        } else if (analysisResult != null && !analysisResult.isEmpty()) {
             // 结果已定稿，释放该行的流式中间缓冲
             discardPscanStreamBuffer(result.getId());
             try {
@@ -1177,8 +1194,35 @@ public class AIAnalyzerTab extends JPanel {
         }
     }
 
-    private void showPassiveScanStats() {
-        if (passiveScanManager == null) return;
+    private void skipSelectedPassiveScanResult() {
+        Integer id = getSelectedPassiveScanId();
+        if (id == null || passiveScanManager == null) {
+            return;
+        }
+        if (!passiveScanManager.skipResult(id)) {
+            return;
+        }
+        discardPscanStreamBuffer(id);
+        ScanResult result = passiveScanManager.getResultById(id);
+        if (result != null) {
+            updatePassiveScanTable(result);
+            updateSkipButtonState(result);
+            displayScanResult(result);
+        }
+    }
+
+    private void updateSkipButtonState(ScanResult result) {
+        if (skipScanButton == null) return;
+        boolean skippable = result != null
+                && (result.getStatus() == ScanResult.ScanStatus.PENDING
+                    || result.getStatus() == ScanResult.ScanStatus.SCANNING);
+        skipScanButton.setEnabled(skippable);
+        skipScanButton.setToolTipText(skippable
+                ? "跳过选中报文：等待中的不再发起分析；扫描中的停止输出并标记为已跳过"
+                : "仅「等待中」或「扫描中」的结果可以跳过");
+    }
+
+    private void showPassiveScanStats() {        if (passiveScanManager == null) return;
 
         Map<ScanResult.RiskLevel, Integer> stats = passiveScanManager.getStatsByRiskLevel();
 

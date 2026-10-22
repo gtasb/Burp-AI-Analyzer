@@ -62,7 +62,8 @@ public class ScanResult {
         SCANNING("扫描中"),
         COMPLETED("已完成"),
         ERROR("错误"),
-        CANCELLED("已取消");
+        CANCELLED("已取消"),
+        SKIPPED("已跳过");
         
         private final String displayName;
         
@@ -93,6 +94,12 @@ public class ScanResult {
     private volatile LocalDateTime completedTime;
     /** 处理优先级（越大越先处理），由扫描管理器按请求特征打分后设置 */
     private volatile int priority;
+    /** 用户手动跳过：置位后不再启动分析，已在分析中的结果也不回写 */
+    private volatile boolean skipRequested;
+    private volatile String skipReason;
+    /** 完成计数只允许加一次（跳过与消费者线程可能并发） */
+    private final java.util.concurrent.atomic.AtomicBoolean completionCounted =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
     
     /**
      * 构造函数（单请求扫描）
@@ -305,34 +312,72 @@ public class ScanResult {
      * 标记扫描开始
      */
     public synchronized void markScanning() {
+        if (skipRequested) {
+            this.status = ScanStatus.SKIPPED;
+            return;
+        }
         this.status = ScanStatus.SCANNING;
     }
-    
+
     /**
      * 标记扫描完成
      */
     public synchronized void markCompleted(String result) {
+        if (skipRequested) {
+            // 跳过发生在分析途中：保留“已跳过”，不把迟到的 AI 结果写回
+            this.status = ScanStatus.SKIPPED;
+            return;
+        }
         this.status = ScanStatus.COMPLETED;
         this.analysisResult = result;
         this.completedTime = LocalDateTime.now();
         this.riskLevel = parseRiskLevelFromResult(result);
     }
-    
+
     /**
      * 标记扫描错误
      */
     public synchronized void markError(String error) {
+        if (skipRequested) {
+            this.status = ScanStatus.SKIPPED;
+            return;
+        }
         this.status = ScanStatus.ERROR;
         this.errorMessage = error;
         this.completedTime = LocalDateTime.now();
     }
-    
+
     /**
      * 标记扫描取消
      */
     public synchronized void markCancelled() {
+        if (skipRequested) {
+            this.status = ScanStatus.SKIPPED;
+            return;
+        }
         this.status = ScanStatus.CANCELLED;
         this.completedTime = LocalDateTime.now();
+    }
+
+    /** 用户请求跳过：之后启动或结束的分析都不会覆盖该状态。 */
+    public synchronized void requestSkip(String reason) {
+        this.skipRequested = true;
+        this.skipReason = reason;
+        this.status = ScanStatus.SKIPPED;
+        this.completedTime = LocalDateTime.now();
+    }
+
+    public boolean isSkipRequested() {
+        return skipRequested;
+    }
+
+    public String getSkipReason() {
+        return skipReason;
+    }
+
+    /** 返回 true 表示本次调用首次计入 completed；并发/重复调用只成功一次。 */
+    public boolean markCompletionCounted() {
+        return completionCounted.compareAndSet(false, true);
     }
     
     /**
