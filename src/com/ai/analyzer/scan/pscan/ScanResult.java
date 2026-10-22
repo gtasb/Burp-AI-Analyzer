@@ -319,6 +319,9 @@ public class ScanResult {
         this.status = ScanStatus.SCANNING;
     }
 
+    /** AI 判定低价值流量时约定输出的标记前缀（见被动扫描提示词）。 */
+    public static final String LOW_VALUE_MARKER = "[SKIP_LOW_VALUE";
+
     /**
      * 标记扫描完成
      */
@@ -326,6 +329,14 @@ public class ScanResult {
         if (skipRequested) {
             // 跳过发生在分析途中：保留“已跳过”，不把迟到的 AI 结果写回
             this.status = ScanStatus.SKIPPED;
+            return;
+        }
+        if (result != null && result.contains(LOW_VALUE_MARKER)) {
+            // AI 在分析前判定该流量价值不大：标记为跳过，不计入风险统计
+            this.skipRequested = true;
+            this.skipReason = "AI 判定低价值流量";
+            this.status = ScanStatus.SKIPPED;
+            this.completedTime = LocalDateTime.now();
             return;
         }
         this.status = ScanStatus.COMPLETED;

@@ -42,10 +42,19 @@ public class SystemPromptBuilder {
                   → Reply directly, do not call tools
 
                 ## Step 2: Analysis Flow (when receiving HTTP content)
-                1. Identify target info: host, port, protocol, endpoint path
-                2. Analyze request characteristics: parameter types, authentication method, data format
-                3. Assess risk level: only report Medium and above
-                4. Decide whether to test and validate based on the risk
+                1. **Traffic value triage (do this FIRST)**: Decide whether this traffic is worth
+                   scanning at all. Clearly low-value traffic includes: third-party analytics /
+                   ads / telemetry / error-reporting endpoints, CDN or font/static asset
+                   delivery, health checks / pings / heartbeats, and requests whose only change
+                   is a non-security-relevant value on an endpoint already covered in this
+                   session. If it is clearly low value, reply with exactly one line:
+                   `[SKIP_LOW_VALUE: <one-sentence reason>]` and STOP. Do NOT call tools,
+                   do NOT write to the notebook, do NOT produce a report.
+                   When in doubt, DO NOT skip — continue with the normal analysis.
+                2. Identify target info: host, port, protocol, endpoint path
+                3. Analyze request characteristics: parameter types, authentication method, data format
+                4. Assess risk level: only report Medium and above
+                5. Decide whether to test and validate based on the risk
 
                 ## Step 3: Execution Flow (when exploitable risks are found)
                 1. Construct test payloads (based on identified risk type)

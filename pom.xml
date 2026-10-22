@@ -223,6 +223,9 @@
                 <version>3.5.6</version>
                 <configuration>
                     <argLine>--enable-preview</argLine>
+                    <!-- 本地 mock MCP 端到端用例存在时序抖动（整套跑偶发 30s 初始化超时，
+                         单跑稳定）；只对失败用例重跑一次，真实失败仍会连续失败。 -->
+                    <rerunFailingTestsCount>1</rerunFailingTestsCount>
                 </configuration>
             </plugin>
             <plugin>

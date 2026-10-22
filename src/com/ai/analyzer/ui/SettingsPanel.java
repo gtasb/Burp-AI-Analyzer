@@ -136,6 +136,319 @@ public class SettingsPanel {
         tabbedPane.addTab("Cli", createCliTabPanel());
         JPanel skillsPanel = createSkillsTabPanel();
         tabbedPane.addTab("技能", skillsPanel);
+        tabbedPane.addTab("缓存", createCacheTabPanel());
+    }
+
+    // ======================== 缓存管理 ========================
+
+    private enum CacheKind {
+        HTTP_DUMPS("HTTP 报文缓存", "工作区 .cache/ 下由超长报文落盘产生的文件"),
+        TOOL_RESULTS("大工具结果", "工具输出超过 16KB 时自动落盘的 large_tool_results/"),
+        AGENT_MEMORY("Agent 会话与记忆", "agent 的 MEMORY.md、memory/ 与会话状态（等同新会话）"),
+        NOTEBOOKS("Notebook 知识黑板", "工作区 notebooks/ 下按域名保存的 .md 知识库（不可恢复）"),
+        GRAPH("知识图谱数据", "knowledge-graph.db 及 WAL 文件（不可恢复，等同重置图谱）"),
+        PYTHON_WORKDIR("Python 工作目录", "agent 生成并复用的 python-workdir/ 脚本"),
+        CHAT_HISTORY("聊天历史", "~/.burp_ai_chat_history.dat（侧栏对话记录，删除不可恢复）"),
+        RUNTIME_LOGS("运行时日志与统计", "Logger/Debug 内存日志与 Token 统计（仅内存）");
+
+        final String title;
+        final String description;
+
+        CacheKind(String title, String description) {
+            this.title = title;
+            this.description = description;
+        }
+    }
+
+    private record CacheRow(CacheKind kind, JCheckBox box, JLabel sizeLabel) {
+    }
+
+    private JPanel createCacheTabPanel() {
+        JPanel panel = new JPanel(new BorderLayout(8, 8));
+        panel.setBorder(javax.swing.BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+        JLabel pathLabel = new JLabel();
+        pathLabel.setFont(pathLabel.getFont().deriveFont(Font.PLAIN, 12f));
+        JLabel noteLabel = new JLabel("清理不可恢复；清理 Notebook/知识图谱建议先停止扫描。收藏列表不在本页清理。");
+        noteLabel.setForeground(Color.GRAY);
+        noteLabel.setFont(noteLabel.getFont().deriveFont(Font.PLAIN, 11f));
+
+        JButton refreshButton = new JButton("刷新大小");
+        JPanel topText = new JPanel(new java.awt.GridLayout(0, 1, 0, 2));
+        topText.add(pathLabel);
+        topText.add(noteLabel);
+        JPanel top = new JPanel(new BorderLayout(8, 4));
+        top.add(topText, BorderLayout.CENTER);
+        JPanel refreshWrap = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        refreshWrap.add(refreshButton);
+        top.add(refreshWrap, BorderLayout.EAST);
+
+        JPanel listPanel = new JPanel();
+        listPanel.setLayout(new BoxLayout(listPanel, BoxLayout.Y_AXIS));
+        List<CacheRow> rows = new ArrayList<>();
+        for (CacheKind kind : CacheKind.values()) {
+            JPanel row = new JPanel(new BorderLayout(8, 0));
+            row.setBorder(javax.swing.BorderFactory.createCompoundBorder(
+                    javax.swing.BorderFactory.createMatteBorder(0, 0, 1, 0, new Color(230, 232, 236)),
+                    javax.swing.BorderFactory.createEmptyBorder(8, 4, 8, 4)));
+            JCheckBox box = new JCheckBox(kind.title);
+            box.setFont(box.getFont().deriveFont(Font.BOLD, 12f));
+            JLabel desc = new JLabel(kind.description);
+            desc.setForeground(Color.GRAY);
+            desc.setFont(desc.getFont().deriveFont(Font.PLAIN, 11f));
+            JPanel text = new JPanel(new java.awt.GridLayout(0, 1, 0, 2));
+            text.add(box);
+            text.add(desc);
+            JLabel size = new JLabel("-");
+            size.setFont(size.getFont().deriveFont(Font.PLAIN, 12f));
+            row.add(text, BorderLayout.CENTER);
+            row.add(size, BorderLayout.EAST);
+            listPanel.add(row);
+            rows.add(new CacheRow(kind, box, size));
+        }
+
+        JScrollPane scroll = new JScrollPane(listPanel);
+        scroll.setBorder(javax.swing.BorderFactory.createEmptyBorder());
+
+        JButton selectAllButton = new JButton("全选");
+        selectAllButton.addActionListener(e -> {
+            for (CacheRow row : rows) row.box().setSelected(true);
+        });
+        JButton clearButton = new JButton("清理选中缓存");
+        JLabel statusLabel = new JLabel(" ");
+        JPanel bottom = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        bottom.add(selectAllButton);
+        bottom.add(clearButton);
+        bottom.add(statusLabel);
+
+        panel.add(top, BorderLayout.NORTH);
+        panel.add(scroll, BorderLayout.CENTER);
+        panel.add(bottom, BorderLayout.SOUTH);
+
+        Runnable refresh = () -> refreshCacheSizes(rows, pathLabel, statusLabel);
+        refreshButton.addActionListener(e -> refresh.run());
+        clearButton.addActionListener(e -> clearSelectedCaches(rows, statusLabel, refresh));
+
+        // 首次打开时延后计算，避免构造阶段阻塞 EDT
+        SwingUtilities.invokeLater(refresh);
+        return panel;
+    }
+
+    /** 解析某种缓存在当前配置下对应的路径（工作区可能为空）。 */
+    private List<java.nio.file.Path> cachePaths(CacheKind kind, String workplace) {
+        List<java.nio.file.Path> paths = new ArrayList<>();
+        java.nio.file.Path ws = null;
+        if (workplace != null && !workplace.isEmpty()) {
+            try {
+                ws = java.nio.file.Path.of(workplace).toAbsolutePath().normalize();
+            } catch (Exception ignored) {
+            }
+        }
+        String user = System.getProperty("user.name", "burp-user");
+        switch (kind) {
+            case HTTP_DUMPS -> {
+                if (ws != null) paths.add(ws.resolve(".cache"));
+            }
+            case TOOL_RESULTS -> {
+                if (ws != null) {
+                    paths.add(ws.resolve("large_tool_results"));
+                    paths.add(ws.resolve(user).resolve("large_tool_results"));
+                }
+            }
+            case AGENT_MEMORY -> {
+                if (ws != null) {
+                    paths.add(ws.resolve(user).resolve("MEMORY.md"));
+                    paths.add(ws.resolve(user).resolve("memory"));
+                    paths.add(ws.resolve("agents").resolve("burp-ai-analyzer"));
+                }
+            }
+            case NOTEBOOKS -> {
+                // 与 NotebookStore 一致：未配置工作区时回落到 ~/ai-analyzer-workplace
+                java.nio.file.Path base = ws != null
+                        ? ws
+                        : java.nio.file.Path.of(System.getProperty("user.home"), "ai-analyzer-workplace");
+                paths.add(base.resolve("notebooks"));
+            }
+            case GRAPH -> {
+                // 与 GraphStore 一致：未配置工作区时回落到 ~/ai-analyzer-workplace
+                java.nio.file.Path base = ws != null
+                        ? ws
+                        : java.nio.file.Path.of(System.getProperty("user.home"), "ai-analyzer-workplace");
+                paths.add(base.resolve("knowledge-graph.db"));
+                paths.add(base.resolve("knowledge-graph.db-wal"));
+                paths.add(base.resolve("knowledge-graph.db-shm"));
+            }
+            case PYTHON_WORKDIR -> {
+                if (ws != null) paths.add(ws.resolve("python-workdir"));
+            }
+            case CHAT_HISTORY -> paths.add(java.nio.file.Path.of(
+                    System.getProperty("user.home"), ".burp_ai_chat_history.dat"));
+            case RUNTIME_LOGS -> {
+                // 仅内存，无路径
+            }
+        }
+        return paths;
+    }
+
+    private void refreshCacheSizes(List<CacheRow> rows, JLabel pathLabel, JLabel statusLabel) {
+        // 在 EDT 上读取输入框，后台线程只使用快照
+        final String workplace = getWorkplaceDirectoryPath();
+        SwingUtilities.invokeLater(() -> pathLabel.setText("工作区: "
+                + (workplace == null || workplace.isEmpty() ? "(未配置)" : workplace)));
+        new SwingWorker<Map<CacheKind, Long>, Void>() {
+            @Override
+            protected Map<CacheKind, Long> doInBackground() {
+                Map<CacheKind, Long> sizes = new java.util.EnumMap<>(CacheKind.class);
+                for (CacheKind kind : CacheKind.values()) {
+                    if (kind == CacheKind.RUNTIME_LOGS) {
+                        sizes.put(kind, -1L);
+                        continue;
+                    }
+                    long total = 0;
+                    for (java.nio.file.Path p : cachePaths(kind, workplace)) {
+                        total += sizeOf(p);
+                    }
+                    sizes.put(kind, total);
+                }
+                return sizes;
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    Map<CacheKind, Long> sizes = get();
+                    for (CacheRow row : rows) {
+                        Long size = sizes.get(row.kind());
+                        row.sizeLabel().setText(size == null || size < 0 ? "内存" : formatSize(size));
+                    }
+                    statusLabel.setText("已刷新");
+                } catch (Exception e) {
+                    statusLabel.setText("统计失败: " + e.getMessage());
+                }
+            }
+        }.execute();
+    }
+
+    private void clearSelectedCaches(List<CacheRow> rows, JLabel statusLabel, Runnable refresh) {
+        List<CacheRow> selected = new ArrayList<>();
+        for (CacheRow row : rows) {
+            if (row.box().isSelected()) selected.add(row);
+        }
+        if (selected.isEmpty()) {
+            statusLabel.setText("请先勾选要清理的缓存类型");
+            return;
+        }
+        StringBuilder message = new StringBuilder("确定清理以下缓存？该操作不可恢复：\n");
+        for (CacheRow row : selected) {
+            message.append("• ").append(row.kind().title).append('\n');
+        }
+        int choice = JOptionPane.showConfirmDialog(workplaceDirectoryField, message.toString(), "清理缓存",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (choice != JOptionPane.OK_OPTION) {
+            return;
+        }
+        statusLabel.setText("正在清理…");
+        final String workplace = getWorkplaceDirectoryPath();
+        new SwingWorker<long[], Void>() {
+            @Override
+            protected long[] doInBackground() {
+                long freed = 0;
+                int failures = 0;
+                for (CacheRow row : selected) {
+                    CacheKind kind = row.kind();
+                    if (kind == CacheKind.RUNTIME_LOGS) {
+                        continue;
+                    }
+                    if (kind == CacheKind.GRAPH) {
+                        // Windows 下 SQLite 句柄未释放会删不掉；先关闭，下一次使用会自动重建
+                        try {
+                            com.ai.analyzer.graph.GraphStore.getInstance().close();
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    for (java.nio.file.Path p : cachePaths(kind, workplace)) {
+                        freed += sizeOf(p);
+                        if (!deleteRecursively(p)) failures++;
+                    }
+                }
+                return new long[]{freed, failures};
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    long[] result = get();
+                    if (selected.stream().anyMatch(r -> r.kind() == CacheKind.RUNTIME_LOGS)) {
+                        com.ai.analyzer.util.AppLogBuffer.clear();
+                        com.ai.analyzer.util.AppLogBuffer.clearMcpTraffic();
+                        com.ai.analyzer.util.DebugContext.clear();
+                        com.ai.analyzer.util.TokenUsageTracker.instance().reset();
+                    }
+                    if (selected.stream().anyMatch(r -> r.kind() == CacheKind.CHAT_HISTORY)) {
+                        try {
+                            apiClient.clearSharedChatUiHistory();
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    statusLabel.setText("已清理，释放约 " + formatSize(result[0])
+                            + (result[1] > 0 ? "（部分文件被占用未能删除）" : ""));
+                    refresh.run();
+                } catch (Exception e) {
+                    statusLabel.setText("清理失败: " + e.getMessage());
+                }
+            }
+        }.execute();
+    }
+
+    private static long sizeOf(java.nio.file.Path path) {
+        if (path == null || !java.nio.file.Files.exists(path)) return 0;
+        try {
+            if (java.nio.file.Files.isRegularFile(path)) {
+                return java.nio.file.Files.size(path);
+            }
+            try (var stream = java.nio.file.Files.walk(path)) {
+                return stream.filter(java.nio.file.Files::isRegularFile)
+                        .mapToLong(p -> {
+                            try {
+                                return java.nio.file.Files.size(p);
+                            } catch (Exception e) {
+                                return 0;
+                            }
+                        }).sum();
+            }
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private static boolean deleteRecursively(java.nio.file.Path path) {
+        if (path == null || !java.nio.file.Files.exists(path)) return true;
+        boolean ok = true;
+        try {
+            if (java.nio.file.Files.isDirectory(path)) {
+                try (var stream = java.nio.file.Files.walk(path)) {
+                    for (java.nio.file.Path p : stream.sorted(java.util.Comparator.reverseOrder()).toList()) {
+                        try {
+                            java.nio.file.Files.deleteIfExists(p);
+                        } catch (Exception e) {
+                            ok = false;
+                        }
+                    }
+                }
+            } else {
+                java.nio.file.Files.deleteIfExists(path);
+            }
+        } catch (Exception e) {
+            return false;
+        }
+        return ok;
+    }
+
+    private static String formatSize(long bytes) {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024 * 1024) return String.format(java.util.Locale.ROOT, "%.1f KB", bytes / 1024.0);
+        if (bytes < 1024L * 1024 * 1024) return String.format(java.util.Locale.ROOT, "%.1f MB", bytes / 1024.0 / 1024.0);
+        return String.format(java.util.Locale.ROOT, "%.2f GB", bytes / 1024.0 / 1024.0 / 1024.0);
     }
 
     // === Public getters for config values ===

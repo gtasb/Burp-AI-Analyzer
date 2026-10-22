@@ -293,6 +293,26 @@ class ScanResultTest {
         }
 
         @Test
+        @DisplayName("AI low-value marker marks result as SKIPPED")
+        void lowValueMarkerMarksSkipped() {
+            ScanResult result = new ScanResult(1, mockRequestResponse);
+            result.markCompleted("[SKIP_LOW_VALUE: third-party analytics endpoint]");
+
+            assertThat(result.getStatus()).isEqualTo(ScanResult.ScanStatus.SKIPPED);
+            assertThat(result.getSkipReason()).contains("低价值");
+            assertThat(result.getAnalysisResult()).isNull();
+            assertThat(result.getRiskLevel()).isEqualTo(ScanResult.RiskLevel.NONE);
+        }
+
+        @Test
+        @DisplayName("normal result is not treated as skip")
+        void normalResultNotSkipped() {
+            ScanResult result = new ScanResult(1, mockRequestResponse);
+            result.markCompleted("## 风险等级: 无\n未发现明显漏洞");
+            assertThat(result.getStatus()).isEqualTo(ScanResult.ScanStatus.COMPLETED);
+        }
+
+        @Test
         @DisplayName("completion counted only once")
         void completionCountedOnce() {
             ScanResult result = new ScanResult(1, mockRequestResponse);

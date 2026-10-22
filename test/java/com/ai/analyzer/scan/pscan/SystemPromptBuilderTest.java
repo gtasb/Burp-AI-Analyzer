@@ -37,6 +37,15 @@ class SystemPromptBuilderTest {
         }
 
         @Test
+        @DisplayName("should_contain_low_value_skip_instruction")
+        void should_contain_low_value_skip_instruction() {
+            String prompt = SystemPromptBuilder.getDefaultBasePrompt();
+            assertThat(prompt).contains("Traffic value triage");
+            assertThat(prompt).contains("[SKIP_LOW_VALUE");
+            assertThat(prompt).contains("When in doubt, DO NOT skip");
+        }
+
+        @Test
         @DisplayName("should_contain_batch_processing_guidance")
         void should_contain_batch_processing_guidance() {
             String prompt = SystemPromptBuilder.getDefaultBasePrompt();

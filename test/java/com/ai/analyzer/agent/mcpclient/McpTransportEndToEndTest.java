@@ -65,7 +65,7 @@ class McpTransportEndToEndTest {
         if (auth != null) {
             receivedAuth.set(auth);
         }
-        String body = readBody(ex.getRequestBody());
+        String body = readBody(ex);
         ObjectMapper om = new ObjectMapper();
         JsonNode req;
         try {
@@ -95,7 +95,20 @@ class McpTransportEndToEndTest {
         respond(ex, 200, resp, "application/json");
     }
 
-    private static String readBody(InputStream in) throws IOException {
+    private static String readBody(HttpExchange ex) throws IOException {
+        // 按 Content-Length 读取：读到 EOF 的写法在 chunked/keep-alive 请求上与客户端
+        // 互相等待，整套测试负载高时会偶发 30s 初始化超时（单跑却通过）。
+        String lengthHeader = ex.getRequestHeaders().getFirst("Content-Length");
+        InputStream in = ex.getRequestBody();
+        if (lengthHeader != null) {
+            try {
+                int len = Integer.parseInt(lengthHeader);
+                byte[] bytes = in.readNBytes(len);
+                return new String(bytes, StandardCharsets.UTF_8);
+            } catch (NumberFormatException ignored) {
+                // 回落到 EOF 读取
+            }
+        }
         StringBuilder sb = new StringBuilder();
         byte[] buf = new byte[4096];
         int n;
