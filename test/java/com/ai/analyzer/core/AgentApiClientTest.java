@@ -14,6 +14,39 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AgentApiClientTest {
 
     @Test
+    @DisplayName("active analysis completion anchors a fact on the interface")
+    void activeAnalysisWritesFactAnchor(@TempDir Path tempDir) throws Exception {
+        com.ai.analyzer.graph.GraphStore store = com.ai.analyzer.graph.GraphStore.getInstance();
+        store.setWorkplaceDirectory(tempDir.toString());
+        try {
+            burp.api.montoya.http.message.HttpRequestResponse rr =
+                    org.mockito.Mockito.mock(burp.api.montoya.http.message.HttpRequestResponse.class);
+            burp.api.montoya.http.message.requests.HttpRequest req =
+                    org.mockito.Mockito.mock(burp.api.montoya.http.message.requests.HttpRequest.class);
+            org.mockito.Mockito.when(rr.request()).thenReturn(req);
+            org.mockito.Mockito.when(req.method()).thenReturn("GET");
+            org.mockito.Mockito.when(req.url()).thenReturn("https://fact.example/api/x");
+            org.mockito.Mockito.when(req.bodyToString()).thenReturn("");
+            store.observe(rr);
+
+            AgentApiClient client = new AgentApiClient("http://localhost", "k");
+            java.lang.reflect.Method m = AgentApiClient.class.getDeclaredMethod(
+                    "recordActiveAnalysisFact",
+                    burp.api.montoya.http.message.HttpRequestResponse.class);
+            m.setAccessible(true);
+            m.invoke(client, rr);
+
+            String root = "https://fact.example:443";
+            assertThat(store.listNodes(root, 100))
+                    .anyMatch(n -> n.type() == com.ai.analyzer.graph.GraphTypes.NodeType.ANALYSIS_FACT);
+            assertThat(store.listEdges(root, 100))
+                    .anyMatch(e -> e.relationType() == com.ai.analyzer.graph.GraphTypes.EdgeType.COVERS);
+        } finally {
+            store.setWorkplaceDirectory("");
+        }
+    }
+
+    @Test
     @DisplayName("normalizePath should return empty for null input")
     void normalizePath_null() {
         assertThat(AgentApiClient.normalizePath(null)).isNull();

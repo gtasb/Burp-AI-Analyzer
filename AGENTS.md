@@ -64,7 +64,8 @@ Relative paths passed to file tools get a **namespace prefix** (`user.name`) inj
   Both system prompts instruct agents to use them with evidence.
 - Coverage follows ARTEX's fact-anchor semantics: a completed passive scan writes an
   `ANALYSIS_FACT` node plus `COVERS --> INTERFACE`; the viewer paints only COVERS-anchored assets
-  as “已分析”. Skipped/low-value scans do not anchor. Active chat analysis does not write facts yet.
+  as “已分析”. Skipped/low-value scans do not anchor. Active/chat analysis also anchors after a
+  normal (non-cancelled, non-throwing) completion via `AgentApiClient.recordActiveAnalysisFact`.
 - Viewer (`ui/GraphViewerPanel`) uses ARTEX-like force parameters, folds sibling groups by
   parent+type (PARAMETER 0, EVIDENCE 2, RESOURCE 6, others 12 by default, click “…” to expand),
   and exports a self-contained HTML with the same look.

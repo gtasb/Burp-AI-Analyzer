@@ -934,14 +934,33 @@ public class AgentApiClient {
             enhancedUserPrompt = (userPrompt != null ? userPrompt : "") + preScanHint;
         }
 
-        analyzeRequestStream(httpRequest, enhancedUserPrompt, sourceInfo, onChunk);
+        boolean completed = analyzeRequestStream(httpRequest, enhancedUserPrompt, sourceInfo, onChunk);
+
+        // 主动分析正常完成（未取消、未报错）：写入 fact 锚点，
+        // 与被动扫描共用 ARTEX 的“已分析”语义
+        if (completed) {
+            recordActiveAnalysisFact(requestResponse);
+        }
+    }
+
+    private void recordActiveAnalysisFact(HttpRequestResponse requestResponse) {
+        if (requestResponse == null || requestResponse.request() == null) return;
+        try {
+            com.ai.analyzer.graph.GraphStore.getInstance().recordAnalysisFact(
+                    requestResponse.request().method(),
+                    requestResponse.request().url(),
+                    "主动分析",
+                    "active-" + java.util.UUID.randomUUID());
+        } catch (Exception ignored) {
+            // 图谱写入失败不影响分析结果
+        }
     }
 
     public void analyzeRequestStream(String httpRequest, String userPrompt, Consumer<String> onChunk) throws Exception {
         analyzeRequestStream(httpRequest, userPrompt, null, onChunk);
     }
 
-    private void analyzeRequestStream(String httpRequest, String userPrompt,
+    private boolean analyzeRequestStream(String httpRequest, String userPrompt,
             RequestSourceDetector.RequestSourceInfo sourceInfo, Consumer<String> onChunk) throws Exception {
 
         // 单飞保护：侧栏(ChatPanel)与主动分析(ActiveAnalysisPanel)共用本客户端，
@@ -954,13 +973,13 @@ public class AgentApiClient {
             throw new IllegalStateException(msg);
         }
         try {
-            analyzeRequestStreamGuarded(httpRequest, userPrompt, sourceInfo, onChunk);
+            return analyzeRequestStreamGuarded(httpRequest, userPrompt, sourceInfo, onChunk);
         } finally {
             analysisInFlight.set(false);
         }
     }
 
-    private void analyzeRequestStreamGuarded(String httpRequest, String userPrompt,
+    private boolean analyzeRequestStreamGuarded(String httpRequest, String userPrompt,
             RequestSourceDetector.RequestSourceInfo sourceInfo, Consumer<String> onChunk) throws Exception {
 
         if (com.ai.analyzer.util.TokenUsageTracker.sharedOverBudget()) {
@@ -969,7 +988,7 @@ public class AgentApiClient {
             if (onChunk != null) {
                 onChunk.accept(msg);
             }
-            return;
+            return false;
         }
 
         String userContent = buildAnalysisContent(httpRequest, userPrompt, sourceInfo);
@@ -986,6 +1005,7 @@ public class AgentApiClient {
 
         final boolean[] thinkingNoticeShown = {false};
         final int[] contentChunkCount = {0};
+        final boolean[] errored = {false};
         final long streamId = streamGeneration.incrementAndGet();
 
         com.ai.analyzer.agent.runtime.StreamSession session = runtime.chat(
@@ -1056,6 +1076,7 @@ public class AgentApiClient {
                                                 "output", String.valueOf(event.outputTokens())));
                             }
                             case ERROR -> {
+                                errored[0] = true;
                                 Throwable err = event.error();
                                 logError("AgentScope 事件错误: " + (err != null ? err.getMessage() : "unknown")
                                         + (err != null ? "\n" + AppLogBuffer.describeChain(err, 6) : ""));
@@ -1073,6 +1094,7 @@ public class AgentApiClient {
 
                     @Override
                     public void onError(Throwable error) {
+                        errored[0] = true;
                         logError("AgentScope 流式错误: " + (error != null ? error.getMessage() : "unknown")
                                 + (error != null ? "\n" + AppLogBuffer.describeChain(error, 6) : ""));
                     }
@@ -1085,6 +1107,8 @@ public class AgentApiClient {
         } finally {
             currentSession = null;
         }
+        // 取消会递增 streamGeneration；错误事件单独标记。二者都不算“已分析”
+        return isCurrentStream(streamId) && !errored[0];
     }
 
     private boolean isCurrentStream(long streamId) {
