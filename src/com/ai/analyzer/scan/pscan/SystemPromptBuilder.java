@@ -169,6 +169,18 @@ public class SystemPromptBuilder {
                 - 其他 Agent 的新写入通过广播提醒；用 `notebook_get_updates` 按版本增量获取
                 """);
 
+        // 资图谱：指纹/特征/后端推断落图（供覆盖图与后续主动分析复用）
+        p.append("""
+                \n# Knowledge Graph (graph_* tools)
+                你与主动分析 Agent 共享同一个 SQLite 资产知识图谱：
+                - 开始分析某站点前先 `graph_overview`；查具体接口用 `graph_get_interface` / `graph_get_subgraph`。
+                - 发现**技术指纹**时调用 `graph_upsert_fingerprint`（必须附 evidence：命中的 header/Cookie/HTML/JS 片段，可选 version）。
+                - 发现**能力特征**（actuator/swagger/graphql/upload/jwt/oauth/websocket 等）时调用 `graph_add_feature`，
+                  可同时给出 vuln_class（如 未授权访问/信息泄露/文件上传/IDOR）。
+                - 从路径形态/错误串/Cookie/JS 推断后端实现时调用 `graph_add_backend_hypothesis`，必须附 evidence。
+                推测保持 INFERRED，不要编造证据；低价值流量仍按 `[SKIP_LOW_VALUE]` 规则跳过。
+                """);
+
         return p.toString();
     }
 }

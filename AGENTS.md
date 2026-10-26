@@ -50,6 +50,25 @@ Relative paths passed to file tools get a **namespace prefix** (`user.name`) inj
 (`resolveFileToolRoot`). Without this alignment the agent writes a file and then cannot find it from
 `execute`. Absolute paths are NOT namespaced.
 
+## Knowledge graph (assets / fingerprints / inference)
+
+- Node types: `ORIGIN, INTERFACE, PARAMETER, MODULE, TECHNOLOGY, VERSION` plus `RESOURCE`
+  (JS/CSS/source map), `EVIDENCE`, `FEATURE`, `BACKEND_HYPOTHESIS`, `VULN_CLASS`, `CANDIDATE`,
+  `ANALYSIS_FACT`. Fingerprints are first-class `TECHNOLOGY` nodes (property `category` =
+  frontend/backend/server/middleware/library) with `EVIDENCE --INDICATES--> TECHNOLOGY`.
+- `PassiveScanManager.enqueueRequest` calls `GraphStore.observe` **before** the L0 static filter,
+  so JS/CSS/source maps are recorded as `RESOURCE` (never sent to the LLM) and JS API paths add
+  `RESOURCE --CALLS--> INTERFACE` edges when the interface already exists.
+- Agent write tools: `graph_upsert_fingerprint`, `graph_add_feature` (optional `vuln_class` →
+  `FEATURE --SUGGESTS--> VULN_CLASS`), `graph_add_backend_hypothesis` (evidence → `SUPPORTS`).
+  Both system prompts instruct agents to use them with evidence.
+- Coverage follows ARTEX's fact-anchor semantics: a completed passive scan writes an
+  `ANALYSIS_FACT` node plus `COVERS --> INTERFACE`; the viewer paints only COVERS-anchored assets
+  as “已分析”. Skipped/low-value scans do not anchor. Active chat analysis does not write facts yet.
+- Viewer (`ui/GraphViewerPanel`) uses ARTEX-like force parameters, folds sibling groups by
+  parent+type (PARAMETER 0, EVIDENCE 2, RESOURCE 6, others 12 by default, click “…” to expand),
+  and exports a self-contained HTML with the same look.
+
 ## Known bugs & quirks
 
 - **Every checkbox action listener MUST call `apiClient.setXxx()`** — not just toggle UI state. `enableCustomMcpCheckBox` was missing this (fixed), check new additions

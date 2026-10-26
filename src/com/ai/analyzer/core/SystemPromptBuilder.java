@@ -195,6 +195,21 @@ public class SystemPromptBuilder {
                 - 其他 Agent 的新写入通过广播提醒；用 `notebook_get_updates` 按版本增量获取
                 """);
 
+        // 知识图谱协作：指纹/特征/后端推断必须落图并附证据，供后续分析与覆盖度使用
+        p.append("""
+                \n# Knowledge Graph (graph_* tools)
+                你与被动扫描 Agent 共享同一个 SQLite 资产知识图谱。开始分析前先 `graph_overview`，
+                遇到具体接口用 `graph_get_interface` / `graph_get_subgraph` 查看已知上下文。
+                发现以下内容时必须落图（程序会按 canonical key 去重）：
+                - **技术指纹**（前端框架/后端框架/服务器/中间件）：`graph_upsert_fingerprint`，
+                  必须附 evidence（命中的 header/Cookie/HTML/JS 原文片段），可选 version。
+                - **能力特征**（actuator/swagger/graphql/upload/jwt/oauth/websocket 等）：
+                  `graph_add_feature`，可同时给出 vuln_class 建立“特征 → 漏洞类别”映射。
+                - **后端实现推测**（Spring Boot/Laravel/ThinkPHP/Node+Express 等）：
+                  `graph_add_backend_hypothesis`，必须给出 evidence（路径形态/错误串/Cookie/JS 依据）。
+                推测一律使用 INFERRED，不要当成已确认事实；不要编造证据。
+                """);
+
         // 本环境实测路径事实：解决模型「写入的文件在哪 / shell 在哪执行」的认知混乱
         if (pathFileToolRoot != null && !pathFileToolRoot.isBlank()) {
             String ws = (pathWorkplaceRoot != null && !pathWorkplaceRoot.isBlank())

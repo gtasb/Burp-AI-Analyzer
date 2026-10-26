@@ -38,7 +38,21 @@ public final class GraphTypes {
     /** 节点类型（§4）。 */
     public enum NodeType {
         ORIGIN, INTERFACE, PARAMETER, FUNCTION, BUSINESS_ENTITY, BUSINESS_LOGIC,
-        TECHNOLOGY, VERSION, MODULE, SERVICE, VULNERABILITY
+        TECHNOLOGY, VERSION, MODULE, SERVICE, VULNERABILITY,
+        /** 前端资源：JS / CSS / source map / API 文档等 */
+        RESOURCE,
+        /** 指纹证据：命中的 header / cookie / HTML / JS / 错误页片段 */
+        EVIDENCE,
+        /** 可被漏洞化的能力特征：actuator / swagger / upload / jwt ... */
+        FEATURE,
+        /** 后端实现推测：Spring Boot / Laravel / Node+Express ... */
+        BACKEND_HYPOTHESIS,
+        /** 漏洞类别：SQLi / IDOR / 未授权 ... */
+        VULN_CLASS,
+        /** 已测试但未确认的候选漏洞 */
+        CANDIDATE,
+        /** 分析事实锚点：一次完成的扫描/验证在资产上的落点（沿用 ARTEX fact-anchor 语义） */
+        ANALYSIS_FACT
     }
 
     /** 边类型（§5），第一版只实现以下集合。 */
@@ -47,7 +61,33 @@ public final class GraphTypes {
         BELONGS_TO, CONTAINS, PAID_BY,
         RELATED_TO, SAME_MODULE, SAME_ENTITY, SAME_FUNCTION, PRECEDES, FOLLOWS,
         ALTERNATIVE, CRUD_SIBLING,
-        RUNS_ON, USES_TECHNOLOGY, HAS_VERSION, AFFECTED_BY, SUPPORTED_BY
+        RUNS_ON, USES_TECHNOLOGY, HAS_VERSION, AFFECTED_BY, SUPPORTED_BY,
+        /** Origin → 前端资源 */
+        LOADS,
+        /** 前端资源 → 它调用的接口（从 JS 中提取） */
+        CALLS,
+        /** 证据 → 技术/特征/假设 */
+        INDICATES,
+        /** 证据 → 假设（支持） */
+        SUPPORTS,
+        /** 证据/测试结果 → 假设（推翻） */
+        REFUTES,
+        /** 特征/技术 → 漏洞类别 */
+        SUGGESTS,
+        /** 假设 → 支撑它的技术/证据 */
+        DERIVED_FROM,
+        /** 测试结果 → 假设/候选漏洞（确认） */
+        CONFIRMS,
+        /** 测试结果 → 假设/候选漏洞（否定） */
+        REJECTS,
+        /** 分析事实 → 资产（覆盖锚定） */
+        COVERS,
+        /** 域名 → IP */
+        RESOLVES_TO,
+        /** IP/服务 → 应用 */
+        HOSTS,
+        /** 应用/服务 → 接口 */
+        EXPOSES
     }
 
     /** 图谱节点。 */

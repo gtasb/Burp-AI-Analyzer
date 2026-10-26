@@ -364,6 +364,25 @@ public class GraphDatabase implements AutoCloseable {
         return out;
     }
 
+    /** 合并节点属性（不会删除已有键），用于补充指纹分类、页面标题等可增量信息。 */
+    public synchronized void mergeNodeProperties(String rootId, NodeType type, String canonicalKey,
+                                                  Map<String, Object> updates) {
+        if (updates == null || updates.isEmpty()) return;
+        Node existing = getNodeByCanonical(rootId, type, canonicalKey);
+        if (existing == null) return;
+        Map<String, Object> merged = new LinkedHashMap<>(existing.properties());
+        merged.putAll(updates);
+        try (PreparedStatement ps = conn.prepareStatement(
+                "UPDATE graph_nodes SET properties=?, updated_at=? WHERE id=?")) {
+            ps.setString(1, json(merged));
+            ps.setString(2, now());
+            ps.setLong(3, existing.id());
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("mergeNodeProperties failed: " + e.getMessage(), e);
+        }
+    }
+
     /** 显式设置节点状态（确认/推翻假设）。 */
     public synchronized void setNodeStatus(long nodeId, FactStatus status, double confidence) {
         try (PreparedStatement ps = conn.prepareStatement(

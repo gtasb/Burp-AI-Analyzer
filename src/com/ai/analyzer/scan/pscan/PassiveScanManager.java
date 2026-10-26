@@ -451,6 +451,23 @@ public class PassiveScanManager {
      * 将请求放入扫描队列（生产者调用）
      */
     private void enqueueRequest(HttpRequestResponse requestResponse) {
+        // 资产知识图谱观测必须先于 L0 静态过滤：JS/CSS/source map 不送 LLM 扫描，
+        // 但必须作为 RESOURCE 入图，用于前端指纹与接口推导。
+        // 放到后台单线程执行：每个请求要写多条 autocommit SQLite 事务，
+        // 在 Burp 的流量线程同步执行会直接抬高代理延迟。
+        if (graphObservePending.incrementAndGet() <= GRAPH_OBSERVE_QUEUE_CAPACITY) {
+            graphObserveExecutor.submit(() -> {
+                try {
+                    com.ai.analyzer.graph.GraphStore.getInstance().observe(requestResponse);
+                } catch (Exception ignored) {
+                } finally {
+                    graphObservePending.decrementAndGet();
+                }
+            });
+        } else {
+            graphObservePending.decrementAndGet();
+        }
+
         // L0 过滤静态资源（无需持锁，纯读操作）
         if (PassiveScanTask.shouldSkipRequest(requestResponse)) {
             return;
@@ -469,22 +486,6 @@ public class PassiveScanManager {
         String dedupeKey = RequestFingerprint.of(requestResponse);
         if (!scannedKeys.add(dedupeKey)) {
             return;
-        }
-
-        // 资产知识图谱观测：自动建立 Origin→接口→参数（静默失败，不影响扫描队列）。
-        // 放到后台单线程执行：每个请求要写多条 autocommit SQLite 事务，
-        // 在 Burp 的流量线程同步执行会直接抬高代理延迟。
-        if (graphObservePending.incrementAndGet() <= GRAPH_OBSERVE_QUEUE_CAPACITY) {
-            graphObserveExecutor.submit(() -> {
-                try {
-                    com.ai.analyzer.graph.GraphStore.getInstance().observe(requestResponse);
-                } catch (Exception ignored) {
-                } finally {
-                    graphObservePending.decrementAndGet();
-                }
-            });
-        } else {
-            graphObservePending.decrementAndGet();
         }
 
         // L3 会话批次聚合：请求先进入会话窗口，满批次或窗口过期时打包为一次序列级分析。
@@ -579,6 +580,12 @@ public class PassiveScanManager {
             } else {
                 // 标记完成（会自动解析风险等级；跳过途中返回的结果不会覆盖 SKIPPED）
                 result.markCompleted(aiResponse);
+                if (!result.isSkipRequested()
+                        && result.getStatus() == ScanResult.ScanStatus.COMPLETED) {
+                    // fact 锚定（ARTEX 语义）：完成的扫描在接口上落一条 ANALYSIS_FACT，
+                    // 覆盖图据此把接口标记为“已分析”
+                    recordAnalysisFacts(result);
+                }
             }
 
         } catch (Exception e) {
@@ -611,8 +618,32 @@ public class PassiveScanManager {
         }
     }
 
-    private void finishSkipped(ScanResult result) {
-        int completed;
+    /** 把完成的扫描写入图谱的 fact 锚点（每个被分析请求一条 COVERS 边）。 */
+    private void recordAnalysisFacts(ScanResult result) {
+        List<HttpRequestResponse> requests;
+        try {
+            requests = result.isBatch() ? result.getBatchRequests()
+                    : java.util.Collections.singletonList(result.getRequestResponse());
+        } catch (Exception e) {
+            return;
+        }
+        if (requests == null) return;
+        int index = 0;
+        for (HttpRequestResponse rr : requests) {
+            try {
+                if (rr != null && rr.request() != null) {
+                    com.ai.analyzer.graph.GraphStore.getInstance().recordAnalysisFact(
+                            rr.request().method(), rr.request().url(),
+                            "scan #" + result.getId(), "scan-" + result.getId() + "-" + index);
+                }
+            } catch (Exception ignored) {
+                // 图谱写入失败不影响扫描结果
+            }
+            index++;
+        }
+    }
+
+    private void finishSkipped(ScanResult result) {        int completed;
         if (result.markCompletionCounted()) {
             completed = completedCount.incrementAndGet();
         } else {

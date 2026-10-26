@@ -39,8 +39,22 @@ public final class GraphStore {
             new FingerprintRule("server: apache", "Apache HTTP Server", 0.88),
             new FingerprintRule("server: openresty", "OpenResty", 0.9),
             new FingerprintRule("server: iis", "Microsoft IIS", 0.9),
+            new FingerprintRule("server: tomcat", "Apache Tomcat", 0.88),
+            new FingerprintRule("server: cloudflare", "Cloudflare", 0.85),
             new FingerprintRule("x-powered-by: express", "Express", 0.92),
             new FingerprintRule("x-powered-by: asp.net", "ASP.NET", 0.92),
+            new FingerprintRule("x-powered-by: php", "PHP", 0.9),
+            new FingerprintRule("x-powered-by: next.js", "Next.js", 0.9),
+            new FingerprintRule("x-powered-by: nuxt", "Nuxt", 0.9),
+            new FingerprintRule("laravel_session", "Laravel", 0.9),
+            new FingerprintRule("phpsessid", "PHP", 0.8),
+            new FingerprintRule("jsessionid", "Java", 0.7),
+            new FingerprintRule("wp-content", "WordPress", 0.8),
+            new FingerprintRule("thinkphp", "ThinkPHP", 0.9),
+            new FingerprintRule("__next_data__", "Next.js", 0.9),
+            new FingerprintRule("data-reactroot", "React", 0.8),
+            new FingerprintRule("ng-version", "Angular", 0.8),
+            new FingerprintRule("layui", "LayUI", 0.7),
             new FingerprintRule("x-aspnet-version", "ASP.NET", 0.85),
             new FingerprintRule("set-cookie: jsessionid", "Java Servlet (Tomcat)", 0.85),
             new FingerprintRule("set-cookie: laravel_session", "Laravel (PHP)", 0.92),
@@ -138,12 +152,99 @@ public final class GraphStore {
             String method = rr.request().method() != null ? rr.request().method() : "GET";
             String url = rr.request().url();
             String body = rr.request().bodyToString();
-            observeInterface(method, url, body, "burp", null);
+            Node iface = observeInterface(method, url, body, "burp", null);
             if (rr.response() != null) {
+                observeResponseMeta(method, url, rr, iface);
                 fingerprint(rr);
             }
         } catch (Exception ignored) {
             // 观测失败不影响流量处理
+        }
+    }
+
+    /**
+     * 响应侧补充观测：页面标题/状态码/内容类型写到 Origin 属性；JS/CSS/source map
+     * 作为 RESOURCE 节点入图（不送 LLM 扫描），并从 JS 中提取接口路径建立 CALLS 边。
+     */
+    private void observeResponseMeta(String method, String url, HttpRequestResponse rr, Node iface) {
+        ParsedRequest parsed = GraphNormalizers.parse(method, url, null);
+        GraphDatabase d = db();
+        String rootId = parsed.origin();
+        String contentType = "";
+        for (var h : rr.response().headers()) {
+            if ("content-type".equalsIgnoreCase(h.name())) {
+                contentType = h.value() == null ? "" : h.value();
+                break;
+            }
+        }
+        String body = rr.response().bodyToString();
+        if (body == null) body = "";
+        // 只取前缀做标题/资源/JS 特征分析，避免在流量线程上处理超大响应
+        int maxProbe = 256 * 1024;
+        if (body.length() > maxProbe) body = body.substring(0, maxProbe);
+        String title = "";
+        Matcher tm = Pattern.compile("(?is)<title[^>]*>(.*?)</title>").matcher(body);
+        if (tm.find()) {
+            title = tm.group(1).replaceAll("\\s+", " ").trim();
+        }
+        Map<String, Object> meta = new LinkedHashMap<>();
+        if (!contentType.isBlank()) meta.put("content_type", contentType);
+        meta.put("status_code", rr.response().statusCode());
+        if (!title.isBlank()) meta.put("page_title", GraphNormalizers.truncate(title, 120));
+        d.mergeNodeProperties(rootId, NodeType.ORIGIN, rootId, meta);
+
+        String lowerPath = parsed.path().toLowerCase(Locale.ROOT);
+        String ct = contentType.toLowerCase(Locale.ROOT);
+        boolean isResource = lowerPath.endsWith(".js") || lowerPath.endsWith(".css")
+                || lowerPath.endsWith(".map") || ct.contains("javascript")
+                || ct.contains("text/css") || ct.contains("sourcemap");
+        if (!isResource) return;
+
+        String kind = lowerPath.endsWith(".js") ? "js"
+                : lowerPath.endsWith(".css") ? "css"
+                : lowerPath.endsWith(".map") ? "sourcemap" : "other";
+        String key = rootId + "|resource:" + parsed.path();
+        Map<String, Object> props = new LinkedHashMap<>();
+        props.put("kind", kind);
+        if (!contentType.isBlank()) props.put("content_type", contentType);
+        props.put("status_code", rr.response().statusCode());
+        props.put("bytes", body.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+        if (body.contains("sourceMappingURL=")) props.put("has_sourcemap", true);
+        Node resource = d.upsertNode(rootId, NodeType.RESOURCE, parsed.path(), key,
+                FactStatus.OBSERVED, 1.0, "burp", null, props);
+        Node originNode = d.getNodeByCanonical(rootId, NodeType.ORIGIN, rootId);
+        if (originNode != null) {
+            d.upsertEdge(rootId, originNode.id(), resource.id(), EdgeType.LOADS,
+                    FactStatus.OBSERVED, 1.0, "burp", null, Map.of());
+        }
+        if ("js".equals(kind)) {
+            inferCallsFromJs(rootId, resource, body);
+        }
+    }
+
+    /** 从 JS 文本中提取明显的 API 路径，仅当对应接口已存在时建立 CALLS 边（保守推断）。 */
+    private void inferCallsFromJs(String rootId, Node resource, String js) {
+        Matcher m = Pattern.compile(
+                "[\"'`](\\/(?:api|rest|v\\d+|graphql|admin|user|order|upload|auth|login|search)"
+                        + "[A-Za-z0-9_\\-./{}:]*(?:\\?[^\"'`]*)?)[\"'`]").matcher(js);
+        GraphDatabase d = db();
+        Set<String> seen = new LinkedHashSet<>();
+        int count = 0;
+        while (m.find() && count++ < 60) {
+            String path = m.group(1);
+            int q = path.indexOf('?');
+            if (q > 0) path = path.substring(0, q);
+            if (!seen.add(path)) continue;
+            Node iface = d.getNodeByCanonical(rootId, NodeType.INTERFACE,
+                    GraphNormalizers.interfaceKey(rootId, "GET", path));
+            if (iface == null) {
+                iface = d.getNodeByCanonical(rootId, NodeType.INTERFACE,
+                        GraphNormalizers.interfaceKey(rootId, "POST", path));
+            }
+            if (iface != null) {
+                d.upsertEdge(rootId, resource.id(), iface.id(), EdgeType.CALLS,
+                        FactStatus.DERIVED, 0.6, "burp-js", null, Map.of("path", path));
+            }
         }
     }
 
@@ -238,15 +339,68 @@ public final class GraphStore {
         }
         long originNodeId = originNode.id();
         for (FingerprintRule rule : FINGERPRINT_RULES) {
-            if (!lower.contains(rule.marker())) {
+            int idx = lower.indexOf(rule.marker());
+            if (idx < 0) {
                 continue;
             }
             Node tech = upsertNamed(origin, NodeType.TECHNOLOGY, rule.name(), FactStatus.OBSERVED, rule.confidence(),
                     "burp-fingerprint", null);
+            d.mergeNodeProperties(origin, NodeType.TECHNOLOGY, tech.canonicalKey(),
+                    Map.of("category", categoryOf(rule.name())));
             extractVersion(origin, tech, lower, rule.name());
             d.upsertEdge(origin, originNodeId, tech.id(), EdgeType.USES_TECHNOLOGY,
                     FactStatus.OBSERVED, rule.confidence(), "burp-fingerprint", null, Map.of());
+            int from = Math.max(0, idx - 40);
+            int to = Math.min(probe.length(), idx + rule.marker().length() + 80);
+            String snippet = probe.substring(from, to).replace('\n', ' ').replace('\r', ' ').trim();
+            addEvidenceNode(origin, tech, rule.marker() + " @ " + snippet, "burp-fingerprint",
+                    EdgeType.INDICATES, rule.marker());
         }
+    }
+
+    /** 技术分类：frontend / backend / server / other（用于图谱图例与推断）。 */
+    static String categoryOf(String name) {
+        String n = name == null ? "" : name.toLowerCase(Locale.ROOT);
+        if (n.contains("vue") || n.contains("react") || n.contains("angular")
+                || n.contains("bootstrap") || n.contains("jquery") || n.contains("layui")
+                || n.contains("next") || n.contains("nuxt")) {
+            return "frontend";
+        }
+        if (n.contains("nginx") || n.contains("apache") || n.contains("iis")
+                || n.contains("openresty") || n.contains("tomcat") || n.contains("jetty")
+                || n.contains("cloudflare")) {
+            return "server";
+        }
+        if (n.contains("express") || n.contains("asp.net") || n.contains("php")
+                || n.contains("laravel") || n.contains("thinkphp") || n.contains("shiro")
+                || n.contains("spring") || n.contains("django") || n.contains("flask")
+                || n.contains("fastapi") || n.contains("java") || n.contains("wordpress")
+                || n.contains("jeecg") || n.contains("fastadmin")) {
+            return "backend";
+        }
+        return "other";
+    }
+
+    /** 为某个节点登记一条证据并建立 INDICATES/SUPPORTS 边。 */
+    private Node addEvidenceNode(String rootId, Node target, String summary, String sourceType,
+                                 EdgeType relation) {
+        return addEvidenceNode(rootId, target, summary, sourceType, relation, summary);
+    }
+
+    /** keyHint 用于稳定去重（指纹规则用 marker；Agent 证据用摘要）。 */
+    private Node addEvidenceNode(String rootId, Node target, String summary, String sourceType,
+                                 EdgeType relation, String keyHint) {
+        if (target == null || summary == null || summary.isBlank()) return null;
+        GraphDatabase d = db();
+        String key = rootId + "|evidence:"
+                + Integer.toHexString((target.id() + ":" + String.valueOf(keyHint)).hashCode());
+        Node evidence = d.upsertNode(rootId, NodeType.EVIDENCE,
+                "证据: " + GraphNormalizers.truncate(summary, 60), key,
+                FactStatus.OBSERVED, 1.0, sourceType, null,
+                Map.of("snippet", GraphNormalizers.truncate(summary, 500)));
+        d.upsertEdge(rootId, evidence.id(), target.id(), relation,
+                FactStatus.OBSERVED, 1.0, sourceType, null, Map.of());
+        return evidence;
     }
 
     private Node extractVersion(String rootId, Node tech, String lower, String techName) {
@@ -345,6 +499,160 @@ public final class GraphStore {
         return "已推翻 edge=" + edgeId + " → REJECTED";
     }
 
+    // ============ 指纹 / 特征 / 后端推断（Agent 登记） ============
+
+    private String resolveRootId(long interfaceId, String root) {
+        GraphDatabase d = db();
+        if (interfaceId > 0) {
+            Node n = d.getNode(interfaceId);
+            if (n != null) return n.rootId();
+        }
+        if (root != null && !root.isBlank()) {
+            String r = root.trim();
+            if (r.contains("://")) {
+                return GraphNormalizers.parse("GET", r, null).origin();
+            }
+            return r;
+        }
+        return null;
+    }
+
+    /**
+     * Agent 登记一条技术指纹（ARTEX 的 insert_assets 方式）：
+     * 技术节点 + 可选版本 + 证据节点（INDICATES）+ Origin/接口 USES_TECHNOLOGY 边。
+     */
+    public String upsertFingerprint(long interfaceId, String root, String technology,
+                                    String category, String version, String evidence,
+                                    double confidence) {
+        if (technology == null || technology.isBlank()) return "错误: technology 不能为空";
+        String rootId = resolveRootId(interfaceId, root);
+        if (rootId == null) return "错误: 需要 interface_id 或 root";
+        GraphDatabase d = db();
+        Node iface = interfaceId > 0 ? d.getNode(interfaceId) : null;
+        double conf = Math.max(0.05, Math.min(1.0, confidence));
+        boolean observed = evidence != null && !evidence.isBlank();
+        FactStatus status = observed ? FactStatus.OBSERVED : FactStatus.DERIVED;
+        Node tech = upsertNamed(rootId, NodeType.TECHNOLOGY, technology, status, conf, "agent", null);
+        String cat = (category == null || category.isBlank()) ? categoryOf(technology)
+                : category.trim().toLowerCase(Locale.ROOT);
+        d.mergeNodeProperties(rootId, NodeType.TECHNOLOGY, tech.canonicalKey(),
+                Map.of("category", cat));
+
+        Node origin = d.getNodeByCanonical(rootId, NodeType.ORIGIN, rootId);
+        if (origin != null) {
+            d.upsertEdge(rootId, origin.id(), tech.id(), EdgeType.USES_TECHNOLOGY,
+                    status, conf, "agent", null, Map.of("category", cat));
+        }
+        if (iface != null) {
+            d.upsertEdge(rootId, iface.id(), tech.id(), EdgeType.USES_TECHNOLOGY,
+                    status, conf, "agent", null, Map.of("scope", "interface", "category", cat));
+        }
+
+        StringBuilder sb = new StringBuilder("已登记指纹: ").append(technology)
+                .append(" [node=").append(tech.id()).append(", category=").append(cat).append(']');
+        if (version != null && !version.isBlank()) {
+            Node ver = upsertNamed(rootId, NodeType.VERSION, technology + " " + version.trim(),
+                    FactStatus.OBSERVED, conf, "agent", null);
+            d.upsertEdge(rootId, tech.id(), ver.id(), EdgeType.HAS_VERSION,
+                    FactStatus.OBSERVED, conf, "agent", null, Map.of());
+            sb.append(" version=").append(version.trim());
+        }
+        if (observed) {
+            addEvidenceNode(rootId, tech, evidence.trim(), "agent", EdgeType.INDICATES);
+            sb.append("（附证据）");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Agent 登记一个能力特征（actuator/swagger/graphql/upload/jwt...），
+     * 可同时挂到接口并映射到漏洞类别（SUGGESTS）。
+     */
+    public String addFeature(long interfaceId, String root, String feature, String vulnClass,
+                             String evidence, double confidence) {
+        if (feature == null || feature.isBlank()) return "错误: feature 不能为空";
+        String rootId = resolveRootId(interfaceId, root);
+        if (rootId == null) return "错误: 需要 interface_id 或 root";
+        GraphDatabase d = db();
+        Node iface = interfaceId > 0 ? d.getNode(interfaceId) : null;
+        double conf = Math.max(0.05, Math.min(1.0, confidence));
+        boolean observed = evidence != null && !evidence.isBlank();
+        Node feat = upsertNamed(rootId, NodeType.FEATURE, feature, observed ? FactStatus.OBSERVED : FactStatus.INFERRED,
+                conf, "agent", null);
+        if (iface != null) {
+            d.upsertEdge(rootId, iface.id(), feat.id(), EdgeType.RELATED_TO,
+                    FactStatus.INFERRED, conf, "agent", null, Map.of("kind", "feature"));
+        }
+        if (vulnClass != null && !vulnClass.isBlank()) {
+            Node vc = upsertNamed(rootId, NodeType.VULN_CLASS, vulnClass, FactStatus.DERIVED, conf, "agent", null);
+            d.upsertEdge(rootId, feat.id(), vc.id(), EdgeType.SUGGESTS,
+                    FactStatus.DERIVED, conf, "agent", null, Map.of());
+        }
+        if (observed) {
+            addEvidenceNode(rootId, feat, evidence.trim(), "agent", EdgeType.INDICATES);
+        }
+        return "已登记特征: " + feature + " [node=" + feat.id() + "]"
+                + (vulnClass != null && !vulnClass.isBlank() ? " → " + vulnClass : "");
+    }
+
+    /**
+     * Agent 登记一条后端实现推测（如 Spring Boot / Laravel / Node+Express），
+     * 用 SUPPORTS 证据边保留推理依据。
+     */
+    public String addBackendHypothesis(long interfaceId, String root, String hypothesis,
+                                       String evidence, double confidence) {
+        if (hypothesis == null || hypothesis.isBlank()) return "错误: hypothesis 不能为空";
+        String rootId = resolveRootId(interfaceId, root);
+        if (rootId == null) return "错误: 需要 interface_id 或 root";
+        GraphDatabase d = db();
+        Node iface = interfaceId > 0 ? d.getNode(interfaceId) : null;
+        double conf = Math.max(0.05, Math.min(1.0, confidence));
+        Node hyp = upsertNamed(rootId, NodeType.BACKEND_HYPOTHESIS, hypothesis,
+                FactStatus.INFERRED, conf, "agent", null);
+        if (iface != null) {
+            d.upsertEdge(rootId, hyp.id(), iface.id(), EdgeType.DERIVED_FROM,
+                    FactStatus.INFERRED, conf, "agent", null, Map.of());
+        }
+        if (evidence != null && !evidence.isBlank()) {
+            addEvidenceNode(rootId, hyp, evidence.trim(), "agent", EdgeType.SUPPORTS);
+        }
+        return "已登记后端推测: " + hypothesis + " [node=" + hyp.id() + ", confidence=" + conf + "]";
+    }
+
+    /**
+     * 记录一条“分析事实锚点”（沿用 ARTEX 的 fact-anchor 语义）：
+     * 一次完成的扫描/验证在接口上落一个 ANALYSIS_FACT 节点，并用 COVERS 边锚定。
+     */
+    public String recordAnalysisFact(String method, String url, String summary, String sourceId) {
+        try {
+            String m = method == null || method.isBlank() ? "GET" : method;
+            ParsedRequest parsed = GraphNormalizers.parse(m, url, null);
+            GraphDatabase d = db();
+            String rootId = d.ensureRoot(parsed.origin(), parsed.scheme(), parsed.host(), parsed.port());
+            String ifaceKey = GraphNormalizers.interfaceKey(parsed.origin(), parsed.method(), parsed.path());
+            Node iface = d.getNodeByCanonical(rootId, NodeType.INTERFACE, ifaceKey);
+            if (iface == null) {
+                return "跳过: 接口不存在";
+            }
+            String sid = sourceId == null || sourceId.isBlank()
+                    ? Integer.toHexString((method + url).hashCode()) : sourceId;
+            String factKey = rootId + "|fact:" + sid;
+            Map<String, Object> props = new LinkedHashMap<>();
+            if (summary != null && !summary.isBlank()) {
+                props.put("summary", GraphNormalizers.truncate(summary, 500));
+            }
+            props.put("method", parsed.method());
+            props.put("path", parsed.path());
+            Node fact = d.upsertNode(rootId, NodeType.ANALYSIS_FACT, "分析事实 " + sid, factKey,
+                    FactStatus.OBSERVED, 1.0, "burp-scan", sid, props);
+            d.upsertEdge(rootId, fact.id(), iface.id(), EdgeType.COVERS,
+                    FactStatus.OBSERVED, 1.0, "burp-scan", sid, Map.of());
+            return "已记录分析事实: " + iface.name();
+        } catch (Exception e) {
+            return "记录分析事实失败: " + e.getMessage();
+        }
+    }
+
     // ============ 查询 / 子图 / 渲染 ============
 
     public Node getNode(long nodeId) {
@@ -399,6 +707,32 @@ public final class GraphStore {
             sb.append("模块：");
             modules.forEach(m -> sb.append(m.name()).append(' '));
             sb.append('\n');
+        }
+        List<Node> features = d.findNodes(rootId, NodeType.FEATURE, null, 50);
+        if (!features.isEmpty()) {
+            sb.append("能力特征：\n");
+            for (Node f : features) {
+                sb.append("  - ").append(f.name()).append(" [node=").append(f.id()).append("] ")
+                        .append(f.status()).append('\n');
+            }
+        }
+        List<Node> hypotheses = d.findNodes(rootId, NodeType.BACKEND_HYPOTHESIS, null, 30);
+        if (!hypotheses.isEmpty()) {
+            sb.append("后端实现推测：\n");
+            for (Node h : hypotheses) {
+                sb.append("  - ").append(h.name()).append(" (").append(h.status()).append(' ')
+                        .append(renderConf(h)).append(") [node=").append(h.id()).append("]\n");
+            }
+        }
+        List<Node> vulnClasses = d.findNodes(rootId, NodeType.VULN_CLASS, null, 30);
+        if (!vulnClasses.isEmpty()) {
+            sb.append("漏洞特征类别：");
+            vulnClasses.forEach(v -> sb.append(v.name()).append(' '));
+            sb.append('\n');
+        }
+        int resources = d.findNodes(rootId, NodeType.RESOURCE, null, 500).size();
+        if (resources > 0) {
+            sb.append("前端资源：").append(resources).append(" 个（JS/CSS/source map，见 graph_get_subgraph）\n");
         }
         return sb.toString().trim();
     }

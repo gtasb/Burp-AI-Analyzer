@@ -140,6 +140,60 @@ public class GraphTool {
         }
     }
 
+    @Tool(name = "graph_upsert_fingerprint", description =
+            "登记一条技术指纹（OBSERVED）。适用于从响应头/Cookie/HTML/JS/错误页识别出的前端框架、后端框架、服务器、中间件。"
+                    + "必须尽量提供 evidence（命中的原文片段），便于后续回溯；可选记录版本号。category 推荐 frontend/backend/server/middleware/library。")
+    public String upsertFingerprint(
+            @ToolParam(name = "technology", description = "技术名称，如 Nginx / Spring Boot / Vue / Laravel") String technology,
+            @ToolParam(name = "root", description = "目标 Origin（root id），可选；若提供 interface_id 可留空", required = false) String root,
+            @ToolParam(name = "interface_id", description = "关联接口节点 id，可选", required = false) Long interfaceId,
+            @ToolParam(name = "category", description = "分类：frontend/backend/server/middleware/library，可选", required = false) String category,
+            @ToolParam(name = "version", description = "版本号，可选", required = false) String version,
+            @ToolParam(name = "evidence", description = "指纹证据（命中的 header/Cookie/HTML/JS 片段），强烈建议填写", required = false) String evidence,
+            @ToolParam(name = "confidence", description = "置信度 0~1，默认 0.8", required = false) Double confidence) {
+        try {
+            return store.upsertFingerprint(interfaceId == null ? 0 : interfaceId, root, technology,
+                    category, version, evidence, confidence == null ? 0.8 : confidence);
+        } catch (Exception e) {
+            return "登记指纹失败: " + e.getMessage();
+        }
+    }
+
+    @Tool(name = "graph_add_feature", description =
+            "登记一个可被漏洞化的能力特征（如 actuator/swagger/graphql/upload/jwt/oauth/websocket），"
+                    + "可关联接口并映射到漏洞类别（SUGGESTS）。用于“特征 → 漏洞分析”。")
+    public String addFeature(
+            @ToolParam(name = "feature", description = "特征名，如 spring_actuator / swagger_ui / graphql / file_upload") String feature,
+            @ToolParam(name = "root", description = "目标 Origin（root id），可选；若提供 interface_id 可留空", required = false) String root,
+            @ToolParam(name = "interface_id", description = "关联接口节点 id，可选", required = false) Long interfaceId,
+            @ToolParam(name = "vuln_class", description = "候选漏洞类别，如 未授权访问 / 信息泄露 / 文件上传 / IDOR，可选", required = false) String vulnClass,
+            @ToolParam(name = "evidence", description = "特征证据（命中的路径/页面片段）", required = false) String evidence,
+            @ToolParam(name = "confidence", description = "置信度 0~1，默认 0.7", required = false) Double confidence) {
+        try {
+            return store.addFeature(interfaceId == null ? 0 : interfaceId, root, feature, vulnClass,
+                    evidence, confidence == null ? 0.7 : confidence);
+        } catch (Exception e) {
+            return "登记特征失败: " + e.getMessage();
+        }
+    }
+
+    @Tool(name = "graph_add_backend_hypothesis", description =
+            "登记一条后端实现推测（INFERRED），如 Spring Boot / Laravel / ThinkPHP / Node+Express。"
+                    + "必须提供 evidence（路径形态、错误串、Cookie 名、JS SDK 等依据），便于后续确认或推翻。")
+    public String addBackendHypothesis(
+            @ToolParam(name = "hypothesis", description = "后端实现猜测，如 Spring Boot / Laravel / Node+Express") String hypothesis,
+            @ToolParam(name = "root", description = "目标 Origin（root id），可选；若提供 interface_id 可留空", required = false) String root,
+            @ToolParam(name = "interface_id", description = "关联接口节点 id，可选", required = false) Long interfaceId,
+            @ToolParam(name = "evidence", description = "推断依据（路径/错误串/Cookie/JS 片段）", required = false) String evidence,
+            @ToolParam(name = "confidence", description = "置信度 0~1，默认 0.6", required = false) Double confidence) {
+        try {
+            return store.addBackendHypothesis(interfaceId == null ? 0 : interfaceId, root, hypothesis,
+                    evidence, confidence == null ? 0.6 : confidence);
+        } catch (Exception e) {
+            return "登记后端推测失败: " + e.getMessage();
+        }
+    }
+
     private static Set<EdgeType> parseTypes(String relationTypes) {
         if (relationTypes == null || relationTypes.isBlank()) {
             return null;
