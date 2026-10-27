@@ -62,6 +62,9 @@ Relative paths passed to file tools get a **namespace prefix** (`user.name`) inj
 - Agent write tools: `graph_upsert_fingerprint`, `graph_add_feature` (optional `vuln_class` →
   `FEATURE --SUGGESTS--> VULN_CLASS`), `graph_add_backend_hypothesis` (evidence → `SUPPORTS`).
   Both system prompts instruct agents to use them with evidence.
+- `graph_upsert_observation` for `INTERFACE` accepts `name` = full URL, or `name` = `METHOD /path`
+  with `root` = Origin, or (legacy) a full URL in `root`. Do **not** parse `root` as the request URL
+  when it is just an Origin — that historical bug always produced `GET /`.
 - Coverage follows ARTEX's fact-anchor semantics: a completed passive scan writes an
   `ANALYSIS_FACT` node plus `COVERS --> INTERFACE`; the viewer paints only COVERS-anchored assets
   as “已分析”. Skipped/low-value scans do not anchor. Active/chat analysis also anchors after a

@@ -80,19 +80,20 @@ class DeepSeekToolLoopReasoningTest {
                     .toolkit(toolkit)
                     .systemPrompt("You are a test agent.")
                     .build();
+            Throwable[] chatError = {null};
             try {
                 runtime.chat("hi", "deepseek-test-session", new RuntimeEventListener() {
                     @Override
                     public void onEvent(RuntimeEvent event) {
                     }
                 });
-            } catch (Exception ignored) {
-                // 本地假响应仅用于捕获请求体
+            } catch (Exception e) {
+                chatError[0] = e;
             }
 
             String body = secondBody.get();
-            assertThat(calls.get()).isGreaterThanOrEqualTo(2);
-            assertThat(body).isNotNull();
+            assertThat(calls.get()).as("chat error: %s", chatError[0]).isGreaterThanOrEqualTo(2);
+            assertThat(body).as("chat error: %s", chatError[0]).isNotNull();
             assertThat(body).contains("reasoning_content").contains("secret-reasoning");
         } finally {
             server.stop(0);

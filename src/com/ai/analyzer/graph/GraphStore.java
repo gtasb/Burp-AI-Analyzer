@@ -434,24 +434,69 @@ public final class GraphStore {
 
     /** Agent 观察事实写入（type/name/root 形式，url 自动落 Origin+接口）。 */
     public String upsertAgentObservation(String type, String name, String rootOrUrl, String sourceType, String sourceId) {
-        GraphDatabase d = db();
-        // 允许直接给 url 自动落 root/interface
+        NodeType nt = safeNodeType(type);
         if (rootOrUrl == null || rootOrUrl.isBlank()) {
             return "错误: root 或 url 不能为空";
         }
-        Node node;
-        if (rootOrUrl.contains("://")) {
-            ParsedRequest parsed = GraphNormalizers.parse("GET", rootOrUrl, null);
-            node = upsertObservation("GET", rootOrUrl, null, sourceType, sourceId);
-            if ("INTERFACE".equalsIgnoreCase(type)) {
-                return nodeIdRepr(node);
-            }
-        } else {
-            // type 必须是受支持节点类型
-            NodeType nt = safeNodeType(type);
-            node = upsertNamed(rootOrUrl, nt, name, FactStatus.OBSERVED, 1.0, sourceType, sourceId);
+        if (nt == NodeType.INTERFACE) {
+            return upsertAgentInterface(name, rootOrUrl, sourceType, sourceId);
         }
+        // 非接口节点：root 必须是 Origin；若给了完整 URL 只取 origin 部分
+        String rootId = rootOrUrl.contains("://")
+                ? GraphNormalizers.parse("GET", rootOrUrl, null).origin()
+                : rootOrUrl.trim();
+        Node node = upsertNamed(rootId, nt, name, FactStatus.OBSERVED, 1.0, sourceType, sourceId);
         return nodeIdRepr(node);
+    }
+
+    /**
+     * INTERFACE 的三类合法输入：
+     * 1) name = 完整 URL（推荐）；
+     * 2) rootOrUrl = 完整 URL（兼容旧用法）；
+     * 3) root = Origin，name = "METHOD /path" 或 "/path"。
+     *
+     * <p>修复此前“无论传什么 URL 都生成 GET /”的问题：旧实现总是解析 rootOrUrl，
+     * 把 origin 当成 URL，路径恒为 /。
+     */
+    private String upsertAgentInterface(String name, String rootOrUrl, String sourceType, String sourceId) {
+        String n = name == null ? "" : name.trim();
+        String method = "GET";
+        String url;
+        if (n.contains("://")) {
+            url = n;
+        } else if (rootOrUrl.contains("://") && hasNonRootPath(rootOrUrl)) {
+            url = rootOrUrl.trim();
+        } else {
+            String root = rootOrUrl.trim();
+            String path;
+            String[] parts = n.split("\\s+", 2);
+            if (parts.length == 2 && isHttpMethod(parts[0])) {
+                method = parts[0].toUpperCase(Locale.ROOT);
+                path = parts[1];
+            } else {
+                path = n.isEmpty() ? "/" : n;
+            }
+            if (!path.startsWith("/")) path = "/" + path;
+            url = root.endsWith("/") ? root.substring(0, root.length() - 1) + path : root + path;
+        }
+        Node node = upsertObservation(method, url, null, sourceType, sourceId);
+        return nodeIdRepr(node);
+    }
+
+    private static boolean hasNonRootPath(String url) {
+        try {
+            ParsedRequest parsed = GraphNormalizers.parse("GET", url, null);
+            return !"/".equals(parsed.path());
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static boolean isHttpMethod(String s) {
+        return switch (s.toUpperCase(Locale.ROOT)) {
+            case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE" -> true;
+            default -> false;
+        };
     }
 
     /** Agent 推测：为 subject 添加 relation → target（target 不存在则自动创建为 INFERRED）。 */

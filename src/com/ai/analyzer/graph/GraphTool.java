@@ -86,11 +86,12 @@ public class GraphTool {
     }
 
     @Tool(name = "graph_upsert_observation", description =
-            "把确定观察到的事实写入图谱（OBSERVED）。url 形式可自动创建 Origin+接口；或提供 root + type/name 创建其它类型节点。source 默认当前 Agent。")
+            "把确定观察到的事实写入图谱（OBSERVED）。INTERFACE 时 name 传完整 URL 或 \"METHOD /path\"，root 传 Origin；"
+                    + "其它类型用 root + type/name 创建节点。source 默认当前 Agent。")
     public String upsertObservation(
-            @ToolParam(name = "type", description = "节点类型：INTERFACE / PARAMETER / FUNCTION / BUSINESS_ENTITY / BUSINESS_LOGIC / MODULE / SERVICE / TECHNOLOGY / VERSION / VULNERABILITY") String type,
-            @ToolParam(name = "name", description = "节点名（INTERFACE 时可用完整 URL 自动解析）") String name,
-            @ToolParam(name = "root", description = "目标 Origin（root id）或包含协议的完整 URL") String root,
+            @ToolParam(name = "type", description = "节点类型：INTERFACE / PARAMETER / FUNCTION / BUSINESS_ENTITY / BUSINESS_LOGIC / MODULE / SERVICE / TECHNOLOGY / VERSION / FEATURE / BACKEND_HYPOTHESIS / RESOURCE / VULNERABILITY") String type,
+            @ToolParam(name = "name", description = "节点名；INTERFACE 用完整 URL（如 https://target.com/api/x）或 \"POST /api/x\"") String name,
+            @ToolParam(name = "root", description = "目标 Origin（root id，如 https://target.com:443）；INTERFACE 也可直接传完整 URL") String root,
             @ToolParam(name = "source", description = "来源标识，可留空（默认当前 Agent）", required = false) String source) {
         try {
             String src = source == null || source.isBlank() ? defaultSourceAgent : source;

@@ -227,6 +227,35 @@ class GraphStoreTest {
                 && e.sourceNodeId() == resource.id());
     }
 
+    @Test
+    @DisplayName("Agent INTERFACE 登记保留真实路径（root + METHOD /path）")
+    void agent_interface_keeps_path_from_name() {
+        String result = store.upsertAgentObservation("INTERFACE", "POST /api/order/create",
+                "https://target.com:443", "agent", null);
+        assertThat(result).contains("node=");
+        String ifaces = store.findInterfaces("https://target.com:443", "order", null, null);
+        assertThat(ifaces).contains("POST /api/order/create");
+        assertThat(ifaces).doesNotContain("GET /");
+    }
+
+    @Test
+    @DisplayName("Agent INTERFACE 登记支持 name 直接给完整 URL")
+    void agent_interface_accepts_full_url_in_name() {
+        store.upsertAgentObservation("INTERFACE", "https://target.com/api/user/list",
+                "https://target.com:443", "agent", null);
+        assertThat(store.findInterfaces("https://target.com:443", "user", null, null))
+                .contains("GET /api/user/list");
+    }
+
+    @Test
+    @DisplayName("Agent INTERFACE 登记兼容 root 直接给完整 URL")
+    void agent_interface_accepts_full_url_in_root() {
+        store.upsertAgentObservation("INTERFACE", "ignored",
+                "https://target.com/api/admin/users", "agent", null);
+        assertThat(store.findInterfaces("https://target.com:443", "admin", null, null))
+                .contains("GET /api/admin/users");
+    }
+
     private static long extractNodeId(String findInterfacesOutput) {
         String line = findInterfacesOutput.lines().findFirst().orElseThrow();
         return Long.parseLong(line.replaceAll(".*node=(\\d+).*", "$1").trim());

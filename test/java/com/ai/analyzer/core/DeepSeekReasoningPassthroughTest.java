@@ -61,14 +61,16 @@ class DeepSeekReasoningPassthroughTest {
                             .output(TextBlock.builder().text("result").build()).build())
                     .build();
 
+            Throwable[] streamError = {null};
             try {
                 model.stream(List.of(user, assistant, toolResult), List.of(), null).blockLast();
-            } catch (Exception ignored) {
+            } catch (Exception e) {
                 // 本地假响应只用于捕获请求体，解析失败不影响断言
+                streamError[0] = e;
             }
 
             String body = captured.get();
-            assertThat(body).isNotNull();
+            assertThat(body).as("stream error: %s", streamError[0]).isNotNull();
             assertThat(body).contains("reasoning_content").contains("secret-reasoning");
         } finally {
             server.stop(0);
