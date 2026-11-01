@@ -92,11 +92,14 @@ Relative paths passed to file tools get a **namespace prefix** (`user.name`) inj
 - **DeepSeek thinking models** need `reasoning_content` on **every** assistant message that carries
   `tool_calls`, including older turns (official API returns 400 otherwise; verified 2026-11).
   `AgentScopeModelFactory` auto-detects DeepSeek (model name `deepseek*` or URL containing `deepseek`)
-  and installs `DeepSeekReasoningFormatter` (extends `OpenAIChatFormatter`, keeps reasoning,
-  `supportsStrict=false`). Do **not** switch to AgentScope's `compat.deepseek.DeepSeekFormatter`:
-  it strips reasoning for historical turns and causes intermittent 400s in long sessions. Covered by
-  `DeepSeekReasoningPassthroughTest`, `DeepSeekToolLoopReasoningTest`, and
-  `DeepSeekHarnessLoopReasoningTest` (long loop + compaction, local fake server).
+  and installs `DeepSeekReasoningFormatter` (extends `OpenAIChatFormatter`; keeps real reasoning,
+  pads assistant messages whose reasoning is missing with an empty string — the official API accepts
+  empty — and `supportsStrict=false`). Do **not** switch to AgentScope 2.0.4's
+  `compat.deepseek.DeepSeekFormatter`: it strips reasoning for historical turns and causes
+  intermittent 400s in long sessions. Upstream 2.1.0-BETA1 changed its compat formatter to the same
+  “pad empty instead of strip” behavior. Covered by `DeepSeekReasoningPassthroughTest`,
+  `DeepSeekToolLoopReasoningTest`, and `DeepSeekHarnessLoopReasoningTest` (long loop + compaction,
+  local fake server).
 - **Legacy Java-serialized settings**: removing a field needs no `serialVersionUID` bump; native deserialization ignores extra stream fields. The substitution fallback only exists for UID mismatches.
 
 ## Project structure

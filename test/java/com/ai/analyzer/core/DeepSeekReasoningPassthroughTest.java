@@ -76,4 +76,47 @@ class DeepSeekReasoningPassthroughTest {
             server.stop(0);
         }
     }
+
+    @Test
+    @DisplayName("assistant without thinking block gets empty reasoning_content")
+    void missingReasoningIsPaddedWithEmptyString() throws Exception {
+        AtomicReference<String> captured = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            captured.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            String sse = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\","
+                    + "\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n"
+                    + "data: [DONE]\n\n";
+            byte[] bytes = sse.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (var out = exchange.getResponseBody()) {
+                out.write(bytes);
+            }
+        });
+        server.start();
+        try {
+            String baseUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/v1";
+            var model = AgentScopeModelFactory.create(
+                    ApiProvider.OPENAI_COMPATIBLE, "sk-test", baseUrl, "deepseek-flash", false, "");
+
+            Msg user = Msg.builder().name("user").role(MsgRole.USER).textContent("hi").build();
+            // 没有 ThinkingBlock，只有 tool_call（模拟历史状态丢失 reasoning）
+            Msg assistant = Msg.builder().name("assistant").role(MsgRole.ASSISTANT)
+                    .content(ToolUseBlock.builder().id("call_1").name("noop").input(Map.of()).build())
+                    .build();
+            Msg toolResult = Msg.builder().name("tool").role(MsgRole.TOOL)
+                    .content(ToolResultBlock.builder().id("call_1").name("noop")
+                            .output(TextBlock.builder().text("result").build()).build())
+                    .build();
+
+            try {
+                model.stream(List.of(user, assistant, toolResult), List.of(), null).blockLast();
+            } catch (Exception ignored) {
+            }
+            assertThat(captured.get()).isNotNull().contains("\"reasoning_content\":\"\"");
+        } finally {
+            server.stop(0);
+        }
+    }
 }
