@@ -89,11 +89,14 @@ Relative paths passed to file tools get a **namespace prefix** (`user.name`) inj
   for settings.
 - **`useAgentScope`** was a serialized dead field never read anywhere (deleted). Remove any future dead field from PluginSettings or it pollutes the file forever
 - **`enableUnrestrictedCliTool`** was another one (deleted): stored in settings, shuttled between both API clients, drove a checkbox — but neither the Harness native `execute` tool nor our `ShellExecTool` ever read it. **There is no command-level whitelist anywhere.** The CLI tab's「工具白名单」is only injected as a soft suggestion into the system prompt (`cliToolPrompt`/`cliWhitelist`); nothing intercepts commands. Don't let the UI imply enforcement
-- **DeepSeek thinking models** need `reasoning_content` echoed back on the next request after a tool call.
-  `AgentScopeModelFactory` auto-detects DeepSeek (model name `deepseek*` or URL containing `deepseek`) for the
-  OpenAI-compatible provider and installs `compat.deepseek.DeepSeekFormatter`; without it every second
-  model call after a tool call fails with HTTP 400. Covered by `DeepSeekReasoningPassthroughTest` and
-  `DeepSeekToolLoopReasoningTest` (local fake server, no network).
+- **DeepSeek thinking models** need `reasoning_content` on **every** assistant message that carries
+  `tool_calls`, including older turns (official API returns 400 otherwise; verified 2026-11).
+  `AgentScopeModelFactory` auto-detects DeepSeek (model name `deepseek*` or URL containing `deepseek`)
+  and installs `DeepSeekReasoningFormatter` (extends `OpenAIChatFormatter`, keeps reasoning,
+  `supportsStrict=false`). Do **not** switch to AgentScope's `compat.deepseek.DeepSeekFormatter`:
+  it strips reasoning for historical turns and causes intermittent 400s in long sessions. Covered by
+  `DeepSeekReasoningPassthroughTest`, `DeepSeekToolLoopReasoningTest`, and
+  `DeepSeekHarnessLoopReasoningTest` (long loop + compaction, local fake server).
 - **Legacy Java-serialized settings**: removing a field needs no `serialVersionUID` bump; native deserialization ignores extra stream fields. The substitution fallback only exists for UID mismatches.
 
 ## Project structure

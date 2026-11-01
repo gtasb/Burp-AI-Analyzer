@@ -107,13 +107,13 @@ public class AgentScopeModelFactory {
                 .stream(true)
                 .generateOptions(defaultOptions);
         if (isDeepSeekEndpoint(baseUrl, modelName)) {
-            // DeepSeek 思考模式要求把上一轮 assistant 的 reasoning_content 原样回传，
-            // 默认 OpenAI 格式化器会丢弃，导致工具调用后的下一次请求 400：
-            // "The `reasoning_content` in the thinking mode must be passed back to the API."
-            builder.formatter(new io.agentscope.extensions.model.openai.compat.deepseek.DeepSeekFormatter());
+            // DeepSeek thinking 模式：所有带 tool_calls 的 assistant（含历史轮次）都必须回传
+            // reasoning_content。不要用 compat.deepseek.DeepSeekFormatter——它会剥离旧轮次的
+            // reasoning，长会话必然 400。这里用保留 reasoning 的 OpenAI 默认转换 + 关闭 strict。
+            builder.formatter(new DeepSeekReasoningFormatter());
             builder.nativeStructuredOutput(false);
             com.ai.analyzer.util.AppLogBuffer.info("AgentScopeModelFactory",
-                    "DeepSeek thinking formatter enabled: " + modelName + " @ " + baseUrl);
+                    "DeepSeek reasoning-preserving formatter enabled: " + modelName + " @ " + baseUrl);
             com.ai.analyzer.util.DebugContext.log("AgentScopeModelFactory", "deepseek_formatter_enabled",
                     java.util.Map.of("model", modelName, "url", baseUrl));
         }
