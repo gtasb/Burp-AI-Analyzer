@@ -81,7 +81,7 @@ public final class RequestFingerprint {
         if (rr == null || rr.request() == null) return "";
         HttpService service = rr.request().httpService();
         if (service != null && service.host() != null && !service.host().isEmpty()) {
-            return service.host();
+            return service.host().toLowerCase(java.util.Locale.ROOT);
         }
         return extractHost(rr.request().url());
     }
@@ -147,8 +147,20 @@ public final class RequestFingerprint {
      */
     static String bodyDigest(HttpRequest req) {
         try {
+            // 大 body 不做全文解码/哈希：这段代码运行在 Burp 的 HTTP handler 线程上，
+            // 对上传/大表单逐字节处理会直接拖慢代理。大小相同视为同一类请求即可。
+            var rawBody = req.body();
+            if (rawBody != null) {
+                int length = rawBody.length();
+                if (length == 0) return "";
+                if (length > 256 * 1024) return "d" + digest16("len:" + length);
+            }
+
             String text = req.bodyToString();
             if (text == null || text.isEmpty()) return "";
+            if (text.length() > 256 * 1024) {
+                return "d" + digest16("len:" + text.length());
+            }
 
             if (isFormBody(text)) {
                 List<String> pairs = new ArrayList<>();

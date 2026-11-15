@@ -112,7 +112,10 @@ public class BatchFuzzTool {
         String jsonStringPat = "\"" + quoted + "\"\\s*:\\s*\"[^\"]*\"";
         java.util.regex.Matcher m = Pattern.compile(jsonStringPat).matcher(s);
         if (m.find()) {
-            return s.substring(0, m.start()) + "\"" + paramName + "\":\"" + newValue.replace("\"", "\\\"") + "\""
+            // 先转义反斜杠再转义引号：payload 以单个 \ 结尾时只转引号会产出
+            // "payload\"，反斜杠吞掉闭合引号，发出损坏的报文
+            String esc = newValue.replace("\\", "\\\\").replace("\"", "\\\"");
+            return s.substring(0, m.start()) + "\"" + paramName + "\":\"" + esc + "\""
                     + s.substring(m.end());
         }
         // JSON 非字符串值（数字/布尔/null/数组/对象）：整值替换，数字 payload 保持数字类型

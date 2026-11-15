@@ -188,12 +188,16 @@ class DeepSeekHarnessLoopReasoningTest {
     @DisplayName("second HarnessAgent model request keeps reasoning_content")
     void secondRequestKeepsReasoning() throws Exception {
         AtomicInteger calls = new AtomicInteger();
+        // 抓「第一个包含 tool_calls 的非首轮请求」：MemoryFlush 的旁路调用（system+user、
+        // 无 tool_calls）在负载下可能插在主请求 #2 之前，之前固定抓 n==2 会偶发断言到它。
         AtomicReference<String> secondBody = new AtomicReference<>();
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/v1/chat/completions", exchange -> {
             int n = calls.incrementAndGet();
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-            if (n == 2) secondBody.set(body);
+            if (n > 1 && secondBody.get() == null && body.contains("tool_calls")) {
+                secondBody.set(body);
+            }
             String sse;
             if (n == 1) {
                 sse = "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,"

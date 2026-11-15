@@ -1,5 +1,6 @@
 package com.ai.analyzer.scan.pscan;
 
+import burp.api.montoya.http.message.HttpHeader;
 import burp.api.montoya.http.message.HttpRequestResponse;
 import burp.api.montoya.http.message.requests.HttpRequest;
 import burp.api.montoya.http.message.responses.HttpResponse;
@@ -31,6 +32,14 @@ class PassiveScanTaskTest {
         PassiveScanTask.setCustomSkipExtensions("");
         PassiveScanTask.setDomainBlacklist("");
         PassiveScanTask.setDomainWhitelist("");
+    }
+
+    /** 只 mock response().headers()：过滤器只看 Content-Type，不应整包序列化响应。 */
+    private void responseContentType(String value) {
+        HttpHeader header = mock(HttpHeader.class);
+        when(header.name()).thenReturn("Content-Type");
+        when(header.value()).thenReturn(value);
+        when(mockResponse.headers()).thenReturn(java.util.List.of(header));
     }
 
     @Nested
@@ -179,8 +188,7 @@ class PassiveScanTaskTest {
         void should_return_true_when_GET_response_is_image_content_type() {
             when(mockRequest.url()).thenReturn("https://example.com/avatar");
             when(mockRequest.method()).thenReturn("GET");
-            when(mockResponse.toString()).thenReturn(
-                "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n\r\n<binary>");
+            responseContentType("image/png");
             assertThat(PassiveScanTask.shouldSkipRequest(mockRequestResponse)).isTrue();
         }
 
@@ -189,8 +197,7 @@ class PassiveScanTaskTest {
         void should_return_false_when_POST_response_is_image_content_type() {
             when(mockRequest.url()).thenReturn("https://example.com/upload");
             when(mockRequest.method()).thenReturn("POST");
-            when(mockResponse.toString()).thenReturn(
-                "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n\r\n<binary>");
+            responseContentType("image/png");
             assertThat(PassiveScanTask.shouldSkipRequest(mockRequestResponse)).isFalse();
         }
 
@@ -199,8 +206,7 @@ class PassiveScanTaskTest {
         void should_return_true_when_GET_response_is_wasm() {
             when(mockRequest.url()).thenReturn("https://example.com/module");
             when(mockRequest.method()).thenReturn("GET");
-            when(mockResponse.toString()).thenReturn(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/wasm\r\n\r\n<binary>");
+            responseContentType("application/wasm");
             assertThat(PassiveScanTask.shouldSkipRequest(mockRequestResponse)).isTrue();
         }
 
@@ -218,8 +224,7 @@ class PassiveScanTaskTest {
         void should_return_false_when_GET_response_is_json() {
             when(mockRequest.url()).thenReturn("https://example.com/api/data");
             when(mockRequest.method()).thenReturn("GET");
-            when(mockResponse.toString()).thenReturn(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"data\":1}");
+            responseContentType("application/json");
             assertThat(PassiveScanTask.shouldSkipRequest(mockRequestResponse)).isFalse();
         }
     }

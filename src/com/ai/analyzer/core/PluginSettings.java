@@ -101,6 +101,13 @@ public class PluginSettings implements Serializable {
     private String passiveScanDomainBlacklist = "";
     /** 域名白名单：非空时只扫描匹配的主机（优先于黑名单） */
     private String passiveScanDomainWhitelist = "";
+    /** 被动扫描流量来源：Burp ToolType 名称的逗号分隔列表，默认仅 Proxy */
+    private String passiveScanToolSources = "PROXY";
+
+    // 证据整理 / 自动继续
+    private boolean organizerAutoContinue = true;
+    /** 自动继续最大轮次；0 表示不限 */
+    private int organizerMaxRounds = 0;
 
     // 自定义 MCP 服务器配置（JSON 字符串，简版数组格式）
     private String customMcpConfigJson = "";
@@ -108,6 +115,10 @@ public class PluginSettings implements Serializable {
 
     private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
         in.defaultReadObject();
+        // 新字段在旧 Java 序列化流中不存在，反序列化默认值是 false/0；
+        // 按产品默认（自动继续开启、轮次不限）补齐，JSON 路径由字段初始化器负责。
+        organizerAutoContinue = true;
+        organizerMaxRounds = 0;
         normalize();
     }
 
@@ -142,6 +153,7 @@ public class PluginSettings implements Serializable {
         // 旧配置没有 ReAct 单轮上限字段（反序列化为 0），必须回落到合法默认值
         if (activeMaxIters <= 0) activeMaxIters = com.ai.analyzer.agent.runtime.AgentScopeAgentRuntime.DEFAULT_MAX_ITERS;
         if (passiveMaxIters <= 0) passiveMaxIters = 15;
+        if (organizerMaxRounds < 0) organizerMaxRounds = 0;
         if (tokenBudgetTokens < 0) tokenBudgetTokens = 0;
 
         if (searchMode == null) searchMode = "enableSearch";
@@ -153,6 +165,9 @@ public class PluginSettings implements Serializable {
         if (passiveScanSkipExtensions == null) passiveScanSkipExtensions = "";
         if (passiveScanDomainBlacklist == null) passiveScanDomainBlacklist = "";
         if (passiveScanDomainWhitelist == null) passiveScanDomainWhitelist = "";
+        if (passiveScanToolSources == null || passiveScanToolSources.isBlank()) {
+            passiveScanToolSources = "PROXY";
+        }
         if (customMcpConfigJson == null) customMcpConfigJson = "";
         // 注意：不再根据 customMcpConfigJson 非空强制 enableCustomMcp=true。
         // 该兜底会导致用户显式关闭自定义 MCP 后重启回弹为启用（“关掉不保存” bug）。
@@ -649,6 +664,23 @@ public class PluginSettings implements Serializable {
         this.passiveMaxIters = passiveMaxIters;
     }
 
+    public boolean isOrganizerAutoContinue() {
+        return organizerAutoContinue;
+    }
+
+    public void setOrganizerAutoContinue(boolean organizerAutoContinue) {
+        this.organizerAutoContinue = organizerAutoContinue;
+    }
+
+    /** 0 = 不限轮次 */
+    public int getOrganizerMaxRounds() {
+        return Math.max(0, organizerMaxRounds);
+    }
+
+    public void setOrganizerMaxRounds(int organizerMaxRounds) {
+        this.organizerMaxRounds = organizerMaxRounds;
+    }
+
     public String getCliWhitelist() {
         return cliWhitelist != null ? cliWhitelist : "";
     }
@@ -758,6 +790,15 @@ public class PluginSettings implements Serializable {
 
     public void setPassiveScanDomainWhitelist(String v) {
         this.passiveScanDomainWhitelist = v != null ? v : "";
+    }
+
+    public String getPassiveScanToolSources() {
+        return passiveScanToolSources != null && !passiveScanToolSources.isBlank()
+                ? passiveScanToolSources : "PROXY";
+    }
+
+    public void setPassiveScanToolSources(String v) {
+        this.passiveScanToolSources = v != null ? v : "PROXY";
     }
 
     public String getCustomMcpConfigJson() {

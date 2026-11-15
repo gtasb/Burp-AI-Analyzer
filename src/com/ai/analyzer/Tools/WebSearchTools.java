@@ -272,9 +272,15 @@ public class WebSearchTools {
             for (JsonElement el : items) {
                 JsonObject item = el.getAsJsonObject();
                 sb.append("[").append(idx++).append("] ");
-                if (item.has("title")) sb.append(item.get("title").getAsString()).append("\n");
-                if (item.has("link")) sb.append("URL: ").append(item.get("link").getAsString()).append("\n");
-                if (item.has("snippet")) sb.append(item.get("snippet").getAsString().trim()).append("\n");
+                if (item.has("title") && !item.get("title").isJsonNull()) {
+                    sb.append(item.get("title").getAsString()).append("\n");
+                }
+                if (item.has("link") && !item.get("link").isJsonNull()) {
+                    sb.append("URL: ").append(item.get("link").getAsString()).append("\n");
+                }
+                if (item.has("snippet") && !item.get("snippet").isJsonNull()) {
+                    sb.append(item.get("snippet").getAsString().trim()).append("\n");
+                }
                 sb.append("\n");
             }
             sb.append("如需阅读某条链接的完整正文，请调用 fetch_url(url=\"...\")。");
@@ -557,7 +563,38 @@ public class WebSearchTools {
     private static boolean isLiteralPrivateIp(String host) {
         String h = host.replace("[", "").replace("]", "");
         if (h.contains(":")) {
-            return h.equals("::1") || h.startsWith("fc") || h.startsWith("fd") || h.startsWith("fe8");
+            if (h.equals("::1") || h.startsWith("fc") || h.startsWith("fd") || h.startsWith("fe8")) {
+                return true;
+            }
+            // IPv4-mapped IPv6（::ffff:169.254.169.254）：Java 会把它连到内网 IPv4 目标，
+            // 必须剥掉前缀按内层 IPv4 判定，否则内网过滤可被整个绕过
+            String lower = h.toLowerCase(java.util.Locale.ROOT);
+            String mapped = null;
+            if (lower.startsWith("::ffff:")) {
+                mapped = h.substring(7);
+            } else if (lower.startsWith("0:0:0:0:0:ffff:")) {
+                mapped = h.substring(14);
+            }
+            if (mapped != null && !mapped.isEmpty()) {
+                String[] parts = mapped.split("\\.");
+                if (parts.length == 4) {
+                    for (String p : parts) {
+                        if (p.isEmpty() || !p.chars().allMatch(Character::isDigit)) {
+                            return false;
+                        }
+                    }
+                    return isPrivateIpV4(mapped);
+                }
+                // 十六进制/混合形式映射（::ffff:7f00:1）：按 32 位数值解析
+                try {
+                    long v = Long.parseUnsignedLong(mapped.replace(":", ""), 16);
+                    return isPrivateIpV4(((v >> 24) & 255) + "." + ((v >> 16) & 255) + "."
+                            + ((v >> 8) & 255) + "." + (v & 255));
+                } catch (Exception ignored) {
+                    return false;
+                }
+            }
+            return false;
         }
         // inet_aton 形式（127.1 / 2130706433 / 0x7f000001 / 0177.0.0.1）
         long numeric = parseIpv4Numeric(h);

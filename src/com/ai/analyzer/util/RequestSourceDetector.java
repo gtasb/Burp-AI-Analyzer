@@ -48,7 +48,7 @@ public class RequestSourceDetector {
             sb.append("可能的请求来源：").append(source);
             
             if (index != null) {
-                sb.append("（索引（offset）：").append(index).append("）");
+                sb.append("（history id：").append(index).append("）");
             }
             
             if (inActiveEditor) {
@@ -70,76 +70,25 @@ public class RequestSourceDetector {
         if (api == null || requestResponse == null) {
             return new RequestSourceInfo("未知", null, false);
         }
-        
-        // 1. 检查是否在 proxy HTTP history 中
-        Integer httpHistoryIndex = findInProxyHttpHistory(api, requestResponse);
-        if (httpHistoryIndex != null) {
-            boolean inEditor = checkActiveEditor(api);
-            return new RequestSourceInfo("proxy-http-history", httpHistoryIndex, inEditor);
+
+        String className = requestResponse.getClass().getName();
+
+        // 1. 拦截器 / Repeater：类名判断，零成本
+        if (className.contains("InterceptedRequest") || className.contains("InterceptedResponse")) {
+            return new RequestSourceInfo("proxy-intercept", null, checkActiveEditor(api));
         }
-        
-        // 2. 检查是否在 proxy WebSocket history 中
-        Integer wsHistoryIndex = findInProxyWebSocketHistory(api, requestResponse);
-        if (wsHistoryIndex != null) {
-            boolean inEditor = checkActiveEditor(api);
-            return new RequestSourceInfo("proxy-websocket-history", wsHistoryIndex, inEditor);
+        if (className.contains("RepeaterRequestResponse") || className.contains("Repeater")) {
+            return new RequestSourceInfo("repeater", null, checkActiveEditor(api));
         }
-        
-        // 3. 检查是否在 proxy intercept 中
-        if (isProxyIntercept(api, requestResponse)) {
-            boolean inEditor = checkActiveEditor(api);
-            return new RequestSourceInfo("proxy-intercept", null, inEditor);
+
+        // 2. Proxy history：ProxyHttpRequestResponse 自带稳定 id，**不要**再调用
+        //    api.proxy().history()。旧实现每次都把整个历史列表取出来，甚至逐条
+        //    toByteArray() 比对，历史几万条时每次分析都会卡住并产生大量临时对象。
+        if (requestResponse instanceof ProxyHttpRequestResponse proxyItem) {
+            return new RequestSourceInfo("proxy-http-history", proxyItem.id(), checkActiveEditor(api));
         }
-        
-        // 4. 检查是否在 repeater 中
-        if (isRepeater(api, requestResponse)) {
-            boolean inEditor = checkActiveEditor(api);
-            return new RequestSourceInfo("repeater", null, inEditor);
-        }
-        
-        // 5. 默认：未知来源，但检查是否在活动编辑器中
-        boolean inEditor = checkActiveEditor(api);
-        return new RequestSourceInfo("未知", null, inEditor);
-    }
-    
-    /**
-     * 在 proxy HTTP history 中查找请求，返回索引（offset）
-     * 注意：ID 和索引（offset）是不同的概念
-     * - ID 是请求的唯一标识符，不会因为 history 中其他请求的删除而改变
-     * - 索引（offset）是请求在 history 列表中的位置（从 0 开始），会随着列表变化而变化
-     */
-    private static Integer findInProxyHttpHistory(MontoyaApi api, HttpRequestResponse requestResponse) {
-        try {
-            List<ProxyHttpRequestResponse> history = api.proxy().history();
-            
-            // 如果 requestResponse 本身就是 ProxyHttpRequestResponse，直接使用 indexOf 获取索引
-            if (requestResponse instanceof ProxyHttpRequestResponse) {
-                ProxyHttpRequestResponse proxyItem = (ProxyHttpRequestResponse) requestResponse;
-                int index = history.indexOf(proxyItem);
-                if (index >= 0) {
-                    return index; // 返回索引（offset）
-                }
-                // 如果 indexOf 返回 -1（未找到），返回 null，不携带索引
-                return null;
-            } else {
-                // 如果不是 ProxyHttpRequestResponse，通过内容比较来查找
-                byte[] targetRequestBytes = requestResponse.request().toByteArray().getBytes();
-                
-                for (int i = 0; i < history.size(); i++) {
-                    ProxyHttpRequestResponse item = history.get(i);
-                    if (item.request() != null) {
-                        byte[] itemRequestBytes = item.request().toByteArray().getBytes();
-                        // 简单比较：如果请求内容相同，认为是同一个请求
-                        if (java.util.Arrays.equals(targetRequestBytes, itemRequestBytes)) {
-                            return i; // 返回索引（offset）
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            // 忽略错误，返回 null
-        }
-        return null;
+
+        return new RequestSourceInfo("未知", null, checkActiveEditor(api));
     }
     
     /**
@@ -213,22 +162,6 @@ public class RequestSourceDetector {
     }
     
     /**
-     * 在 proxy WebSocket history 中查找 HTTP 请求（通过升级请求匹配），返回索引
-     * 注意：这是为了兼容 HTTP 请求响应对象，通过升级请求来查找对应的 WebSocket 消息
-     */
-    private static Integer findInProxyWebSocketHistory(MontoyaApi api, HttpRequestResponse requestResponse) {
-        try {
-            // 如果 requestResponse 有对应的 WebSocket 升级请求，可以通过升级请求来查找
-            // 但这个方法主要用于 HTTP 请求响应，WebSocket 消息应该使用 detectWebSocketSource
-            // 暂时返回 null，因为 WebSocket history 通常不直接包含 HTTP 请求响应
-            return null;
-        } catch (Exception e) {
-            // 忽略错误
-        }
-        return null;
-    }
-    
-    /**
      * 检查是否在 proxy WebSocket intercept 中
      */
     private static boolean isProxyWebSocketIntercept(MontoyaApi api, WebSocketMessage webSocketMessage) {
@@ -239,39 +172,6 @@ public class RequestSourceDetector {
             if (className.contains("InterceptedTextMessage") || 
                 className.contains("InterceptedBinaryMessage") ||
                 className.contains("Intercepted")) {
-                return true;
-            }
-            return false;
-        } catch (Exception e) {
-            return false;
-        }
-    }
-    
-    /**
-     * 检查是否在 proxy intercept 中
-     */
-    private static boolean isProxyIntercept(MontoyaApi api, HttpRequestResponse requestResponse) {
-        try {
-            // 检查 requestResponse 是否是 InterceptedRequest/InterceptedResponse 类型
-            // 通过检查类名来判断（因为接口可能不直接继承）
-            String className = requestResponse.getClass().getName();
-            if (className.contains("InterceptedRequest") || className.contains("InterceptedResponse")) {
-                return true;
-            }
-            return false;
-        } catch (Exception e) {
-            return false;
-        }
-    }
-    
-    /**
-     * 检查是否在 repeater 中
-     */
-    private static boolean isRepeater(MontoyaApi api, HttpRequestResponse requestResponse) {
-        try {
-            // 通过类名检查（RepeaterRequestResponse 类不存在，只能通过类名判断）
-            String className = requestResponse.getClass().getName();
-            if (className.contains("RepeaterRequestResponse") || className.contains("Repeater")) {
                 return true;
             }
             return false;

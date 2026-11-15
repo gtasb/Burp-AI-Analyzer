@@ -168,6 +168,9 @@ public class AgentConfig {
         try {
             return com.ai.analyzer.agent.mcpclient.CustomMcpConfigParser.parse(json);
         } catch (Exception e) {
+            // 静默丢配置会让用户以为 MCP 生效了；至少留一条日志可查
+            com.ai.analyzer.util.AppLogBuffer.info("AgentConfig",
+                    "自定义 MCP 配置解析失败，已忽略全部配置: " + e.getMessage());
             return Collections.emptyList();
         }
     }

@@ -14,6 +14,8 @@ public class SystemPromptBuilder {
     private String pathFileToolRoot;
     private String pathNamespace;
     private boolean sandboxEnabled;
+    /** 主动扫描 agent：图谱只读，证据写入由整理 agent 负责 */
+    private boolean graphReadOnly;
 
     public SystemPromptBuilder() {}
 
@@ -23,6 +25,7 @@ public class SystemPromptBuilder {
     public SystemPromptBuilder enableChromeMcp(boolean v) { this.enableChromeMcp = v; return this; }
     public SystemPromptBuilder enableFileSystemAccess(boolean v) { this.enableFileSystemAccess = v; return this; }
     public SystemPromptBuilder enableSkills(boolean v) { this.enableSkills = v; return this; }
+    public SystemPromptBuilder graphReadOnly(boolean v) { this.graphReadOnly = v; return this; }
     public SystemPromptBuilder ragMcpDocumentsPath(String v) { this.ragMcpDocumentsPath = v; return this; }
     public SystemPromptBuilder customBasePrompt(String v) { this.customBasePrompt = v; return this; }
 
@@ -180,35 +183,38 @@ public class SystemPromptBuilder {
         // Note: Skills are auto-injected by HarnessAgent as <available_skills> block
         // from workspace/skills/ — no manual injection needed here.
 
-        // 共享 Notebook 协作工具说明：主动/被动 Agent 通过按域名隔离的知识黑板共享关键发现
-        p.append("""
-                \n# Shared Notebook (多 Agent 协作知识黑板)
-                你与被动扫描 Agent 共享一个按域名隔离的 Notebook 知识库（每个域名一个 .md 文件）：
-                - `notebook_read(domain)`：读取某域名的全部关键发现（攻击面/接口/参数/漏洞线索/验证结论）
-                - `notebook_write(domain, type, content)`：追加一条关键发现（自动去重、版本+1、并广播其他 Agent）
-                - `notebook_get_updates(domain, since_version)`：按版本号拉取增量，补齐错过的广播或重启前的更新
-                - `notebook_list()`：列出所有已有 Notebook 的域名
-
-                使用原则：
-                - 开始分析某域名前，先 `notebook_read` 查看已知信息，避免重复劳动
-                - 发现新的攻击面、接口、参数、漏洞线索或验证结论时，及时 `notebook_write` 到对应域名
-                - 其他 Agent 的新写入通过广播提醒；用 `notebook_get_updates` 按版本增量获取
-                """);
-
-        // 知识图谱协作：指纹/特征/后端推断必须落图并附证据，供后续分析与覆盖度使用
-        p.append("""
-                \n# Knowledge Graph (graph_* tools)
-                你与被动扫描 Agent 共享同一个 SQLite 资产知识图谱。开始分析前先 `graph_overview`，
-                遇到具体接口用 `graph_get_interface` / `graph_get_subgraph` 查看已知上下文。
-                发现以下内容时必须落图（程序会按 canonical key 去重）：
-                - **技术指纹**（前端框架/后端框架/服务器/中间件）：`graph_upsert_fingerprint`，
-                  必须附 evidence（命中的 header/Cookie/HTML/JS 原文片段），可选 version。
-                - **能力特征**（actuator/swagger/graphql/upload/jwt/oauth/websocket 等）：
-                  `graph_add_feature`，可同时给出 vuln_class 建立“特征 → 漏洞类别”映射。
-                - **后端实现推测**（Spring Boot/Laravel/ThinkPHP/Node+Express 等）：
-                  `graph_add_backend_hypothesis`，必须给出 evidence（路径形态/错误串/Cookie/JS 依据）。
-                推测一律使用 INFERRED，不要当成已确认事实；不要编造证据。
-                """);
+        // 知识图谱：主动 agent 只读；侧栏/整理 agent 可写
+        if (graphReadOnly) {
+            p.append("""
+                    \n# Knowledge Graph (只读)
+                    你与侧栏/被动/整理 Agent 共享同一个 SQLite 资产知识图谱，但**本角色只能读，不能写**：
+                    - 开始分析一个站点前先 `graph_overview(root_id)`，它包含接口/参数/指纹/特征与最近的站点笔记。
+                    - `graph_get_notes(root_id, since_version)` 读取人类和其他 Agent 的笔记。人类写的 `instruction` 类笔记是明确指令，优先执行。
+                    - `graph_get_interface` / `graph_get_subgraph` 查看节点上下文（含节点评估与相关笔记）。
+                    - 你**没有** `graph_add_note` / `graph_assess_node` / 指纹登记等写工具；不要尝试写入。
+                      分析结论、指纹、证据和“是否值得继续”的评估会在本轮结束后由整理 Agent 统一入图。
+                    """);
+        } else {
+            p.append("""
+                    \n# Knowledge Graph (graph_* tools，含笔记与人工牵引)
+                    你与被动扫描 Agent 共享同一个 SQLite 资产知识图谱：节点、边、证据、笔记都在里面。
+                    - 开始分析一个站点前先 `graph_overview(root_id)`，它包含接口/参数/指纹/特征与最近的站点笔记。
+                    - `graph_get_notes(root_id, since_version)` 读取人类和其他 Agent 的笔记（0 = 全部，之后可用上次版本号取增量）。
+                      人类写的 `instruction` 类笔记是明确指令，必须优先执行。
+                    - `graph_add_note(content, root?, node_id?)` 写发现/结论/下一步建议；要挂到具体节点时带 node_id。
+                    - `graph_assess_node(node_id, priority, assessment, next_step)` 记录该节点是否值得继续探索：
+                      priority 取 high / normal / low / none。分析完一个接口或特征后调用——人类在图谱详情里据此决定方向。
+                    - `graph_get_interface` / `graph_get_subgraph` 查看节点上下文（会自动带出评估与相关笔记）。
+                    发现以下内容时必须落图（程序按 canonical key 去重）：
+                    - **技术指纹**（前端框架/后端框架/服务器/中间件）：`graph_upsert_fingerprint`，
+                      必须附 evidence（命中的 header/Cookie/HTML/JS 原文片段），可选 version。
+                    - **能力特征**（actuator/swagger/graphql/upload/jwt/oauth/websocket 等）：
+                      `graph_add_feature`，可同时给出 vuln_class 建立“特征 → 漏洞类别”映射。
+                    - **后端实现推测**（Spring Boot/Laravel/ThinkPHP/Node+Express 等）：
+                      `graph_add_backend_hypothesis`，必须给出 evidence（路径形态/错误串/Cookie/JS 依据）。
+                    推测一律使用 INFERRED，不要当成已确认事实；不要编造证据。
+                    """);
+        }
 
         // 本环境实测路径事实：解决模型「写入的文件在哪 / shell 在哪执行」的认知混乱
         if (pathFileToolRoot != null && !pathFileToolRoot.isBlank()) {

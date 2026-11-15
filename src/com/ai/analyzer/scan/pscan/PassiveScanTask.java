@@ -210,33 +210,32 @@ public final class PassiveScanTask {
         String lowerUrl = url.toLowerCase();
         if (isStaticResourceStatic(lowerUrl)) return true;
 
-        // 仅对 GET 请求跳过二进制响应（POST/PUT 等可能涉及文件上传漏洞，必须保留）
+        // 仅对 GET 请求跳过二进制响应（POST/PUT 等可能涉及文件上传漏洞，必须保留）。
+        // 只看 Content-Type 头：旧实现 response().toString() 会把整个响应体序列化成字符串，
+        // 在大文件/视频上会直接拖慢 Burp 的代理线程。
         String method = requestResponse.request().method().toUpperCase();
         if ("GET".equals(method) && requestResponse.response() != null) {
             try {
-                String respStr = requestResponse.response().toString();
-                if (respStr != null) {
-                    String headerPart = respStr;
-                    int sep = respStr.indexOf("\r\n\r\n");
-                    if (sep < 0) sep = respStr.indexOf("\n\n");
-                    if (sep > 0) headerPart = respStr.substring(0, sep);
-                    String lowerHeaders = headerPart.toLowerCase();
-
-                    if (lowerHeaders.contains("content-type:")) {
-                        if (lowerHeaders.contains("image/") ||
-                            lowerHeaders.contains("font/") ||
-                            lowerHeaders.contains("audio/") ||
-                            lowerHeaders.contains("video/") ||
-                            lowerHeaders.contains("application/octet-stream") ||
-                            lowerHeaders.contains("application/zip") ||
-                            lowerHeaders.contains("application/gzip") ||
-                            lowerHeaders.contains("application/pdf") ||
-                            lowerHeaders.contains("application/wasm")) {
-                            return true;
-                        }
+                for (var header : requestResponse.response().headers()) {
+                    if (header == null || !"content-type".equalsIgnoreCase(header.name())) {
+                        continue;
                     }
+                    String ct = header.value() == null ? "" : header.value().toLowerCase();
+                    if (ct.contains("image/") ||
+                        ct.contains("font/") ||
+                        ct.contains("audio/") ||
+                        ct.contains("video/") ||
+                        ct.contains("application/octet-stream") ||
+                        ct.contains("application/zip") ||
+                        ct.contains("application/gzip") ||
+                        ct.contains("application/pdf") ||
+                        ct.contains("application/wasm")) {
+                        return true;
+                    }
+                    break;
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
 
         return false;

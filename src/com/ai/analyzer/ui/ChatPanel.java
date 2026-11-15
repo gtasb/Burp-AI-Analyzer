@@ -50,6 +50,11 @@ public class ChatPanel extends JPanel {
             behavior -> SwingUtilities.invokeLater(() -> handleModelBehavior(behavior));
     /** 进行中的思考增量缓冲（THINKING 为流式增量块，累积后整行重写，避免每块一行刷屏） */
     private final StringBuilder currentThinking = new StringBuilder();
+    /** 思考缓冲上限：推理模型一次可能输出数万字符，只保留尾部用于展示/摘要 */
+    private static final int MAX_THINKING_CHARS = 8_000;
+    /** 思考行渲染节流：每个 token 都改 JTextArea 会把 EDT 打满 */
+    private static final long THINKING_RENDER_MS = 200;
+    private long lastThinkingRenderAt;
     /** 当前"思考"行在 debugLogArea 文档中的起始偏移，-1 表示当前没有进行中的思考行 */
     private int thinkingLineStart = -1;
 
@@ -299,6 +304,14 @@ public class ChatPanel extends JPanel {
             String logMessage = "[" + timestamp + "] " + message + "\n";
 
             SwingUtilities.invokeLater(() -> {
+                try {
+                    javax.swing.text.Document doc = debugLogArea.getDocument();
+                    // 行为面板开着时长会话无限增长：超过上限丢前半段
+                    if (doc.getLength() > 300_000) {
+                        doc.remove(0, doc.getLength() / 2);
+                    }
+                } catch (Exception ignored) {
+                }
                 debugLogArea.append(logMessage);
                 debugLogArea.setCaretPosition(debugLogArea.getDocument().getLength());
             });
@@ -332,7 +345,14 @@ public class ChatPanel extends JPanel {
                 // 流式增量块：累积到当前"思考"行并整行重写，而不是每块新起一行
                 if (detail != null && !detail.isEmpty()) {
                     currentThinking.append(detail);
-                    renderThinkingLine(timestamp);
+                    if (currentThinking.length() > MAX_THINKING_CHARS) {
+                        currentThinking.delete(0, currentThinking.length() - MAX_THINKING_CHARS);
+                    }
+                    long now = System.currentTimeMillis();
+                    if (now - lastThinkingRenderAt >= THINKING_RENDER_MS) {
+                        lastThinkingRenderAt = now;
+                        renderThinkingLine(timestamp);
+                    }
                 }
             }
             case "TOOL_START" -> {
@@ -377,15 +397,22 @@ public class ChatPanel extends JPanel {
 
     /** 思考段落结束：固化当前行，重置缓冲 */
     private void flushThinking() {
-        if (thinkingLineStart >= 0) {
-            // 固化最终思考内容到 Burp Output（仅一次，避免逐块刷屏）
+        if (currentThinking.length() > 0) {
+            // 节流期间最后一次增量可能还没画出来，这里补一次
+            renderThinkingLine(java.time.LocalDateTime.now().format(
+                    java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")));
             String compact = currentThinking.toString().replaceAll("\\s+", " ").trim();
             if (debugEnabled && !compact.isEmpty()) {
+                // 只写摘要：完整推理可能数万字符，刷进 Burp Output 会拖慢整个 UI
+                if (compact.length() > 2000) {
+                    compact = compact.substring(0, 2000) + "...";
+                }
                 api.logging().logToOutput("[AI助手-Debug] 🧠 思考: " + compact);
             }
         }
         currentThinking.setLength(0);
         thinkingLineStart = -1;
+        lastThinkingRenderAt = 0;
     }
 
     private void sendMessage() {

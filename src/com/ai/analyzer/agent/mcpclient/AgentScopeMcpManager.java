@@ -31,7 +31,11 @@ public class AgentScopeMcpManager {
     // 本地 MCP 服务器（127.0.0.1）响应应在秒级内；
     // 短超时让"SSE 失败 → 回退 Streamable HTTP"的尝试序列快速完成，避免每次失败干等 30s+
     private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(60);
-    private static final Duration DEFAULT_INIT_TIMEOUT = Duration.ofSeconds(30);
+    /** stdio 服务可能要先下载/启动（如 uvx），保留较长的初始化预算。 */
+    private static final Duration STDIO_INIT_TIMEOUT = Duration.ofSeconds(30);
+    /** HTTP MCP 握手：本地 5s / 远程 8s，首次分析最多被单个坏端点拖这么久。 */
+    private static final Duration LOCAL_INIT_TIMEOUT = Duration.ofSeconds(5);
+    private static final Duration REMOTE_INIT_TIMEOUT = Duration.ofSeconds(8);
 
     private AgentScopeMcpManager() {}
 
@@ -42,6 +46,115 @@ public class AgentScopeMcpManager {
     /** 按端点共享的 MCP 客户端：同一端点全插件只建一条连接（主动/被动注册同一 wrapper，根除双连接互相踢线） */
     private static final java.util.concurrent.ConcurrentHashMap<String, McpClientWrapper> SHARED_CLIENTS =
             new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * 共享连接的引用计数。每个 HarnessAgent 关闭时都会调用 {@code toolkit.closeMcpClients()}，
+     * 若直接关闭共享连接会把其它 agent 仍在使用的 MCP 一起关掉；这里由最后一次释放真正关闭。
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger> SHARED_REFS =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 获取共享连接并为当前 toolkit 增加一次引用。 */
+    private static McpClientWrapper acquireSharedClient(String key, CheckedSupplier<McpClientWrapper> factory)
+            throws Exception {
+        McpClientWrapper shared = endpointClient(key, factory);
+        SHARED_REFS.computeIfAbsent(key, k -> new java.util.concurrent.atomic.AtomicInteger())
+                .incrementAndGet();
+        return new SharedHandle(key, shared);
+    }
+
+    /** 释放一次引用；归零时才真正关闭底层连接。 */
+    static void releaseSharedClient(String key) {
+        java.util.concurrent.atomic.AtomicInteger refs = SHARED_REFS.get(key);
+        if (refs == null) return;
+        if (refs.decrementAndGet() <= 0) {
+            SHARED_REFS.remove(key, refs);
+            McpClientWrapper client = SHARED_CLIENTS.remove(key);
+            if (client != null) {
+                try {
+                    client.close();
+                } catch (Exception ignored) {
+                }
+            }
+        }
+    }
+
+    /** 插件卸载：绕过引用计数，强制关闭全部共享连接。 */
+    public static void closeAllSharedClients() {
+        for (String key : new java.util.ArrayList<>(SHARED_CLIENTS.keySet())) {
+            SHARED_REFS.remove(key);
+            McpClientWrapper client = SHARED_CLIENTS.remove(key);
+            if (client != null) {
+                try {
+                    client.close();
+                } catch (Exception ignored) {
+                }
+            }
+        }
+    }
+
+    /** 引用计数包装：Toolkit 关闭只减引用，不直接关闭共享连接。 */
+    private static final class SharedHandle extends McpClientWrapper {
+        private final String key;
+        private final McpClientWrapper delegate;
+        private final java.util.concurrent.atomic.AtomicBoolean released =
+                new java.util.concurrent.atomic.AtomicBoolean();
+
+        SharedHandle(String key, McpClientWrapper delegate) {
+            super(delegate.getName());
+            this.key = key;
+            this.delegate = delegate;
+        }
+
+        @Override
+        public boolean isInitialized() {
+            return delegate.isInitialized();
+        }
+
+        @Override
+        public boolean isPropagateMeta() {
+            return delegate.isPropagateMeta();
+        }
+
+        @Override
+        public void setPropagateMeta(boolean propagateMeta) {
+            delegate.setPropagateMeta(propagateMeta);
+        }
+
+        @Override
+        public reactor.core.publisher.Mono<Void> initialize() {
+            return delegate.initialize();
+        }
+
+        @Override
+        public reactor.core.publisher.Mono<List<io.modelcontextprotocol.spec.McpSchema.Tool>> listTools() {
+            return delegate.listTools();
+        }
+
+        @Override
+        public io.modelcontextprotocol.spec.McpSchema.Tool getCachedTool(String name) {
+            return delegate.getCachedTool(name);
+        }
+
+        @Override
+        public reactor.core.publisher.Mono<io.modelcontextprotocol.spec.McpSchema.CallToolResult> callTool(
+                String toolName, Map<String, Object> arguments) {
+            return delegate.callTool(toolName, arguments);
+        }
+
+        @Override
+        public reactor.core.publisher.Mono<io.modelcontextprotocol.spec.McpSchema.CallToolResult> callTool(
+                String toolName, Map<String, Object> arguments, Map<String, Object> meta) {
+            return delegate.callTool(toolName, arguments, meta);
+        }
+
+        @Override
+        public void close() {
+            if (released.compareAndSet(false, true)) {
+                releaseSharedClient(key);
+            }
+        }
+    }
 
     private static void recordRegistration(String endpointKey) {
         int count = endpointRegistrations.merge(endpointKey, 1, Integer::sum);
@@ -101,6 +214,21 @@ public class AgentScopeMcpManager {
     }
 
     /**
+     * 合并自定义配置的额外请求头与 Authorization（自动补 Bearer 前缀）。
+     * 注册、验证、共享客户端 key 都必须用同一份结果，否则 header 认证的服务器会 401。
+     */
+    public static Map<String, String> headersOf(CustomMcpConfig config) {
+        Map<String, String> headers = new java.util.LinkedHashMap<>();
+        if (config == null) return headers;
+        headers.putAll(config.getHeaders());
+        String auth = normalizeBearer(config.getAuthorization());
+        if (auth != null) {
+            headers.put("Authorization", auth);
+        }
+        return headers;
+    }
+
+    /**
      * 推导传输模式序列（按尝试顺序）。
      *
      * <ul>
@@ -128,15 +256,19 @@ public class AgentScopeMcpManager {
         return new String[]{"sse", "streamable"};
     }
 
-    private static McpClientBuilder baseBuilder(String serverName,
-            java.util.function.Consumer<McpClientBuilder> configure) {
-        McpClientBuilder builder = McpClientBuilder.create(serverName)
+    private static McpClientBuilder baseBuilder(String serverName, Duration initTimeout) {
+        return McpClientBuilder.create(serverName)
                 .timeout(DEFAULT_TIMEOUT)
-                .initializationTimeout(DEFAULT_INIT_TIMEOUT);
-        if (configure != null) {
-            configure.accept(builder);
+                .initializationTimeout(initTimeout);
+    }
+
+    /** HTTP MCP 初始化超时：本机回环地址给 5s，其余 8s。 */
+    static Duration initTimeoutFor(String url) {
+        String u = url == null ? "" : url.trim().toLowerCase(java.util.Locale.ROOT);
+        if (u.contains("127.0.0.1") || u.contains("localhost") || u.contains("[::1]")) {
+            return LOCAL_INIT_TIMEOUT;
         }
-        return builder;
+        return REMOTE_INIT_TIMEOUT;
     }
 
     /**
@@ -146,6 +278,13 @@ public class AgentScopeMcpManager {
     static McpClientWrapper buildTransportClient(String serverName, String url,
             String transportType, List<String> args,
             java.util.function.Consumer<McpClientBuilder> configure) throws Exception {
+        return buildTransportClient(serverName, url, transportType, args, null, configure);
+    }
+
+    /** @param env stdio 子进程的环境变量（UI 的 env 字段此前被解析但从未传给进程） */
+    static McpClientWrapper buildTransportClient(String serverName, String url,
+            String transportType, List<String> args, Map<String, String> env,
+            java.util.function.Consumer<McpClientBuilder> configure) throws Exception {
         String[] modes = resolveTransportModes(url, transportType);
         Exception firstFailure = null;
         for (String mode : modes) {
@@ -153,17 +292,32 @@ public class AgentScopeMcpManager {
             try {
                 // 必须先设置传输再应用 configure：header() 仅在 transportConfig 为
                 // HttpTransportConfig 时生效，先 configure 后设传输会导致 Authorization 头被静默丢弃
+                Duration initTimeout = "stdio".equals(mode) ? STDIO_INIT_TIMEOUT : initTimeoutFor(url);
                 McpClientBuilder builder = switch (mode) {
-                    case "stdio" -> baseBuilder(serverName, null).stdioTransport(url.trim(),
-                            args != null ? args.toArray(new String[0]) : new String[0]);
-                    case "streamable" -> baseBuilder(serverName, null).streamableHttpTransport(url.trim());
-                    default -> baseBuilder(serverName, null).sseTransport(url.trim());
+                    case "stdio" -> {
+                        McpClientBuilder b = baseBuilder(serverName, initTimeout);
+                        String[] argv = args != null ? args.toArray(new String[0]) : new String[0];
+                        if (env != null && !env.isEmpty()) {
+                            b.stdioTransport(url.trim(), java.util.List.of(argv), env);
+                        } else {
+                            b.stdioTransport(url.trim(), argv);
+                        }
+                        yield b;
+                    }
+                    case "streamable" -> baseBuilder(serverName, initTimeout).streamableHttpTransport(url.trim());
+                    default -> baseBuilder(serverName, initTimeout).sseTransport(url.trim());
                 };
                 if (configure != null) {
                     configure.accept(builder);
                 }
+                long started = System.nanoTime();
                 client = builder.buildSync();
                 client.initialize().block();
+                long elapsedMs = (System.nanoTime() - started) / 1_000_000;
+                if (elapsedMs > 1500) {
+                    AppLogBuffer.info("AgentScopeMcpManager", "MCP 握手较慢: " + serverName
+                            + " mode=" + mode + " " + elapsedMs + "ms url=" + url);
+                }
                 return client;
             } catch (Exception e) {
                 // 构建成功但握手失败：关闭该客户端，避免每次回退尝试泄漏 socket
@@ -248,12 +402,17 @@ public class AgentScopeMcpManager {
 
         String url = burpMcpUrl.trim();
         try {
-            String key = "burp-mcp|" + url;
-            // 共享客户端：同一端点只建一条连接，主动/被动 toolkit 复用（避免双连接互相踢线）
-            McpClientWrapper client = withExtensionClassLoader(() -> endpointClient(key, () ->
+            // key 必须包含鉴权指纹：token 更换 + runtime 重建后，旧 key 会把旧 token
+            // 的连接永远复用下去（401 直到重启 Burp）。与 registerCustomMcp 同规则。
+            String bearer = normalizeBearer(authorization);
+            String key = "burp-mcp|" + url + "|"
+                    + (bearer == null ? "" : Integer.toHexString(bearer.hashCode()));
+            // 走引用计数包装（acquireSharedClient）：注册失败时 AgentScope 会自动
+            // close 包装实例，裸 endpointClient 会让一次瞬时 listTools 失败把
+            // 其它 agent 仍在用的共享连接关掉
+            McpClientWrapper client = withExtensionClassLoader(() -> acquireSharedClient(key, () ->
                     buildTransportClient("burp-mcp", url, null, null,
                             builder -> {
-                                String bearer = normalizeBearer(authorization);
                                 if (bearer != null) {
                                     builder.header("Authorization", bearer);
                                 }
@@ -261,7 +420,15 @@ public class AgentScopeMcpManager {
             if (client == null) {
                 throw new RuntimeException("MCP 客户端构建失败: " + url);
             }
-            toolkit.registerMcpClient(new LoggingMcpClientWrapper(logSource, client)).block();
+            boolean registered = false;
+            try {
+                toolkit.registerMcpClient(new LoggingMcpClientWrapper(logSource, client)).block();
+                registered = true;
+            } finally {
+                if (!registered) {
+                    client.close();
+                }
+            }
             clients.add(client);
             recordRegistration(key);
             AppLogBuffer.info("AgentScopeMcpManager", "Burp MCP registered (shared): " + url);
@@ -290,22 +457,34 @@ public class AgentScopeMcpManager {
     public static McpClientWrapper registerCustomMcp(
             Toolkit toolkit, String serverName, String transportType,
             String urlOrCommand, List<String> args, Map<String, String> headers) {
-        return registerCustomMcp(toolkit, serverName, transportType, urlOrCommand, args, headers,
+        return registerCustomMcp(toolkit, serverName, transportType, urlOrCommand, args, headers, null,
                 serverName);
     }
 
     public static McpClientWrapper registerCustomMcp(
             Toolkit toolkit, String serverName, String transportType,
             String urlOrCommand, List<String> args, Map<String, String> headers, String logSource) {
+        return registerCustomMcp(toolkit, serverName, transportType, urlOrCommand, args, headers, null,
+                logSource);
+    }
+
+    public static McpClientWrapper registerCustomMcp(
+            Toolkit toolkit, String serverName, String transportType,
+            String urlOrCommand, List<String> args, Map<String, String> headers,
+            Map<String, String> env, String logSource) {
 
         if (serverName == null || serverName.trim().isEmpty()) return null;
         if (urlOrCommand == null || urlOrCommand.trim().isEmpty()) return null;
 
         try {
-            String key = transportType + "|" + urlOrCommand.trim();
-            // 共享客户端：同一端点只建一条连接，主动/被动 toolkit 复用
-            McpClientWrapper client = withExtensionClassLoader(() -> endpointClient(key, () ->
-                    buildTransportClient(serverName.trim(), urlOrCommand.trim(), transportType, args,
+            // 共享 key 必须包含 header 与 env 指纹：同 URL 不同 token / 不同环境变量的
+            // 两个配置不能复用同一条连接（stdio 下 env 变化必须重启子进程）
+            String key = transportType + "|" + urlOrCommand.trim() + "|"
+                    + (headers == null ? "" : Integer.toHexString(headers.hashCode()))
+                    + "|" + (env == null || env.isEmpty() ? "" : Integer.toHexString(env.hashCode()));
+            // 共享客户端：同一端点只建一条连接，主动/被动 toolkit 复用；多 agent 关闭时按引用计数释放
+            McpClientWrapper client = withExtensionClassLoader(() -> acquireSharedClient(key, () ->
+                    buildTransportClient(serverName.trim(), urlOrCommand.trim(), transportType, args, env,
                             builder -> {
                                 if (headers != null) {
                                     for (var entry : headers.entrySet()) {
@@ -316,7 +495,15 @@ public class AgentScopeMcpManager {
             if (client == null) {
                 throw new RuntimeException("MCP 客户端构建失败: " + serverName);
             }
-            toolkit.registerMcpClient(new LoggingMcpClientWrapper(logSource, client)).block();
+            boolean registered = false;
+            try {
+                toolkit.registerMcpClient(new LoggingMcpClientWrapper(logSource, client)).block();
+                registered = true;
+            } finally {
+                if (!registered) {
+                    client.close();
+                }
+            }
             recordRegistration(key);
             AppLogBuffer.info("AgentScopeMcpManager", "Custom MCP registered (shared): " + serverName + " (" + transportType + ")");
             DebugContext.log("AgentScopeMcpManager", "custom_mcp_registered", Map.of("server", serverName, "transport", String.valueOf(transportType)));
@@ -370,10 +557,12 @@ public class AgentScopeMcpManager {
         String urlOrCommand = url != null && !url.isEmpty() ? url
                 : (!command.isEmpty() ? command.get(0) : "");
         List<String> args = command.size() > 1 ? command.subList(1, command.size()) : List.of();
+        Map<String, String> headers = headersOf(config);
 
         try {
             McpClientWrapper client = withExtensionClassLoader(() ->
-                    buildTransportClient(config.getName(), urlOrCommand, transportType, args, null));
+                    buildTransportClient(config.getName(), urlOrCommand, transportType, args,
+                            builder -> headers.forEach(builder::header)));
             try {
                 if (client.isInitialized()) {
                     return "";

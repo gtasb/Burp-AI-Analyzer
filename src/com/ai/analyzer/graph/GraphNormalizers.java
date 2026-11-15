@@ -59,7 +59,8 @@ public final class GraphNormalizers {
             } catch (NumberFormatException ignored) {
             }
         }
-        String origin = scheme.toLowerCase() + "://" + (host.isEmpty() ? "unknown" : host) + ":" + port;
+        String origin = scheme.toLowerCase() + "://"
+                + (host.isEmpty() ? "unknown" : host.toLowerCase(java.util.Locale.ROOT)) + ":" + port;
         List<Param> params = new ArrayList<>();
         if (!query.isEmpty()) {
             for (String part : query.split("&")) {

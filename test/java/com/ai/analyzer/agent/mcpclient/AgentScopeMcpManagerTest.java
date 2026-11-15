@@ -163,5 +163,16 @@ class AgentScopeMcpManagerTest {
             assertThat(AgentScopeMcpManager.resolveTransportModes("http://127.0.0.1:9876", null))
                     .containsExactly("sse", "streamable");
         }
+
+        @Test
+        @DisplayName("HTTP 初始化超时：本机 5s，远程 8s")
+        void http_init_timeout() {
+            assertThat(AgentScopeMcpManager.initTimeoutFor("http://127.0.0.1:9876/").getSeconds())
+                    .isEqualTo(5);
+            assertThat(AgentScopeMcpManager.initTimeoutFor("http://localhost:3001/mcp").getSeconds())
+                    .isEqualTo(5);
+            assertThat(AgentScopeMcpManager.initTimeoutFor("https://mcp.example.com/mcp").getSeconds())
+                    .isEqualTo(8);
+        }
     }
 }

@@ -195,6 +195,86 @@ public class GraphTool {
         }
     }
 
+    @Tool(name = "graph_add_note", description =
+            "向图谱写入一条笔记/关键发现/给其他 Agent 的牵引指令。node_id 可选：提供时挂到该节点，"
+                    + "否则作为站点级笔记挂在 Origin 上。kind 建议 note/finding/instruction/hint；"
+                    + "instruction 表示人类或你要求后续分析必须执行的下一步。相同内容会自动去重。")
+    public String addNote(
+            @ToolParam(name = "content", description = "笔记正文（Markdown）") String content,
+            @ToolParam(name = "root", description = "目标 Origin（root id，如 https://target.com:443）；提供 node_id 时可留空", required = false) String root,
+            @ToolParam(name = "node_id", description = "可选：挂到该节点的数字 id", required = false) Long nodeId,
+            @ToolParam(name = "kind", description = "note / finding / instruction / hint，默认 note", required = false) String kind) {
+        try {
+            GraphStore.NoteResult r = store.addNote(root, nodeId, content, kind, defaultSourceAgent, "agent");
+            if (r.duplicate()) {
+                return "内容与已有笔记重复，已跳过。[note=" + r.nodeId() + ", v" + r.version() + "]";
+            }
+            return "已写入笔记 [note=" + r.nodeId() + ", v" + r.version() + "]";
+        } catch (Exception e) {
+            return "写入笔记失败: " + e.getMessage();
+        }
+    }
+
+    @Tool(name = "graph_get_notes", description =
+            "读取某 Origin 的笔记（人类牵引、其他 Agent 的发现与结论）。since_version 传 0 读全部，"
+                    + "传上次看到的 latest_version 只读增量。开始分析一个站点前建议先调用。")
+    public String getNotes(
+            @ToolParam(name = "root_id", description = "目标 Origin（root id）") String root,
+            @ToolParam(name = "since_version", description = "只返回版本号大于此值的笔记；0 表示全部", required = false) Integer sinceVersion) {
+        try {
+            int since = sinceVersion == null ? 0 : sinceVersion;
+            java.util.List<com.ai.analyzer.graph.GraphTypes.Node> notes = store.listNotes(root, since);
+            if (notes.isEmpty()) {
+                return "无笔记。root=" + root + ", since_version=" + since;
+            }
+            StringBuilder sb = new StringBuilder("笔记 root=").append(root)
+                    .append(", since_version=").append(since)
+                    .append(", 共 ").append(notes.size()).append(" 条：\n");
+            for (var n : notes) {
+                sb.append("\n--- [v").append(com.ai.analyzer.graph.GraphDatabase.noteVersion(n))
+                        .append(" · ").append(n.prop("kind"))
+                        .append(" · ").append(n.prop("author")).append("] ---\n")
+                        .append(n.prop("content")).append('\n');
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return "读取笔记失败: " + e.getMessage();
+        }
+    }
+
+    @Tool(name = "graph_assess_node", description =
+            "给某个节点写入『是否值得继续探索』的判断，会显示在图谱节点的详情面板中。"
+                    + "priority: high（值得优先深入）/ normal / low（价值有限）/ none（已确认死路）。"
+                    + "分析完一个接口或特征后调用；这是人类观察图谱时判断下一步方向的主要依据。")
+    public String assessNode(
+            @ToolParam(name = "node_id", description = "要评估的节点 id") long nodeId,
+            @ToolParam(name = "priority", description = "high / normal / low / none") String priority,
+            @ToolParam(name = "assessment", description = "一句话结论：为什么值得/不值得继续") String assessment,
+            @ToolParam(name = "next_step", description = "建议的下一步动作（具体到参数/请求）", required = false) String nextStep) {
+        try {
+            return store.assessNode(nodeId, priority, assessment, nextStep, defaultSourceAgent);
+        } catch (Exception e) {
+            return "记录评估失败: " + e.getMessage();
+        }
+    }
+
+    @Tool(name = "graph_record_analysis_fact", description =
+            "记录一次完成的主动分析/验证在接口上的事实锚点：写入 ANALYSIS_FACT 并用 COVERS 边锚定接口，"
+                    + "使该节点在覆盖图中显示为「已分析」。整理 agent 专用。")
+    public String recordAnalysisFact(
+            @ToolParam(name = "method", description = "HTTP 方法，如 GET/POST") String method,
+            @ToolParam(name = "url", description = "完整 URL（接口必须已存在于图谱）") String url,
+            @ToolParam(name = "summary", description = "本次分析结论摘要", required = false) String summary) {
+        try {
+            // 每次调用生成唯一 sid：fact 节点的去重键是 rootId|fact:<sid>，
+            // 用固定的 agent 名会让同一接口的所有分析共用一个节点，后续 summary 被静默丢弃
+            String sid = defaultSourceAgent + "-" + java.util.UUID.randomUUID();
+            return store.recordAnalysisFact(method, url, summary, sid);
+        } catch (Exception e) {
+            return "记录分析事实失败: " + e.getMessage();
+        }
+    }
+
     private static Set<EdgeType> parseTypes(String relationTypes) {
         if (relationTypes == null || relationTypes.isBlank()) {
             return null;

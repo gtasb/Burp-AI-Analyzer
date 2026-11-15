@@ -25,6 +25,18 @@ import java.util.Set;
 public class AgentScopeModelFactory {
 
     private static final Gson GSON = new Gson();
+    /**
+     * 模型 HTTP 调用重试：默认 3 次（2s 起步、30s 上限）在长会话里太容易放弃。
+     * 提高到 10 次并把退避稍微拉长；仍复用 AgentScope 的可重试错误判定，避免对 4xx 空转。
+     */
+    static final io.agentscope.core.model.ExecutionConfig MODEL_RETRY =
+            io.agentscope.core.model.ExecutionConfig.builder()
+                    .maxAttempts(10)
+                    .initialBackoff(java.time.Duration.ofSeconds(3))
+                    .maxBackoff(java.time.Duration.ofSeconds(60))
+                    .backoffMultiplier(2.0)
+                    .retryOn(io.agentscope.core.model.ExecutionConfig.MODEL_DEFAULTS.getRetryOn())
+                    .build();
     /** 已映射到 GenerateOptions 字段的键；其余自定义键原样放进 additionalBodyParams */
     private static final Set<String> KNOWN_PARAMS = Set.of(
             "temperature", "top_p", "topP", "top_k", "topK", "max_tokens", "maxTokens",
@@ -76,7 +88,8 @@ public class AgentScopeModelFactory {
         String modelName = isBlank(model) ? "qwen-max" : model.trim();
 
         GenerateOptions defaultOptions = applyCustomParameters(
-                GenerateOptions.builder().temperature(0.7), customParameters).build();
+                GenerateOptions.builder().temperature(0.7).executionConfig(MODEL_RETRY),
+                customParameters).build();
 
         return DashScopeChatModel.builder()
                 .apiKey(apiKey)
@@ -98,7 +111,8 @@ public class AgentScopeModelFactory {
         String modelName = isBlank(model) ? "gpt-3.5-turbo" : model.trim();
 
         GenerateOptions defaultOptions = applyCustomParameters(
-                GenerateOptions.builder().temperature(0.7), customParameters).build();
+                GenerateOptions.builder().temperature(0.7).executionConfig(MODEL_RETRY),
+                customParameters).build();
 
         OpenAIChatModel.Builder builder = OpenAIChatModel.builder()
                 .apiKey(apiKey)
@@ -135,7 +149,8 @@ public class AgentScopeModelFactory {
         String modelName = isBlank(model) ? "claude-sonnet-4-5-20250514" : model.trim();
 
         GenerateOptions defaultOptions = applyCustomParameters(
-                GenerateOptions.builder().temperature(0.7).maxTokens(4096), customParameters).build();
+                GenerateOptions.builder().temperature(0.7).maxTokens(4096).executionConfig(MODEL_RETRY),
+                customParameters).build();
 
         var builder = AnthropicChatModel.builder()
                 .apiKey(apiKey)
@@ -144,10 +159,26 @@ public class AgentScopeModelFactory {
                 .defaultOptions(defaultOptions);
 
         if (!isBlank(apiUrl)) {
-            builder.baseUrl(apiUrl.trim());
+            // 官方 SDK 自己会拼 /v1/messages；用户填 .../v1 时不能拼成 /v1/v1/messages
+            builder.baseUrl(normalizeAnthropicBaseUrl(apiUrl));
         }
 
         return builder.build();
+    }
+
+    /** 去掉用户误填的 /v1 或 /v1/messages 后缀（Anthropic SDK 会自行拼接）。 */
+    static String normalizeAnthropicBaseUrl(String url) {
+        String u = normalizeUrl(url, "https://api.anthropic.com");
+        while (u.endsWith("/")) {
+            u = u.substring(0, u.length() - 1);
+        }
+        if (u.endsWith("/v1/messages")) {
+            return u.substring(0, u.length() - "/v1/messages".length());
+        }
+        if (u.endsWith("/v1")) {
+            return u.substring(0, u.length() - "/v1".length());
+        }
+        return u;
     }
 
     // ========== 辅助 ==========

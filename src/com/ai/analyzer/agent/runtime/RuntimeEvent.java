@@ -140,6 +140,11 @@ public final class RuntimeEvent {
         return builder(RuntimeEventType.REPLY_END).text(fullText).build();
     }
 
+    /** 创建一个 {@link RuntimeEventType#INTERRUPTED} 事件（人类插话导致本轮提前收尾） */
+    public static RuntimeEvent interrupted(String text) {
+        return builder(RuntimeEventType.INTERRUPTED).text(text).build();
+    }
+
     /** 创建一个 {@link RuntimeEventType#ERROR} 事件 */
     public static RuntimeEvent error(Throwable error) {
         return builder(RuntimeEventType.ERROR).error(error).build();

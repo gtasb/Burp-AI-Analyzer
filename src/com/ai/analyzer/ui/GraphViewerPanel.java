@@ -7,7 +7,7 @@ import com.ai.analyzer.graph.GraphTypes.FactStatus;
 import com.ai.analyzer.graph.GraphTypes.Node;
 import com.ai.analyzer.graph.GraphTypes.NodeType;
 import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
 import javax.swing.*;
@@ -44,18 +44,22 @@ public class GraphViewerPanel extends JPanel {
 
     private static final int MAX_NODES = 500;
     private static final int MAX_EDGES = 2000;
-    private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
+    // 默认 Gson 会转义 <、>，避免笔记/节点名里的 </script> 破坏导出的内联脚本
+    private static final Gson GSON = new Gson();
 
     private final JComboBox<String> rootCombo = new JComboBox<>();
     private final JLabel statusLabel = new JLabel("就绪");
-    private final JTextArea detailArea = new JTextArea(4, 20);
     private final GraphCanvas canvas;
+    private final GraphSidebarPanel sidebar;
+    /** 图例面板可收起，节点多时可以省出左上区域 */
+    private boolean showLegend = true;
 
     private boolean updatingRoots;
     private int loadGeneration;
 
     public GraphViewerPanel() {
         this.canvas = new GraphCanvas();
+        this.sidebar = new GraphSidebarPanel(this::refreshCurrent);
 
         setLayout(new BorderLayout(8, 8));
         setBorder(UIStyles.panelBorder());
@@ -67,6 +71,25 @@ public class GraphViewerPanel extends JPanel {
         JButton exportButton = new JButton("导出 HTML");
         UIStyles.styleSecondary(exportButton);
         exportButton.addActionListener(e -> exportHtml());
+
+        JButton addNodeButton = new JButton("新增节点");
+        UIStyles.styleSecondary(addNodeButton);
+        addNodeButton.addActionListener(e -> openAddNodeDialog());
+
+        JButton legendButton = new JButton("图例");
+        UIStyles.styleSecondary(legendButton);
+        legendButton.addActionListener(e -> {
+            showLegend = !showLegend;
+            canvas.repaint();
+        });
+
+        JButton relayoutButton = new JButton("重新布局");
+        UIStyles.styleSecondary(relayoutButton);
+        relayoutButton.setToolTipText("按当前可见节点重新计算布局并复位缩放/平移");
+        relayoutButton.addActionListener(e -> {
+            canvas.relayoutAndReset();
+            statusLabel.setText("已重新布局");
+        });
 
         rootCombo.setPreferredSize(new Dimension(360, rootCombo.getPreferredSize().height));
         rootCombo.addActionListener(e -> {
@@ -80,26 +103,59 @@ public class GraphViewerPanel extends JPanel {
         top.add(rootCombo);
         top.add(refreshButton);
         top.add(exportButton);
+        top.add(addNodeButton);
+        top.add(relayoutButton);
+        top.add(legendButton);
         top.add(statusLabel);
 
-        detailArea.setEditable(false);
-        detailArea.setLineWrap(true);
-        detailArea.setWrapStyleWord(true);
-        UIStyles.setFont(detailArea, 12f, Font.PLAIN);
-        detailArea.setText("点击节点查看详情；虚线圈「…」表示折叠的参数组");
-        JScrollPane detailPane = new JScrollPane(detailArea);
-        detailPane.setPreferredSize(new Dimension(100, 92));
-        detailPane.setBorder(UIStyles.scrollBorder());
+        canvas.onNodeSelected = node -> {
+            sidebar.showNode(node);
+            sidebar.setCurrentNode(node);
+        };
+
+        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, canvas, sidebar);
+        split.setResizeWeight(0.72);
+        split.setDividerSize(7);
+        split.setContinuousLayout(true);
+        split.setBorder(null);
+        split.setDividerLocation(0.72);
+        // 侧栏默认占约 480px，而不是新建窗口时的最小宽度
+        SwingUtilities.invokeLater(() -> {
+            int w = getWidth();
+            if (w > 0) split.setDividerLocation(Math.max(420, w - 480));
+        });
 
         add(top, BorderLayout.NORTH);
-        add(canvas, BorderLayout.CENTER);
-        add(detailPane, BorderLayout.SOUTH);
+        add(split, BorderLayout.CENTER);
 
         addHierarchyListener(e -> {
             if ((e.getChangeFlags() & HierarchyEvent.SHOWING_CHANGED) != 0 && isShowing()) {
                 refreshRoots();
             }
         });
+    }
+
+    private void refreshCurrent() {
+        Object sel = rootCombo.getSelectedItem();
+        if (sel != null) {
+            loadGraph(sel.toString(), sidebar.selectedNodeId());
+        }
+    }
+
+    private void openAddNodeDialog() {
+        String rootId = canvas.data == null ? null : canvas.data.rootId();
+        if (rootId == null || rootId.isBlank()) {
+            statusLabel.setText("请先选择一个站点");
+            return;
+        }
+        GraphNodeDialog dialog = new GraphNodeDialog(SwingUtilities.getWindowAncestor(this), rootId,
+                canvas.selected, canvas.nodeById);
+        dialog.setVisible(true);
+        Node created = dialog.createdNode();
+        if (created != null) {
+            statusLabel.setText("已新增节点: " + created.name());
+            loadGraph(rootId, created.id());
+        }
     }
 
     private void refreshRoots() {
@@ -141,6 +197,10 @@ public class GraphViewerPanel extends JPanel {
     }
 
     private void loadGraph(String rootId) {
+        loadGraph(rootId, 0);
+    }
+
+    private void loadGraph(String rootId, long selectNodeId) {
         if (rootId == null || rootId.isBlank()) return;
         final int generation = ++loadGeneration;
         statusLabel.setText("加载 " + rootId + " …");
@@ -150,7 +210,8 @@ public class GraphViewerPanel extends JPanel {
                 GraphStore store = GraphStore.getInstance();
                 List<Node> nodes = store.listNodes(rootId, MAX_NODES);
                 List<Edge> edges = store.listEdges(rootId, MAX_EDGES);
-                return new GraphData(rootId, nodes, edges);
+                List<Node> notes = store.listNotes(rootId, 0);
+                return new GraphData(rootId, nodes, edges, notes);
             }
 
             @Override
@@ -158,15 +219,19 @@ public class GraphViewerPanel extends JPanel {
                 if (generation != loadGeneration) return;
                 try {
                     GraphData data = get();
+                    sidebar.setData(data);
                     if (data.nodes().isEmpty()) {
                         canvas.showEmpty("该站点暂无图谱节点");
-                        statusLabel.setText("节点 0 / 边 0");
+                        statusLabel.setText("节点 0 / 边 0 / 笔记 " + data.notes().size());
                         return;
                     }
-                    canvas.setData(data);
+                    canvas.setData(data, selectNodeId);
                     statusLabel.setText("范围内 " + canvas.scopeCount() + " · 已测 " + canvas.coveredCount()
-                            + " · 节点 " + data.nodes().size() + " / 边 " + data.edges().size());
-                    detailArea.setText("点击节点查看详情；虚线圈「…」表示折叠的参数组");
+                            + " · 节点 " + data.nodes().size() + " / 边 " + data.edges().size()
+                            + " · 笔记 " + data.notes().size());
+                    if (selectNodeId > 0) {
+                        sidebar.showNode(canvas.nodeById.get(selectNodeId));
+                    }
                 } catch (Exception ex) {
                     statusLabel.setText("加载失败: " + rootMessage(ex));
                 }
@@ -220,6 +285,8 @@ public class GraphViewerPanel extends JPanel {
             o.addProperty("source", n.sourceType() + "/" + n.sourceId());
             o.addProperty("updated", n.updatedAt());
             o.addProperty("properties", n.properties() != null ? n.properties().toString() : "");
+            o.addProperty("assess", assessmentText(n));
+            o.add("notes", notesFor(data, n.id()));
             nodeJson.add(String.valueOf(n.id()), o);
         }
 
@@ -241,6 +308,10 @@ public class GraphViewerPanel extends JPanel {
                 .append(".lg{display:flex;align-items:center;gap:4px}")
                 .append(".dot{width:10px;height:10px;border-radius:50%;display:inline-block}")
                 .append(".hint{color:#9CA3AF;font-size:11px;line-height:1.6;margin-top:8px}")
+                .append(".assess{background:#F1F5F9;border-radius:8px;padding:8px 10px;margin:8px 0;font-size:12px}")
+                .append(".muted{color:#9CA3AF;font-size:12px}")
+                .append("#side ul{margin:6px 0;padding-left:18px;font-size:12px;line-height:1.5}")
+                .append("#side .note{border-top:1px solid #E5E7EB;padding:6px 0;font-size:12px}")
                 .append("</style></head><body>");
 
         sb.append("<div id=\"stage\"><svg id=\"graph\" viewBox=\"0 0 ").append(width).append(' ').append(height).append("\">")
@@ -321,19 +392,67 @@ public class GraphViewerPanel extends JPanel {
                 .append(html(data.rootId())).append("</h3>")
                 .append("<div style=\"color:#6B7280;font-size:12px\">范围内 ").append(scope)
                 .append(" · 已测 ").append(coveredCount).append("</div>")
-                .append("<div id=\"detail\" style=\"margin-top:14px;color:#6B7280;font-size:12px\">点击节点查看详情</div>");
+                .append("<div id=\"detail\" style=\"margin-top:14px;color:#6B7280;font-size:12px\">点击节点查看详情</div>")
+                .append(siteNotesHtml(data));
 
         sb.append("<script>const NODES=").append(GSON.toJson(nodeJson)).append(";")
                 .append("document.querySelectorAll('.node').forEach(g=>{g.addEventListener('click',()=>{")
                 .append("const n=NODES[g.dataset.id];if(!n)return;const d=document.getElementById('detail');")
-                .append("d.innerHTML='<b>'+n.type+'</b> '+esc(n.name)+'<br>status='+n.status+'  confidence='+n.confidence")
-                .append("+'<br>canonical: '+esc(n.canonical)+'<br>source: '+esc(n.source)+'<br>updated: '+esc(n.updated)")
-                .append("+'<br>properties: '+esc(n.properties);});});")
+                .append("const a=n.assess?'<div class=\"assess\">'+esc(n.assess)+'</div>':'<div class=\"muted\">Agent 尚未评估</div>';")
+                .append("const notes=(n.notes||[]);const nl=notes.length?'<b>笔记</b><ul>'+notes.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>':'';")
+                .append("d.innerHTML='<b>'+esc(n.type)+'</b> '+esc(n.name)+a+nl")
+                .append("+'<div class=\"muted\">status='+n.status+'  confidence='+n.confidence")
+                .append("+'<br>canonical: '+esc(n.canonical)+'<br>source: '+esc(n.source)+'<br>updated: '+esc(n.updated)+'</div>';});});")
                 .append("function esc(s){return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}")
                 .append("const svg=document.getElementById('graph');let vx=0,vy=0,vw=").append(width).append(",vh=").append(height).append(";")
                 .append("svg.addEventListener('wheel',e=>{e.preventDefault();const k=e.deltaY>0?1.1:0.9;")
                 .append("vw*=k;vh*=k;svg.setAttribute('viewBox',vx+' '+vy+' '+vw+' '+vh);},{passive:false});")
                 .append("</script></div></body></html>");
+        return sb.toString();
+    }
+
+    /** 节点评估的单行文本（侧栏与导出共用）。空串表示尚未评估。 */
+    static String assessmentText(Node n) {
+        Object p = n.prop("assess_priority");
+        if (p == null || String.valueOf(p).isBlank()) return "";
+        StringBuilder sb = new StringBuilder("优先 ").append(p);
+        Object summary = n.prop("assess_summary");
+        if (summary != null && !String.valueOf(summary).isBlank()) {
+            sb.append(" · ").append(summary);
+        }
+        Object next = n.prop("assess_next_step");
+        if (next != null && !String.valueOf(next).isBlank()) {
+            sb.append("\n下一步: ").append(next);
+        }
+        return sb.toString();
+    }
+
+    private static JsonArray notesFor(GraphData data, long nodeId) {
+        JsonArray arr = new JsonArray();
+        for (Node note : data.notes()) {
+            Object t = note.prop("target");
+            long target = t instanceof Number num ? (long) num.doubleValue() : 0;
+            if (target != nodeId) continue;
+            arr.add("[" + note.prop("kind") + " · " + note.prop("author") + "] " + note.prop("content"));
+        }
+        return arr;
+    }
+
+    private static String siteNotesHtml(GraphData data) {
+        StringBuilder sb = new StringBuilder();
+        int site = 0;
+        for (Node n : data.notes()) {
+            Object t = n.prop("target");
+            long target = t instanceof Number num ? (long) num.doubleValue() : 0;
+            if (target != 0) continue;
+            if (site == 0) sb.append("<h4 style=\"margin:16px 0 4px\">站点笔记</h4>");
+            sb.append("<div class=\"note\"><span class=\"muted\">[")
+                    .append(html(String.valueOf(n.prop("kind")))).append(" · ")
+                    .append(html(String.valueOf(n.prop("author")))).append("]</span><br>")
+                    .append(html(String.valueOf(n.prop("content"))).replace("\n", "<br>"))
+                    .append("</div>");
+            site++;
+        }
         return sb.toString();
     }
 
@@ -420,10 +539,11 @@ public class GraphViewerPanel extends JPanel {
             case VULN_CLASS -> new Color(239, 68, 68);
             case CANDIDATE -> new Color(244, 63, 94);
             case ANALYSIS_FACT -> new Color(16, 185, 129);
+            case NOTE -> new Color(120, 130, 145);
         };
     }
 
-    private static String typeLabel(NodeType type) {
+    static String typeLabel(NodeType type) {
         return switch (type) {
             case ORIGIN -> "根域名";
             case INTERFACE -> "接口";
@@ -443,6 +563,7 @@ public class GraphViewerPanel extends JPanel {
             case VULN_CLASS -> "漏洞类";
             case CANDIDATE -> "候选漏洞";
             case ANALYSIS_FACT -> "分析事实";
+            case NOTE -> "笔记";
         };
     }
 
@@ -474,23 +595,7 @@ public class GraphViewerPanel extends JPanel {
         return msg == null || msg.isBlank() ? cause.getClass().getSimpleName() : msg;
     }
 
-    private static String describe(Node n) {
-        StringBuilder sb = new StringBuilder();
-        sb.append(typeLabel(n.type())).append("  ").append(n.name()).append('\n');
-        sb.append("id=").append(n.id())
-                .append("  status=").append(n.status())
-                .append("  confidence=").append(String.format(Locale.ROOT, "%.2f", n.confidence())).append('\n');
-        sb.append("canonical: ").append(n.canonicalKey()).append('\n');
-        sb.append("source: ").append(n.sourceType()).append('/').append(n.sourceId()).append('\n');
-        sb.append("updated: ").append(n.updatedAt());
-        if (n.properties() != null && !n.properties().isEmpty()) {
-            String props = n.properties().toString();
-            sb.append("\nproperties: ").append(props.length() > 300 ? props.substring(0, 300) + "…" : props);
-        }
-        return sb.toString();
-    }
-
-    private record GraphData(String rootId, List<Node> nodes, List<Edge> edges) {
+    static record GraphData(String rootId, List<Node> nodes, List<Edge> edges, List<Node> notes) {
     }
 
     // ================= Canvas =================
@@ -508,6 +613,9 @@ public class GraphViewerPanel extends JPanel {
         private Set<Long> coveredIds = Set.of();
         private Node selected;
         private long foldSeq = -1;
+        /** 目标节点 id → 笔记条数（仅用于画角标） */
+        private Map<Long, Integer> noteCounts = Map.of();
+        java.util.function.Consumer<Node> onNodeSelected;
 
         private static final int DEFAULT_FOLD = 12;
 
@@ -517,6 +625,28 @@ public class GraphViewerPanel extends JPanel {
         private Point dragStart;
         private Node draggingNode;
         private boolean panning;
+
+        // 画笔级常量复用：paintComponent 每帧可能跑几十次，new Font/BasicStroke 会
+        // 制造大量短命对象、反复做字体度量，导致拖拽明显卡顿
+        private static final Font FONT_LABEL = new Font("Microsoft YaHei", Font.PLAIN, 11);
+        private static final Font FONT_FOLD = new Font("Microsoft YaHei", Font.BOLD, 12);
+        private static final Font FONT_EMPTY = new Font("Microsoft YaHei", Font.PLAIN, 14);
+        private static final Font FONT_LEGEND_TITLE = new Font("Microsoft YaHei", Font.BOLD, 12);
+        private static final Font FONT_LEGEND_HINT = new Font("Microsoft YaHei", Font.PLAIN, 10);
+        private static final Stroke STROKE_THIN = new BasicStroke(1f);
+        private static final Stroke STROKE_EDGE_DASH = new BasicStroke(1f,
+                BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1f, new float[]{4f, 4f}, 0f);
+        private static final Stroke STROKE_NODE = new BasicStroke(1.5f);
+        private static final Stroke STROKE_NODE_DASH = new BasicStroke(1.5f,
+                BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1f, new float[]{4f, 3f}, 0f);
+        private static final Stroke STROKE_SELECT = new BasicStroke(3f);
+        private static final Stroke STROKE_BADGE = new BasicStroke(1.6f);
+        private static final Stroke STROKE_FOLD = new BasicStroke(1.4f,
+                BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1f, new float[]{3f, 3f}, 0f);
+        private static final Stroke STROKE_ICON = new BasicStroke(1.7f,
+                BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND);
+        private static final Stroke STROKE_LEGEND_DASH = new BasicStroke(1.2f,
+                BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1f, new float[]{3f, 2f}, 0f);
 
         private static final int NODE_R = 17;
         private static final int ORIGIN_R = 21;
@@ -553,7 +683,9 @@ public class GraphViewerPanel extends JPanel {
                     }
                     selected = node;
                     repaint();
-                    detailArea.setText(node == null ? "点击节点查看详情" : describe(node));
+                    if (onNodeSelected != null) {
+                        onNodeSelected.accept(node);
+                    }
                 }
             });
             addMouseMotionListener(new MouseMotionAdapter() {
@@ -568,6 +700,7 @@ public class GraphViewerPanel extends JPanel {
                         if (p != null) {
                             double s = scale();
                             world.put(draggingNode.id(), new Point2D.Double(p.x + dx / s, p.y + dy / s));
+                            screenCache.remove(draggingNode.id());
                             repaint();
                         }
                     } else if (panning) {
@@ -593,12 +726,14 @@ public class GraphViewerPanel extends JPanel {
             visibleNodes = List.of();
             visibleEdges = List.of();
             selected = null;
+            noteCounts = Map.of();
+            invalidateScreenCache();
             repaint();
         }
 
         private String emptyText = "选择站点后加载图谱";
 
-        void setData(GraphData data) {
+        void setData(GraphData data, long selectNodeId) {
             this.data = data;
             this.expandedGroups.clear();
             this.zoom = 1.0;
@@ -607,9 +742,34 @@ public class GraphViewerPanel extends JPanel {
             this.selected = null;
             buildContainment(data);
             this.coveredIds = computeCovered(data);
+            this.noteCounts = countNotes(data);
             rebuildVisible();
+            // 节点多时默认放大画布（可平移/缩放），否则几百个节点会挤成一团
+            this.zoom = autoZoom();
             relayout();
+            if (selectNodeId > 0) {
+                selected = nodeById.get(selectNodeId);
+            }
             repaint();
+        }
+
+        /** 根据可见节点数给出默认缩放：25 个以内 1.0，之后按 √n 放大，最多 4 倍。 */
+        private double autoZoom() {
+            int n = visibleNodes.size();
+            if (n <= 25) return 1.0;
+            return Math.min(4.0, Math.sqrt(n / 25.0));
+        }
+
+        private static Map<Long, Integer> countNotes(GraphData data) {
+            Map<Long, Integer> counts = new HashMap<>();
+            for (Node n : data.notes()) {
+                Object t = n.prop("target");
+                long target = t instanceof Number num ? (long) num.doubleValue() : 0;
+                if (target > 0) {
+                    counts.merge(target, 1, Integer::sum);
+                }
+            }
+            return counts;
         }
 
         int scopeCount() {
@@ -635,7 +795,13 @@ public class GraphViewerPanel extends JPanel {
         private static boolean isDetailNode(Node n) {
             return n.type() == NodeType.PARAMETER
                     || n.type() == NodeType.EVIDENCE
-                    || n.type() == NodeType.ANALYSIS_FACT;
+                    || n.type() == NodeType.ANALYSIS_FACT
+                    || n.type() == NodeType.NOTE;
+        }
+
+        /** 不直接绘制在画布上的类型：分析事实只做锚点，笔记只在侧栏展示。 */
+        private static boolean isCanvasHidden(NodeType type) {
+            return type == NodeType.ANALYSIS_FACT || type == NodeType.NOTE;
         }
 
         private static boolean isFold(Node n) {
@@ -653,10 +819,17 @@ public class GraphViewerPanel extends JPanel {
                 if (e.sourceNodeId() == e.targetNodeId()) continue;
                 int p = parentPriority(e.relationType());
                 if (p < 0) continue;
-                Integer cur = prio.get(e.sourceNodeId());
+                // 边的方向不统一：HAS_*/LOADS/USES_* 是 parent→child，
+                // BELONGS_TO/INDICATES/SUPPORTS/... 是 child→parent。
+                // 以前一律按 source=child 处理，导致 Origin 变成接口的子节点、
+                // 大量节点失去父子边后堆在画布中央。
+                long parentId = isParentFirst(e.relationType()) ? e.sourceNodeId() : e.targetNodeId();
+                long childId = isParentFirst(e.relationType()) ? e.targetNodeId() : e.sourceNodeId();
+                if (!byId.containsKey(parentId) || !byId.containsKey(childId)) continue;
+                Integer cur = prio.get(childId);
                 if (cur == null || p < cur) {
-                    parent.put(e.sourceNodeId(), e.targetNodeId());
-                    prio.put(e.sourceNodeId(), p);
+                    parent.put(childId, parentId);
+                    prio.put(childId, p);
                 }
             }
             Map<Long, List<Long>> children = new HashMap<>();
@@ -666,6 +839,15 @@ public class GraphViewerPanel extends JPanel {
             nodeById = byId;
             parentOf = parent;
             childrenOf = children;
+        }
+
+        /** true 表示边的 source 是父节点（资产包含关系），false 表示 source 是子节点（归属/证据关系）。 */
+        private static boolean isParentFirst(EdgeType t) {
+            return switch (t) {
+                case HAS_INTERFACE, HAS_PARAMETER, HAS_VERSION, LOADS, USES_TECHNOLOGY,
+                        CONTAINS, EXPOSES, RESOLVES_TO, HOSTS, RUNS_ON, AFFECTED_BY -> true;
+                default -> false;
+            };
         }
 
         private static int parentPriority(EdgeType t) {
@@ -711,7 +893,7 @@ public class GraphViewerPanel extends JPanel {
 
         private int foldLimit(NodeType type) {
             return switch (type) {
-                case PARAMETER, ANALYSIS_FACT -> 0;
+                case PARAMETER, ANALYSIS_FACT, NOTE -> 0;
                 case EVIDENCE -> 2;
                 case RESOURCE -> 6;
                 default -> DEFAULT_FOLD;
@@ -732,10 +914,10 @@ public class GraphViewerPanel extends JPanel {
             java.util.ArrayDeque<Long> queue = new java.util.ArrayDeque<>();
 
             for (Node n : data.nodes()) {
-                if (n.type() == NodeType.ANALYSIS_FACT) continue;
+                if (isCanvasHidden(n.type())) continue;
                 Long parent = parentOf.get(n.id());
                 Node p = parent == null ? null : nodeById.get(parent);
-                if (p == null || p.type() == NodeType.ANALYSIS_FACT) {
+                if (p == null || isCanvasHidden(p.type())) {
                     handled.add(n.id());
                     if (visible.add(n.id())) {
                         out.add(n);
@@ -750,7 +932,7 @@ public class GraphViewerPanel extends JPanel {
                 Map<NodeType, List<Long>> groups = new java.util.LinkedHashMap<>();
                 for (Long kid : kids) {
                     Node kn = nodeById.get(kid);
-                    if (kn == null || kn.type() == NodeType.ANALYSIS_FACT) continue;
+                    if (kn == null || isCanvasHidden(kn.type())) continue;
                     handled.add(kid);
                     groups.computeIfAbsent(kn.type(), k -> new ArrayList<>()).add(kid);
                 }
@@ -792,7 +974,7 @@ public class GraphViewerPanel extends JPanel {
             }
             // 兜底：完全没有任何父子边的孤立节点也展示出来（被折叠隐藏的节点不算）
             for (Node n : data.nodes()) {
-                if (n.type() == NodeType.ANALYSIS_FACT) continue;
+                if (isCanvasHidden(n.type())) continue;
                 if (!handled.contains(n.id()) && visible.add(n.id())) out.add(n);
             }
             Set<Long> visibleIds = new HashSet<>();
@@ -809,6 +991,17 @@ public class GraphViewerPanel extends JPanel {
 
         private void relayout() {
             world = ForceLayout.layout(visibleNodes, visibleEdges);
+            invalidateScreenCache();
+        }
+
+        /** 手动重新布局：复位缩放与平移，避免上次拖动后看起来仍然挤在一起。 */
+        void relayoutAndReset() {
+            if (data == null) return;
+            zoom = autoZoom();
+            panX = 0;
+            panY = 0;
+            relayout();
+            repaint();
         }
 
         private double baseScale() {
@@ -819,10 +1012,49 @@ public class GraphViewerPanel extends JPanel {
             return baseScale() * zoom;
         }
 
-        private Point2D.Double toScreen(double wx, double wy) {
+        // 屏幕坐标缓存：拖拽时 world 只对一个节点变化，不需要每个节点每帧都重算
+        private final Map<Long, Point2D.Double> screenCache = new HashMap<>();
+        private int cachedW = -1;
+        private int cachedH = -1;
+        private double cachedZoom = -1;
+        private double cachedPanX = Double.NaN;
+        private double cachedPanY = Double.NaN;
+
+        private void invalidateScreenCache() {
+            cachedW = -1;
+            screenCache.clear();
+        }
+
+        private Point2D.Double toScreen(Node n) {
+            int w = getWidth();
+            int h = getHeight();
+            if (w != cachedW || h != cachedH || zoom != cachedZoom || panX != cachedPanX || panY != cachedPanY) {
+                cachedW = w;
+                cachedH = h;
+                cachedZoom = zoom;
+                cachedPanX = panX;
+                cachedPanY = panY;
+                screenCache.clear();
+            }
+            Point2D.Double p = screenCache.get(n.id());
+            if (p != null) return p;
+            Point2D.Double world = this.world.get(n.id());
+            if (world == null) return null;
             double s = scale();
-            return new Point2D.Double(getWidth() / 2.0 + wx * s + panX,
-                    getHeight() / 2.0 + wy * s + panY);
+            p = new Point2D.Double(w / 2.0 + world.x * s + panX, h / 2.0 + world.y * s + panY);
+            screenCache.put(n.id(), p);
+            return p;
+        }
+
+        /** 折叠圈节点（id 为负）不在 nodeById 中，这里做一次兜底查找。 */
+        private Point2D.Double toScreenById(long nodeId) {
+            Node n = nodeById.get(nodeId);
+            if (n != null) return toScreen(n);
+            if (nodeId < 0) {
+                for (Node fold : visibleNodes) {
+                    if (fold.id() == nodeId) return toScreen(fold);
+                }
+            }            return null;
         }
 
         private int radiusOf(Node n) {
@@ -833,9 +1065,8 @@ public class GraphViewerPanel extends JPanel {
             Node best = null;
             double bestDist = Double.MAX_VALUE;
             for (Node n : visibleNodes) {
-                Point2D.Double p = world.get(n.id());
-                if (p == null) continue;
-                Point2D.Double s = toScreen(p.x, p.y);
+                Point2D.Double s = toScreen(n);
+                if (s == null) continue;
                 double d = Math.hypot(s.x - mx, s.y - my);
                 if (d <= radiusOf(n) + 3 && d < bestDist) {
                     bestDist = d;
@@ -846,7 +1077,7 @@ public class GraphViewerPanel extends JPanel {
         }
 
         private boolean isOverLegend(int mx, int my) {
-            return mx >= 12 && mx <= 292 && my >= 12 && my <= 210;
+            return showLegend && mx >= 12 && mx <= 292 && my >= 12 && my <= 210;
         }
 
         @Override
@@ -871,34 +1102,26 @@ public class GraphViewerPanel extends JPanel {
 
                 if (data == null || visibleNodes.isEmpty()) {
                     g.setColor(untestedIcon);
-                    g.setFont(new Font("Microsoft YaHei", Font.PLAIN, 14));
+                    g.setFont(FONT_EMPTY);
                     drawCenteredLines(g, emptyText, canvasBg);
                     return;
                 }
 
                 for (Edge e : visibleEdges) {
-                    Point2D.Double a = world.get(e.sourceNodeId());
-                    Point2D.Double b = world.get(e.targetNodeId());
-                    if (a == null || b == null) continue;
-                    Point2D.Double sa = toScreen(a.x, a.y);
-                    Point2D.Double sb = toScreen(b.x, b.y);
+                    Point2D.Double sa = toScreenById(e.sourceNodeId());
+                    Point2D.Double sb = toScreenById(e.targetNodeId());
+                    if (sa == null || sb == null) continue;
                     boolean inferred = e.status() == FactStatus.INFERRED
                             || e.status() == FactStatus.DERIVED
                             || e.status() == FactStatus.REJECTED;
                     g.setColor(inferred ? new Color(0xC9, 0xA4, 0x5C) : edgeColor);
-                    if (inferred) {
-                        g.setStroke(new BasicStroke(1f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND,
-                                1f, new float[]{4f, 4f}, 0f));
-                    } else {
-                        g.setStroke(new BasicStroke(1f));
-                    }
+                    g.setStroke(inferred ? STROKE_EDGE_DASH : STROKE_THIN);
                     g.draw(new Line2D.Double(sa, sb));
                 }
 
                 for (Node n : visibleNodes) {
-                    Point2D.Double p = world.get(n.id());
-                    if (p == null) continue;
-                    Point2D.Double s = toScreen(p.x, p.y);
+                    Point2D.Double s = toScreen(n);
+                    if (s == null) continue;
                     if (isFold(n)) {
                         drawFoldNode(g, n, s, pillBg, untestedStroke, fg);
                         continue;
@@ -913,26 +1136,21 @@ public class GraphViewerPanel extends JPanel {
 
                     g.setColor(fill);
                     g.fillOval((int) (s.x - r), (int) (s.y - r), r * 2, r * 2);
-                    if (inferred) {
-                        g.setStroke(new BasicStroke(1.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND,
-                                1f, new float[]{4f, 3f}, 0f));
-                    } else {
-                        g.setStroke(new BasicStroke(1.5f));
-                    }
+                    g.setStroke(inferred ? STROKE_NODE_DASH : STROKE_NODE);
                     g.setColor(stroke);
                     g.drawOval((int) (s.x - r), (int) (s.y - r), r * 2, r * 2);
 
                     if (selected != null && selected.id() == n.id()) {
                         g.setColor(UIStyles.ACCENT);
-                        g.setStroke(new BasicStroke(3f));
+                        g.setStroke(STROKE_SELECT);
                         g.drawOval((int) (s.x - r - 4), (int) (s.y - r - 4), (r + 4) * 2, (r + 4) * 2);
                     }
 
                     drawIcon(g, n.type(), s.x, s.y, cov ? Color.WHITE : untestedIcon);
+                    drawBadges(g, n, s, r);
 
                     String label = nodeLabel(n);
-                    Font font = new Font("Microsoft YaHei", Font.PLAIN, 11);
-                    g.setFont(font);
+                    g.setFont(FONT_LABEL);
                     FontMetrics fm = g.getFontMetrics();
                     int tw = fm.stringWidth(label);
                     int lx = (int) (s.x - tw / 2.0 - 7);
@@ -952,24 +1170,39 @@ public class GraphViewerPanel extends JPanel {
             }
         }
 
+        /** 节点角标：实心 = 评估为高优先级；空心 = 有笔记。 */
+        private void drawBadges(Graphics2D g, Node n, Point2D.Double s, int r) {
+            boolean high = "high".equals(String.valueOf(n.prop("assess_priority")));
+            boolean hasNotes = noteCounts.getOrDefault(n.id(), 0) > 0;
+            if (!high && !hasNotes) return;
+            int bx = (int) (s.x + r * 0.72);
+            int by = (int) (s.y - r * 0.72);
+            g.setColor(UIStyles.ACCENT);
+            if (high) {
+                g.fillOval(bx - 4, by - 4, 8, 8);
+            } else {
+                g.setStroke(STROKE_BADGE);
+                g.drawOval(bx - 4, by - 4, 8, 8);
+            }
+        }
+
         private void drawFoldNode(Graphics2D g, Node n, Point2D.Double s,
                                   Color pillBg, Color stroke, Color fg) {
             int r = 13;
             g.setColor(pillBg);
             g.fillOval((int) (s.x - r), (int) (s.y - r), r * 2, r * 2);
             g.setColor(stroke);
-            g.setStroke(new BasicStroke(1.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND,
-                    1f, new float[]{3f, 3f}, 0f));
+            g.setStroke(STROKE_FOLD);
             g.drawOval((int) (s.x - r), (int) (s.y - r), r * 2, r * 2);
-            g.setStroke(new BasicStroke(1f));
+            g.setStroke(STROKE_THIN);
             g.setColor(fg);
-            g.setFont(new Font("Microsoft YaHei", Font.BOLD, 12));
+            g.setFont(FONT_FOLD);
             FontMetrics fm = g.getFontMetrics();
             g.drawString("…", (int) s.x - fm.stringWidth("…") / 2, (int) s.y + fm.getAscent() / 2 - 1);
 
             int count = n.prop("count") instanceof Number num ? num.intValue() : 0;
             String label = "还有 " + count + " 个" + typeLabel(n.type());
-            g.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
+            g.setFont(FONT_LABEL);
             fm = g.getFontMetrics();
             int tw = fm.stringWidth(label);
             int lx = (int) (s.x - tw / 2.0 - 7);
@@ -985,7 +1218,7 @@ public class GraphViewerPanel extends JPanel {
 
         private void drawIcon(Graphics2D g, NodeType type, double x, double y, Color color) {
             g.setColor(color);
-            g.setStroke(new BasicStroke(1.7f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g.setStroke(STROKE_ICON);
             switch (type) {
                 case ORIGIN -> {
                     g.drawOval((int) x - 8, (int) y - 8, 16, 16);
@@ -1082,6 +1315,7 @@ public class GraphViewerPanel extends JPanel {
         }
 
         private void drawLegend(Graphics2D g, Color canvasBg, Color fg, Color pillBg, boolean dark) {
+            if (!showLegend) return;
             int x = 12, y = 12, w = 280, h = 196;
             g.setColor(new Color(0, 0, 0, dark ? 70 : 18));
             g.fillRoundRect(x + 1, y + 2, w, h, 12, 12);
@@ -1090,14 +1324,14 @@ public class GraphViewerPanel extends JPanel {
             g.setColor(dark ? new Color(0x3A, 0x3F, 0x46) : new Color(0xE5, 0xE7, 0xEB));
             g.drawRoundRect(x, y, w, h, 12, 12);
 
-            g.setFont(new Font("Microsoft YaHei", Font.BOLD, 12));
+            g.setFont(FONT_LEGEND_TITLE);
             g.setColor(fg);
             g.drawString("范围内 " + scopeCount() + " · 已分析 " + coveredCount(), x + 12, y + 20);
 
             NodeType[] types = {NodeType.ORIGIN, NodeType.INTERFACE, NodeType.RESOURCE,
                     NodeType.TECHNOLOGY, NodeType.FEATURE, NodeType.BACKEND_HYPOTHESIS,
                     NodeType.VULN_CLASS, NodeType.PARAMETER};
-            g.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
+            g.setFont(FONT_LABEL);
             int rowY = y + 40;
             for (int i = 0; i < types.length; i++) {
                 int col = i % 2;
@@ -1124,15 +1358,14 @@ public class GraphViewerPanel extends JPanel {
             g.setColor(dark ? new Color(0x2B, 0x2F, 0x36) : Color.WHITE);
             g.fillOval(x + 84, sy + 11, 9, 9);
             g.setColor(new Color(0x9C, 0xA3, 0xAF));
-            g.setStroke(new BasicStroke(1.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND,
-                    1f, new float[]{3f, 2f}, 0f));
+            g.setStroke(STROKE_LEGEND_DASH);
             g.drawOval(x + 84, sy + 11, 9, 9);
-            g.setStroke(new BasicStroke(1f));
+            g.setStroke(STROKE_THIN);
             g.setColor(fg);
             g.drawString("推测", x + 98, sy + 19);
 
             g.setColor(dark ? new Color(0x8B, 0x92, 0x9B) : new Color(0x9C, 0xA3, 0xAF));
-            g.setFont(new Font("Microsoft YaHei", Font.PLAIN, 10));
+            g.setFont(FONT_LEGEND_HINT);
             g.drawString("力导向布局，可拖拽节点、滚轮缩放；", x + 12, sy + 40);
             g.drawString("虚线圈「…」是被折叠的同类节点，点开可展开。", x + 12, sy + 56);
         }
@@ -1246,6 +1479,50 @@ public class GraphViewerPanel extends JPanel {
             double cy = (minY + maxY) / 2;
             double span = Math.max(maxX - minX, maxY - minY);
             double norm = span < 1e-6 ? 1 : 2.0 / span;
+            for (int i = 0; i < n; i++) {
+                x[i] = (x[i] - cx) * norm;
+                y[i] = (y[i] - cy) * norm;
+            }
+
+            // 分离修正：力导向在节点多/连接密时仍可能挤在中心。
+            // 在归一化坐标里强制最小间距（约为 1.6/√n），避免标签完全重叠。
+            double minDist = Math.min(0.55, 1.8 / Math.sqrt(n));
+            for (int pass = 0; pass < 40; pass++) {
+                boolean moved = false;
+                for (int i = 0; i < n; i++) {
+                    for (int j = i + 1; j < n; j++) {
+                        double ddx = x[j] - x[i];
+                        double ddy = y[j] - y[i];
+                        double dist = Math.hypot(ddx, ddy);
+                        if (dist >= minDist) continue;
+                        if (dist < 1e-4) {
+                            ddx = 0.01 * (i % 3 - 1);
+                            ddy = 0.01 * (j % 3 - 1);
+                            dist = Math.hypot(ddx, ddy);
+                        }
+                        double push = (minDist - dist) / 2;
+                        double ux = ddx / dist;
+                        double uy = ddy / dist;
+                        x[i] -= ux * push;
+                        y[i] -= uy * push;
+                        x[j] += ux * push;
+                        y[j] += uy * push;
+                        moved = true;
+                    }
+                }
+                if (!moved) break;
+            }
+            // 分离后重新归一化
+            minX = Double.MAX_VALUE; maxX = -Double.MAX_VALUE;
+            minY = Double.MAX_VALUE; maxY = -Double.MAX_VALUE;
+            for (int i = 0; i < n; i++) {
+                minX = Math.min(minX, x[i]); maxX = Math.max(maxX, x[i]);
+                minY = Math.min(minY, y[i]); maxY = Math.max(maxY, y[i]);
+            }
+            cx = (minX + maxX) / 2;
+            cy = (minY + maxY) / 2;
+            span = Math.max(maxX - minX, maxY - minY);
+            norm = span < 1e-6 ? 1 : 2.0 / span;
             for (int i = 0; i < n; i++) {
                 out.put(nodes.get(i).id(),
                         new Point2D.Double((x[i] - cx) * norm, (y[i] - cy) * norm));

@@ -55,6 +55,7 @@ public class GraphDatabase implements AutoCloseable {
         this.conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
         try (Statement st = conn.createStatement()) {
             st.execute("PRAGMA journal_mode=WAL");
+            st.execute("PRAGMA busy_timeout=5000");
             st.execute("PRAGMA foreign_keys=ON");
         }
         createSchema();
@@ -328,11 +329,11 @@ public class GraphDatabase implements AutoCloseable {
         return out;
     }
 
-    /** 列出某 root 的全部节点（带上限），供图谱可视化等结构化读取使用。 */
+    /** 列出某 root 的全部节点（带上限），供图谱可视化等结构化读取使用。NOTE 不参与画布。 */
     public synchronized List<Node> listNodes(String rootId, int limit) {
         List<Node> out = new ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT * FROM graph_nodes WHERE root_id=? ORDER BY id ASC LIMIT ?")) {
+                "SELECT * FROM graph_nodes WHERE root_id=? AND type<>'NOTE' ORDER BY id ASC LIMIT ?")) {
             ps.setString(1, rootId);
             ps.setInt(2, limit > 0 ? limit : 500);
             try (ResultSet rs = ps.executeQuery()) {
@@ -346,11 +347,16 @@ public class GraphDatabase implements AutoCloseable {
         return out;
     }
 
-    /** 列出某 root 的全部边（带上限），供图谱可视化等结构化读取使用。 */
+    /** 列出某 root 的全部边（带上限）；与 NOTE 相连的边不计入画布预算。 */
     public synchronized List<Edge> listEdges(String rootId, int limit) {
         List<Edge> out = new ArrayList<>();
-        try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT * FROM graph_edges WHERE root_id=? ORDER BY id ASC LIMIT ?")) {
+        try (PreparedStatement ps = conn.prepareStatement("""
+                SELECT e.* FROM graph_edges e
+                WHERE e.root_id=? AND NOT EXISTS (
+                  SELECT 1 FROM graph_nodes n
+                  WHERE n.root_id = e.root_id AND n.type='NOTE'
+                    AND n.id IN (e.source_node_id, e.target_node_id))
+                ORDER BY e.id ASC LIMIT ?""")) {
             ps.setString(1, rootId);
             ps.setInt(2, limit > 0 ? limit : 2000);
             try (ResultSet rs = ps.executeQuery()) {
@@ -394,6 +400,169 @@ public class GraphDatabase implements AutoCloseable {
             ps.executeUpdate();
         } catch (SQLException e) {
             throw new IllegalStateException("setNodeStatus failed: " + e.getMessage(), e);
+        }
+    }
+
+    /** 按节点 id 合并属性（upsertNode 的冲突分支不会更新 properties，编辑必须走这里）。 */
+    public synchronized void mergeNodePropertiesById(long nodeId, Map<String, Object> updates) {
+        updateNodeNameAndProps(nodeId, null, updates);
+    }
+
+    /** 同时更新节点名称与合并属性；name 为 null 时保持原名。 */
+    public synchronized void updateNodeNameAndProps(long nodeId, String name,
+                                                    Map<String, Object> updates) {
+        Node existing = getNode(nodeId);
+        if (existing == null) return;
+        Map<String, Object> merged = new LinkedHashMap<>(existing.properties());
+        if (updates != null) merged.putAll(updates);
+        try (PreparedStatement ps = conn.prepareStatement(
+                "UPDATE graph_nodes SET name=?, properties=?, updated_at=? WHERE id=?")) {
+            ps.setString(1, name != null && !name.isBlank() ? name : existing.name());
+            ps.setString(2, json(merged));
+            ps.setString(3, now());
+            ps.setLong(4, nodeId);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("updateNodeNameAndProps failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 笔记编辑专用：合并属性的同时把 version 换成该 root 的下一个可用版本号，
+     * 让增量读取方（since_version）能把编辑后的笔记当作“新条目”重新读到。
+     */
+    public synchronized void bumpNoteVersionAndUpdate(long nodeId, String name,
+                                                      Map<String, Object> updates) {
+        Node existing = getNode(nodeId);
+        if (existing == null) return;
+        int next = 1;
+        for (Node n : findNodes(existing.rootId(), NodeType.NOTE, null, 0)) {
+            next = Math.max(next, noteVersion(n) + 1);
+        }
+        Map<String, Object> merged = new LinkedHashMap<>(existing.properties());
+        if (updates != null) merged.putAll(updates);
+        merged.put("version", next);
+        try (PreparedStatement ps = conn.prepareStatement(
+                "UPDATE graph_nodes SET name=?, properties=?, updated_at=? WHERE id=?")) {
+            ps.setString(1, name != null && !name.isBlank() ? name : existing.name());
+            ps.setString(2, json(merged));
+            ps.setString(3, now());
+            ps.setLong(4, nodeId);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("bumpNoteVersionAndUpdate failed: " + e.getMessage(), e);
+        }
+    }
+
+    /** 删除节点及其全部边与证据（人工删除笔记/节点用）。 */
+    public synchronized void deleteNode(long nodeId) {
+        try {
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "DELETE FROM graph_edges WHERE source_node_id=? OR target_node_id=?")) {
+                ps.setLong(1, nodeId);
+                ps.setLong(2, nodeId);
+                ps.executeUpdate();
+            }
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "DELETE FROM graph_evidence WHERE node_id=?")) {
+                ps.setLong(1, nodeId);
+                ps.executeUpdate();
+            }
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "DELETE FROM graph_nodes WHERE id=?")) {
+                ps.setLong(1, nodeId);
+                ps.executeUpdate();
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("deleteNode failed: " + e.getMessage(), e);
+        }
+    }
+
+    /** 一次笔记写入的结果。duplicate=true 表示同目标下已有等价正文，未新建。 */
+    public record NoteInsert(Node node, int version, boolean duplicate) {
+    }
+
+    /**
+     * 原子写入一条 NOTE：版本号分配、去重、节点与挂载边在同一把锁内完成，
+     * 避免两个 Agent 并发拿到同一个版本号。
+     *
+     * @param forcedVersion 导入历史笔记时保留原版本号；为 null 时按站点内递增分配
+     */
+    public synchronized NoteInsert upsertNote(String rootId, Long targetNodeId, String content,
+                                              String kind, String author, String sourceType,
+                                              String sourceId, Integer forcedVersion) {
+        String text = content == null ? "" : content.trim();
+        String normalized = text.replaceAll("\\s+", " ").toLowerCase(java.util.Locale.ROOT);
+        Long target = targetNodeId != null && targetNodeId > 0 ? targetNodeId : null;
+
+        int maxVersion = 0;
+        for (Node n : findNodes(rootId, NodeType.NOTE, null, 0)) {
+            int v = noteVersion(n);
+            if (v > maxVersion) maxVersion = v;
+            Long existingTarget = propLong(n.prop("target"));
+            boolean sameTarget = (existingTarget == null ? 0L : existingTarget)
+                    == (target == null ? 0L : target);
+            String existing = String.valueOf(n.prop("content"))
+                    .replaceAll("\\s+", " ").toLowerCase(java.util.Locale.ROOT);
+            if (sameTarget && !normalized.isEmpty() && normalized.equals(existing)) {
+                return new NoteInsert(n, v, true);
+            }
+        }
+        int version = forcedVersion != null && forcedVersion > 0 ? forcedVersion : maxVersion + 1;
+        Map<String, Object> props = new LinkedHashMap<>();
+        props.put("content", text);
+        props.put("kind", kind == null || kind.isBlank() ? "note" : kind.trim().toLowerCase(java.util.Locale.ROOT));
+        props.put("version", version);
+        props.put("author", author == null ? "" : author);
+        props.put("target", target == null ? 0 : target);
+        props.put("edited_at", now());
+        String key = forcedVersion != null
+                ? rootId + "|note:import:" + sha1(normalized + "|" + version)
+                : rootId + "|note:" + java.util.UUID.randomUUID();
+        Node node = upsertNode(rootId, NodeType.NOTE, noteTitle(text), key,
+                FactStatus.INFERRED, 1.0, sourceType, sourceId, props);
+        if (target != null) {
+            upsertEdge(rootId, node.id(), target, EdgeType.RELATED_TO,
+                    FactStatus.INFERRED, 1.0, sourceType, sourceId, Map.of("kind", "note"));
+        } else {
+            Node origin = getNodeByCanonical(rootId, NodeType.ORIGIN, rootId);
+            if (origin != null) {
+                upsertEdge(rootId, origin.id(), node.id(), EdgeType.RELATED_TO,
+                        FactStatus.INFERRED, 1.0, sourceType, sourceId, Map.of("kind", "note"));
+            }
+        }
+        return new NoteInsert(node, version, false);
+    }
+
+    /** NOTE 节点的版本号（Gson 反序列化后数字是 Double，需要按 Number 读取）。 */
+    public static int noteVersion(Node node) {
+        Object v = node == null ? null : node.prop("version");
+        return v instanceof Number n ? (int) n.doubleValue() : 0;
+    }
+
+    private static Long propLong(Object v) {
+        return v instanceof Number n ? (long) n.doubleValue() : null;
+    }
+
+    /** 笔记标题：正文首个非空行，截断 60 字。 */
+    public static String noteTitle(String content) {
+        String text = content == null ? "" : content.trim();
+        int nl = text.indexOf('\n');
+        String first = (nl >= 0 ? text.substring(0, nl) : text).trim();
+        if (first.isEmpty()) first = text.replaceAll("\\s+", " ").trim();
+        if (first.isEmpty()) first = "（空笔记）";
+        return first.length() <= 60 ? first : first.substring(0, 59) + "…";
+    }
+
+    private static String sha1(String s) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-1");
+            byte[] digest = md.digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(digest.length * 2);
+            for (byte b : digest) sb.append(String.format("%02x", b));
+            return sb.toString();
+        } catch (Exception e) {
+            return Integer.toHexString(s.hashCode());
         }
     }
 

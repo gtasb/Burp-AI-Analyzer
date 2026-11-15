@@ -92,6 +92,52 @@ class AgentScopeModelFactoryTest {
     }
 
     @Nested
+    @DisplayName("Anthropic base URL")
+    class AnthropicBaseUrl {
+
+        @Test
+        @DisplayName("should_strip_redundant_v1_suffix_added_by_users")
+        void stripsRedundantV1() {
+            assertThat(AgentScopeModelFactory.normalizeAnthropicBaseUrl("https://api.anthropic.com"))
+                    .isEqualTo("https://api.anthropic.com");
+            assertThat(AgentScopeModelFactory.normalizeAnthropicBaseUrl("https://api.anthropic.com/"))
+                    .isEqualTo("https://api.anthropic.com");
+            assertThat(AgentScopeModelFactory.normalizeAnthropicBaseUrl("https://api.anthropic.com/v1"))
+                    .isEqualTo("https://api.anthropic.com");
+            assertThat(AgentScopeModelFactory.normalizeAnthropicBaseUrl("https://api.anthropic.com/v1/messages"))
+                    .isEqualTo("https://api.anthropic.com");
+            assertThat(AgentScopeModelFactory.normalizeAnthropicBaseUrl("https://gateway.example.com/anthropic/v1"))
+                    .isEqualTo("https://gateway.example.com/anthropic");
+        }
+
+        @Test
+        @DisplayName("should_create_model_when_user_pastes_v1_url")
+        void acceptsV1Url() {
+            var model = AgentScopeModelFactory.create(
+                    ApiProvider.ANTHROPIC, "sk-ant-test",
+                    "https://api.anthropic.com/v1", "claude-sonnet-4-5-20250514", false, null);
+            assertThat(model).isNotNull();
+            assertThat(model.getClass().getSimpleName()).contains("Anthropic");
+        }
+    }
+
+    @Nested
+    @DisplayName("Model retry policy")
+    class RetryPolicy {
+
+        @Test
+        @DisplayName("should_retry_up_to_10_attempts_with_longer_backoff")
+        void retriesTenTimes() {
+            assertThat(AgentScopeModelFactory.MODEL_RETRY.getMaxAttempts()).isEqualTo(10);
+            assertThat(AgentScopeModelFactory.MODEL_RETRY.getInitialBackoff())
+                    .isEqualTo(java.time.Duration.ofSeconds(3));
+            assertThat(AgentScopeModelFactory.MODEL_RETRY.getMaxBackoff())
+                    .isEqualTo(java.time.Duration.ofSeconds(60));
+            assertThat(AgentScopeModelFactory.MODEL_RETRY.getBackoffMultiplier()).isEqualTo(2.0);
+        }
+    }
+
+    @Nested
     @DisplayName("describeConfig")
     class DescribeConfig {
 

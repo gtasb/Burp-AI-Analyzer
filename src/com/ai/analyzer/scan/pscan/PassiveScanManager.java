@@ -30,13 +30,19 @@ import java.util.function.BiConsumer;
 public class PassiveScanManager {
     
     // ========== 配置 ==========
-    private static final int DEFAULT_THREAD_COUNT = 3;
+    private static final int DEFAULT_THREAD_COUNT = 5;
     private static final int MAX_THREAD_COUNT = 50;
     private static final int MIN_THREAD_COUNT = 1;
     private static final int QUEUE_CAPACITY = 1000; // 队列容量
     private static final int DEFAULT_HOST_RATE_LIMIT = 20; // 每 Host 每秒最大入队请求数
     private static final int DEFAULT_BATCH_MAX_REQUESTS = 8; // 会话批次满多少请求触发分析
     private static final long DEFAULT_BATCH_WINDOW_MS = 30_000; // 会话窗口空闲多久触发分析
+
+    /**
+     * 允许进入被动扫描的 Burp 工具来源。默认只接收 Proxy（浏览器）流量，
+     * 保持历史行为；Repeater/Scanner(Crawler)/Intruder/Extensions 由设置在设置页勾选。
+     */
+    private final Set<ToolType> enabledToolSources = ConcurrentHashMap.newKeySet();
     
     // ========== 核心组件 ==========
     private final MontoyaApi api;
@@ -110,6 +116,57 @@ public class PassiveScanManager {
     public PassiveScanManager(MontoyaApi api) {
         this.api = api;
         this.apiClient = new PassiveScanApiClient(api);
+        this.enabledToolSources.add(ToolType.PROXY);
+    }
+
+    /**
+     * 设置进入被动扫描的 Burp 工具来源。空集合按 Proxy 处理（避免误配置后完全静默）。
+     */
+    public void setToolSources(Collection<ToolType> sources) {
+        enabledToolSources.clear();
+        if (sources != null) {
+            enabledToolSources.addAll(sources);
+        }
+        if (enabledToolSources.isEmpty()) {
+            enabledToolSources.add(ToolType.PROXY);
+        }
+        logInfo("被动扫描流量来源: " + enabledToolSources);
+    }
+
+    /** 当前启用的流量来源（副本）。 */
+    public Set<ToolType> getToolSources() {
+        return new LinkedHashSet<>(enabledToolSources);
+    }
+
+    /** 判断某个 Burp 工具来源是否允许进入被动扫描。 */
+    public static boolean isToolSourceEnabled(Set<ToolType> enabled, ToolType source) {
+        return source != null && enabled != null && enabled.contains(source);
+    }
+
+    /** 解析设置文件中的来源列表（未知名称忽略；空则回退 Proxy）。 */
+    public static Set<ToolType> parseToolSources(String value) {
+        Set<ToolType> sources = new LinkedHashSet<>();
+        if (value != null) {
+            for (String part : value.split("[,;\\s]+")) {
+                if (part.isBlank()) continue;
+                try {
+                    sources.add(ToolType.valueOf(part.trim().toUpperCase(Locale.ROOT)));
+                } catch (IllegalArgumentException ignored) {
+                }
+            }
+        }
+        if (sources.isEmpty()) {
+            sources.add(ToolType.PROXY);
+        }
+        return sources;
+    }
+
+    /** 序列化为设置文件用的 CSV；空集合按 Proxy 保存。 */
+    public static String formatToolSources(Collection<ToolType> sources) {
+        if (sources == null || sources.isEmpty()) {
+            return ToolType.PROXY.name();
+        }
+        return sources.stream().map(ToolType::name).collect(java.util.stream.Collectors.joining(","));
     }
     
     // ========== 配置方法 ==========
@@ -207,30 +264,31 @@ public class PassiveScanManager {
             logInfo("被动扫描已在运行中");
             return;
         }
-        
+
         logInfo("========== 启动被动扫描（生产者-消费者模型）==========");
-        
+
+        // 1. 先启动生产者（HTTP监听）：抛异常时消费者/调度器还没起来，
+        //    isRunning 也未置位，勾选框的补偿逻辑能干净回滚
+        startProducer();
+
         // 重置本轮计数（结果列表保留；total/completed 只描述本次运行）
         isRunning.set(true);
         cancelFlag.set(false);
         completedCount.set(0);
         queuedCount.set(0);
         totalCount.set(0);
-        
-        // 1. 启动消费者线程池
+
+        // 2. 启动消费者线程池
         startConsumers();
 
-        // 2. 启动会话批次调度器（过期窗口 → 提交分析）
+        // 3. 启动会话批次调度器（过期窗口 → 提交分析）
         startBatchScheduler();
 
-        // 3. 启动生产者（HTTP监听）
-        startProducer();
-        
         // 注意：不加载历史记录，只扫描开启后新到达的流量
         // （原 loadExistingHistory() 已移除，符合“仅扫描新增流量”的设计）
         
         notifyStatusChanged("被动扫描已启动 - 仅监听 Proxy 流量，等待请求…");
-        logInfo("被动扫描已启动，等待新流量...（仅 ToolType.PROXY；Repeater/Intruder 流量默认不扫描）");
+        logInfo("被动扫描已启动，等待新流量...（来源: " + enabledToolSources + "）");
     }
     
     /**
@@ -287,10 +345,11 @@ public class PassiveScanManager {
             public ResponseReceivedAction handleHttpResponseReceived(HttpResponseReceived responseReceived) {
                 if (isRunning.get() && !cancelFlag.get()) {
                     try {
-                        // 只扫描来自 Proxy 的流量（用户浏览器），
-                        // 跳过 Extensions/Scanner/Intruder/Repeater 产生的请求，防止插件工具触发死循环
-                        ToolType source = responseReceived.toolSource().toolType();
-                        if (source != ToolType.PROXY) {
+                        // 只扫描设置页勾选的 Burp 工具来源（默认仅 Proxy）。
+                        // 不勾选 Extensions 可避免插件自身请求触发分析死循环。
+                        ToolType source = responseReceived.toolSource() != null
+                                ? responseReceived.toolSource().toolType() : null;
+                        if (!isToolSourceEnabled(enabledToolSources, source)) {
                             return ResponseReceivedAction.continueWith(responseReceived);
                         }
                         
@@ -453,9 +512,12 @@ public class PassiveScanManager {
     private void enqueueRequest(HttpRequestResponse requestResponse) {
         // 资产知识图谱观测必须先于 L0 静态过滤：JS/CSS/source map 不送 LLM 扫描，
         // 但必须作为 RESOURCE 入图，用于前端指纹与接口推导。
+        // 图片/字体/音视频/压缩包等静态二进制不产生有价值的图谱信息，直接跳过，
+        // 避免爬虫/爆破时每个资源都写多条 SQLite 事务把图谱线程拖垮。
         // 放到后台单线程执行：每个请求要写多条 autocommit SQLite 事务，
         // 在 Burp 的流量线程同步执行会直接抬高代理延迟。
-        if (graphObservePending.incrementAndGet() <= GRAPH_OBSERVE_QUEUE_CAPACITY) {
+        boolean graphRelevant = !isGraphIrrelevantBinary(requestResponse);
+        if (graphRelevant && graphObservePending.incrementAndGet() <= GRAPH_OBSERVE_QUEUE_CAPACITY) {
             graphObserveExecutor.submit(() -> {
                 try {
                     com.ai.analyzer.graph.GraphStore.getInstance().observe(requestResponse);
@@ -464,7 +526,7 @@ public class PassiveScanManager {
                     graphObservePending.decrementAndGet();
                 }
             });
-        } else {
+        } else if (graphRelevant) {
             graphObservePending.decrementAndGet();
         }
 
@@ -494,6 +556,29 @@ public class PassiveScanManager {
         if (fullBatch != null) {
             submitBatch(fullBatch);
         }
+    }
+
+    /**
+     * 图片/字体/音视频等静态二进制：不建接口图谱；JS/CSS/source map 仍入图。
+     * 压缩包（zip/gz/rar/7z/tar…）属于敏感资产，必须保留入图。
+     */
+    private static boolean isGraphIrrelevantBinary(HttpRequestResponse rr) {
+        if (rr == null || rr.request() == null) return true;
+        String url = rr.request().url();
+        if (url == null) return true;
+        String u = url.toLowerCase(Locale.ROOT);
+        int cut = u.indexOf('?');
+        if (cut > 0) u = u.substring(0, cut);
+        cut = u.indexOf('#');
+        if (cut > 0) u = u.substring(0, cut);
+        return u.endsWith(".png") || u.endsWith(".jpg") || u.endsWith(".jpeg")
+                || u.endsWith(".gif") || u.endsWith(".ico") || u.endsWith(".bmp")
+                || u.endsWith(".webp") || u.endsWith(".svg")
+                || u.endsWith(".woff") || u.endsWith(".woff2") || u.endsWith(".ttf")
+                || u.endsWith(".eot") || u.endsWith(".otf")
+                || u.endsWith(".mp3") || u.endsWith(".mp4") || u.endsWith(".webm")
+                || u.endsWith(".wav") || u.endsWith(".avi") || u.endsWith(".flv")
+                || u.endsWith(".wasm");
     }
 
     /**
@@ -762,6 +847,16 @@ public class PassiveScanManager {
         totalCount.incrementAndGet();
         result.setPriority(computePriority(result));
         
+        if (!isRunning.get()) {
+            // 右键「发送到AI分析」在扫描未启动时自动启动：该请求是本轮分析的明确目标，
+            // 静默入表只会让用户以为已分析
+            try {
+                logInfo("扫描未运行，为直接发送的请求自动启动被动扫描");
+                startPassiveScan();
+            } catch (Exception e) {
+                logError("自动启动被动扫描失败: " + e.getMessage());
+            }
+        }
         if (isRunning.get()) {
             boolean dropped = false;
             synchronized (scanQueue) {
@@ -779,6 +874,11 @@ public class PassiveScanManager {
             } else if (onNewRequestQueued != null) {
                 onNewRequestQueued.accept(result);
             }
+        } else {
+            // 启动失败（如 API 未配置）：标记错误而不是无声等待
+            result.markError("扫描未能启动，请检查 API 配置");
+            completedCount.incrementAndGet();
+            notifyResultUpdated(result);
         }
         updateStatus();
         return result;

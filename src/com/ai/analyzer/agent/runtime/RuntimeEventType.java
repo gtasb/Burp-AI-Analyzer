@@ -26,5 +26,11 @@ public enum RuntimeEventType {
     /** 记忆 / 上下文压缩事件 */
     MEMORY,
     /** 一次模型调用的 token 用量（input/output/cached/total） */
-    USAGE
+    USAGE,
+    /**
+     * 本轮因人类插话（interrupt）提前收尾：AgentScope 合成
+     * “I noticed that you have interrupted me” 结果并结束本轮。
+     * 上层不得把它当作正常完成（例如不应触发轮末整理 agent）。
+     */
+    INTERRUPTED
 }

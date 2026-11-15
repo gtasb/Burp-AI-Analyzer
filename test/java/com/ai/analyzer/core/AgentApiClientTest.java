@@ -14,8 +14,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AgentApiClientTest {
 
     @Test
-    @DisplayName("active analysis completion anchors a fact on the interface")
-    void activeAnalysisWritesFactAnchor(@TempDir Path tempDir) throws Exception {
+    @DisplayName("active agent no longer writes fact anchors; organizer tool does")
+    void activeAnalysisLeavesFactAnchorToOrganizer(@TempDir Path tempDir) throws Exception {
         com.ai.analyzer.graph.GraphStore store = com.ai.analyzer.graph.GraphStore.getInstance();
         store.setWorkplaceDirectory(tempDir.toString());
         try {
@@ -30,13 +30,16 @@ class AgentApiClientTest {
             store.observe(rr);
 
             AgentApiClient client = new AgentApiClient("http://localhost", "k");
-            java.lang.reflect.Method m = AgentApiClient.class.getDeclaredMethod(
-                    "recordActiveAnalysisFact",
-                    burp.api.montoya.http.message.HttpRequestResponse.class);
-            m.setAccessible(true);
-            m.invoke(client, rr);
+            assertThat(client.getRole()).isEqualTo(AgentRole.ACTIVE);
 
             String root = "https://fact.example:443";
+            assertThat(store.listNodes(root, 100))
+                    .noneMatch(n -> n.type() == com.ai.analyzer.graph.GraphTypes.NodeType.ANALYSIS_FACT);
+
+            // 整理 agent 通过图谱工具落事实锚点
+            new com.ai.analyzer.graph.GraphTool(store, "organizer")
+                    .recordAnalysisFact("GET", "https://fact.example/api/x", "organizer summary");
+
             assertThat(store.listNodes(root, 100))
                     .anyMatch(n -> n.type() == com.ai.analyzer.graph.GraphTypes.NodeType.ANALYSIS_FACT);
             assertThat(store.listEdges(root, 100))
@@ -44,6 +47,20 @@ class AgentApiClientTest {
         } finally {
             store.setWorkplaceDirectory("");
         }
+    }
+
+    @Test
+    @DisplayName("role-specific clients have distinct agent names")
+    void roleSpecificAgentNames() {
+        burp.api.montoya.MontoyaApi api = org.mockito.Mockito.mock(burp.api.montoya.MontoyaApi.class);
+        AgentApiClient active = new AgentApiClient(api, "http://localhost", "k", AgentRole.ACTIVE);
+        AgentApiClient sidebar = new AgentApiClient(api, "http://localhost", "k", AgentRole.SIDEBAR);
+        AgentApiClient organizer = new AgentApiClient(api, "http://localhost", "k", AgentRole.ORGANIZER);
+
+        assertThat(active.getAgentName()).isEqualTo("burp-ai-active");
+        assertThat(sidebar.getAgentName()).isEqualTo("burp-ai-sidebar");
+        assertThat(organizer.getAgentName()).isEqualTo("burp-ai-organizer");
+        assertThat(active.getRole()).isNotEqualTo(sidebar.getRole());
     }
 
     @Test

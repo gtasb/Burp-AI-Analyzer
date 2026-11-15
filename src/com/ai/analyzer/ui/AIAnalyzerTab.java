@@ -1,6 +1,7 @@
 package com.ai.analyzer.ui;
 
 import burp.api.montoya.MontoyaApi;
+import burp.api.montoya.core.ToolType;
 import burp.api.montoya.http.message.HttpRequestResponse;
 
 import com.ai.analyzer.core.AgentApiClient;
@@ -23,8 +24,10 @@ import javax.swing.text.StyledDocument;
 import javax.swing.text.JTextComponent;
 import java.awt.*;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import burp.api.montoya.http.message.requests.HttpRequest;
 import burp.api.montoya.http.message.responses.HttpResponse;
@@ -34,6 +37,11 @@ import burp.api.montoya.ui.editor.HttpResponseEditor;
 public class AIAnalyzerTab extends JPanel {
     private final MontoyaApi api;
     private final AgentApiClient apiClient;
+    /** 侧栏聊天的独立 agent（与主动分析拆分） */
+    private final AgentApiClient sidebarApiClient;
+    /** 证据整理与攻击向量指引 agent（独立上下文） */
+    private final AgentApiClient organizerClient;
+    private com.ai.analyzer.agent.organizer.OrganizerCoordinator organizerCoordinator;
     private final PreScanFilterManager preScanFilterManager;
     private SettingsPanel settingsPanel;
 
@@ -110,8 +118,15 @@ public class AIAnalyzerTab extends JPanel {
     private PassiveScanManager passiveScanManager;
     private JCheckBox enablePassiveScanCheckBox;
     private JSpinner threadCountSpinner;
-    private JButton startPassiveScanButton;
-    private JButton stopPassiveScanButton;
+    /** 程序化同步「启用被动扫描」勾选时抑制 action 回调 */
+    private boolean updatingPassiveScanToggle;
+    /** 被动扫描流量来源勾选（位于「设置」框内） */
+    private JCheckBox psSourceProxy;
+    private JCheckBox psSourceRepeater;
+    private JCheckBox psSourceScanner;
+    private JCheckBox psSourceIntruder;
+    private JCheckBox psSourceExtensions;
+    private boolean updatingPassiveSourceChecks;
     private com.ai.analyzer.scan.active.ActiveAuditManager activeAuditManager;
     private JButton auditQueueButton;
     private JLabel passiveScanStatusLabel;
@@ -157,6 +172,19 @@ public class AIAnalyzerTab extends JPanel {
             "https://dashscope.aliyuncs.com/api/v1",
             ""
         );
+        // 侧栏 agent 独立实例：与主动分析不再共用运行时/session/单航班锁
+        this.sidebarApiClient = new AgentApiClient(
+            api,
+            "https://dashscope.aliyuncs.com/api/v1",
+            "",
+            com.ai.analyzer.core.AgentRole.SIDEBAR
+        );
+        this.organizerClient = new AgentApiClient(
+            api,
+            "https://dashscope.aliyuncs.com/api/v1",
+            "",
+            com.ai.analyzer.core.AgentRole.ORGANIZER
+        );
         this.requestEditor = api.userInterface().createHttpRequestEditor();
         this.responseEditor = api.userInterface().createHttpResponseEditor();
         this.requestList = new ArrayList<>();
@@ -167,6 +195,9 @@ public class AIAnalyzerTab extends JPanel {
 
         initializeUI();
         settingsPanel.autoLoadSettings();
+        if (activeAnalysisPanel != null) {
+            activeAnalysisPanel.reloadRunHistory();
+        }
     }
 
     private void initializeUI() {
@@ -180,6 +211,8 @@ public class AIAnalyzerTab extends JPanel {
 
         // createMainPanel 创建了 passiveScanManager 和 activeAnalysisPanel，现在回填给 settingsPanel
         settingsPanel.setPassiveScanManager(passiveScanManager);
+        settingsPanel.setSidebarApiClient(sidebarApiClient);
+        settingsPanel.setOrganizerApiClient(organizerClient);
         settingsPanel.setActiveAnalysisPanel(activeAnalysisPanel);
         settingsPanel.addTabsTo(mainTabbedPane);
 
@@ -205,6 +238,11 @@ public class AIAnalyzerTab extends JPanel {
             @Override
             public void onSettingsApplied() {
                 syncApiConfigToPassiveScan();
+            }
+
+            @Override
+            public void refreshPassiveScanSources() {
+                AIAnalyzerTab.this.refreshPassiveScanSources();
             }
 
             @Override
@@ -505,6 +543,39 @@ public class AIAnalyzerTab extends JPanel {
         activeAnalysisPanel = new ActiveAnalysisPanel(api);
         activeAnalysisPanel.bind(apiClient, this::updateApiClientConfigForAnalysis, this::onAnalysisStateChanged, passiveDataSource);
 
+        // 主动分析轮末：独立整理 agent 入图、判断是否继续；循环由设置页控制
+        organizerCoordinator = new com.ai.analyzer.agent.organizer.OrganizerCoordinator(
+                organizerClient,
+                instruction -> SwingUtilities.invokeLater(() -> {
+                    // 用户在「整理决定继续」到「EDT 执行继续」的窗口里按了停止：放弃这一轮
+                    if (organizerCoordinator != null && organizerCoordinator.isStopped()) {
+                        activeAnalysisPanel.setOrganizerPhase("已停止");
+                        api.logging().logToOutput("[Organizer] 用户已停止，放弃排队的下一轮");
+                        return;
+                    }
+                    // 自动继续必须回到主动模式，否则结果会渲染到被动面板
+                    if (analysisModeComboBox != null
+                            && !MODE_ACTIVE.equals(analysisModeComboBox.getSelectedItem())) {
+                        analysisModeComboBox.setSelectedItem(MODE_ACTIVE);
+                    }
+                    if (!activeAnalysisPanel.continueWithInstruction(instruction)) {
+                        if (organizerCoordinator != null) {
+                            organizerCoordinator.stop();
+                        }
+                        activeAnalysisPanel.setOrganizerPhase("已停止：主动分析未启动");
+                        api.logging().logToOutput("[Organizer] 无法自动继续，建议: " + instruction);
+                    }
+                }),
+                report -> activeAnalysisPanel.showOrganizerReport(report.markdown(), report.file()),
+                phase -> activeAnalysisPanel.setOrganizerPhase(phase),
+                event -> activeAnalysisPanel.appendOrganizerEvent(event),
+                () -> settingsPanel == null || settingsPanel.isOrganizerAutoContinue(),
+                () -> settingsPanel == null ? 0 : settingsPanel.getOrganizerMaxRounds());
+        activeAnalysisPanel.setOnRunCompleted(organizerCoordinator::onActiveRunCompleted);
+        activeAnalysisPanel.setOnRunStarted(organizerCoordinator::resetLoop);
+        activeAnalysisPanel.bindAutoContinue(settingsPanel::isOrganizerAutoContinue,
+                settingsPanel::setOrganizerAutoContinue);
+
         centerModeCardLayout = new CardLayout();
         centerModeCardPanel = new JPanel(centerModeCardLayout);
         centerModeCardPanel.add(passiveMainSplitPane, CARD_PASSIVE);
@@ -525,6 +596,49 @@ public class AIAnalyzerTab extends JPanel {
         return mainPanel;
     }
 
+    /** 读取当前勾选的流量来源；空集合由调用方回退 Proxy。 */
+    private Set<ToolType> selectedPassiveSources() {
+        Set<ToolType> sources = new LinkedHashSet<>();
+        if (psSourceProxy != null && psSourceProxy.isSelected()) sources.add(ToolType.PROXY);
+        if (psSourceRepeater != null && psSourceRepeater.isSelected()) sources.add(ToolType.REPEATER);
+        if (psSourceScanner != null && psSourceScanner.isSelected()) sources.add(ToolType.SCANNER);
+        if (psSourceIntruder != null && psSourceIntruder.isSelected()) sources.add(ToolType.INTRUDER);
+        if (psSourceExtensions != null && psSourceExtensions.isSelected()) sources.add(ToolType.EXTENSIONS);
+        return sources;
+    }
+
+    /** 勾选变化立即同步到 PassiveScanManager（一个都不勾时回到 Proxy）。 */
+    private void applyPassiveScanSources() {
+        if (updatingPassiveSourceChecks || passiveScanManager == null) return;
+        Set<ToolType> sources = selectedPassiveSources();
+        if (sources.isEmpty()) {
+            updatingPassiveSourceChecks = true;
+            if (psSourceProxy != null) psSourceProxy.setSelected(true);
+            updatingPassiveSourceChecks = false;
+            sources.add(ToolType.PROXY);
+            api.logging().logToOutput("[PassiveScan] 未选择任何来源，已回到 Proxy");
+        }
+        passiveScanManager.setToolSources(sources);
+    }
+
+    /** 设置加载后按 PassiveScanManager 当前来源刷新勾选状态。 */
+    void refreshPassiveScanSources() {
+        if (psSourceProxy == null) return;
+        Set<ToolType> sources = passiveScanManager != null
+                ? passiveScanManager.getToolSources()
+                : PassiveScanManager.parseToolSources("PROXY");
+        updatingPassiveSourceChecks = true;
+        try {
+            psSourceProxy.setSelected(sources.contains(ToolType.PROXY));
+            psSourceRepeater.setSelected(sources.contains(ToolType.REPEATER));
+            psSourceScanner.setSelected(sources.contains(ToolType.SCANNER));
+            psSourceIntruder.setSelected(sources.contains(ToolType.INTRUDER));
+            psSourceExtensions.setSelected(sources.contains(ToolType.EXTENSIONS));
+        } finally {
+            updatingPassiveSourceChecks = false;
+        }
+    }
+
     private JPanel createPassiveScanControlPanel() {
         JPanel panel = new JPanel(new BorderLayout(5, 5));
         panel.setBorder(BorderFactory.createTitledBorder("设置"));
@@ -541,36 +655,21 @@ public class AIAnalyzerTab extends JPanel {
         JPanel controlRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 3));
 
         enablePassiveScanCheckBox = new JCheckBox("启用被动扫描", false);
-        enablePassiveScanCheckBox.setToolTipText("启用后可以自动从HTTP History获取流量进行AI安全扫描");
-        enablePassiveScanCheckBox.addActionListener(e -> {
-            boolean enabled = enablePassiveScanCheckBox.isSelected();
-            threadCountSpinner.setEnabled(enabled);
-            startPassiveScanButton.setEnabled(enabled && passiveScanManager != null && !passiveScanManager.isRunning());
-            stopPassiveScanButton.setEnabled(enabled && passiveScanManager != null && passiveScanManager.isRunning());
-        });
+        enablePassiveScanCheckBox.setToolTipText("勾选即开始监听流量并扫描；取消勾选即停止");
+        enablePassiveScanCheckBox.addActionListener(e -> togglePassiveScan());
         controlRow.add(enablePassiveScanCheckBox);
 
         controlRow.add(new JLabel("线程数:"));
-        SpinnerModel spinnerModel = new SpinnerNumberModel(3, 1, 50, 1);
+        SpinnerModel spinnerModel = new SpinnerNumberModel(5, 1, 50, 1);
         threadCountSpinner = new JSpinner(spinnerModel);
-        threadCountSpinner.setEnabled(false);
         threadCountSpinner.setPreferredSize(new Dimension(60, 25));
+        threadCountSpinner.setToolTipText("消费者线程数（默认 5）；运行中修改会在下次启动生效");
         threadCountSpinner.addChangeListener(e -> {
             if (passiveScanManager != null) {
                 passiveScanManager.setThreadCount((Integer) threadCountSpinner.getValue());
             }
         });
         controlRow.add(threadCountSpinner);
-
-        startPassiveScanButton = new JButton("开始扫描");
-        startPassiveScanButton.setEnabled(false);
-        startPassiveScanButton.addActionListener(e -> startPassiveScan());
-        controlRow.add(startPassiveScanButton);
-
-        stopPassiveScanButton = new JButton("停止扫描");
-        stopPassiveScanButton.setEnabled(false);
-        stopPassiveScanButton.addActionListener(e -> stopPassiveScan());
-        controlRow.add(stopPassiveScanButton);
 
         JButton clearPassiveScanButton = new JButton("清空结果");
         clearPassiveScanButton.addActionListener(e -> clearPassiveScanResults());
@@ -607,6 +706,30 @@ public class AIAnalyzerTab extends JPanel {
         passiveModeControlLine.add(controlPanel, BorderLayout.WEST);
         passiveModeControlLine.add(statusPanel, BorderLayout.EAST);
 
+        // 流量来源：哪些 Burp 工具的请求进入被动扫描（默认仅 Proxy）
+        JPanel sourceRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
+        JLabel sourceLabel = new JLabel("流量来源:");
+        UIStyles.setFont(sourceLabel, 12f, Font.PLAIN);
+        sourceRow.add(sourceLabel);
+        psSourceProxy = new JCheckBox("Proxy", true);
+        psSourceProxy.setToolTipText("浏览器经 Burp Proxy 的流量（默认）");
+        psSourceRepeater = new JCheckBox("Repeater", false);
+        psSourceRepeater.setToolTipText("Repeater 每次发送的请求也进入被动扫描");
+        psSourceScanner = new JCheckBox("Scanner/Crawler", false);
+        psSourceScanner.setToolTipText("Burp 爬虫（Crawler）与 Scanner 流量；量可能较大");
+        psSourceIntruder = new JCheckBox("Intruder", false);
+        psSourceIntruder.setToolTipText("Intruder 爆破流量；量很大，建议仅在低速率任务时开启");
+        psSourceExtensions = new JCheckBox("Extensions", false);
+        psSourceExtensions.setToolTipText("其他扩展（含本插件工具）发出的请求；可能形成分析循环，谨慎开启");
+        for (JCheckBox box : List.of(psSourceProxy, psSourceRepeater, psSourceScanner,
+                psSourceIntruder, psSourceExtensions)) {
+            box.setFocusable(false);
+            UIStyles.setFont(box, 12f, Font.PLAIN);
+            box.addActionListener(e -> applyPassiveScanSources());
+            sourceRow.add(box);
+        }
+        passiveModeControlLine.add(sourceRow, BorderLayout.SOUTH);
+
         CardLayout controlDetailCard = new CardLayout();
         passiveControlDetailsPanel = new JPanel(controlDetailCard);
         passiveControlDetailsPanel.add(passiveModeControlLine, CARD_PASSIVE);
@@ -625,6 +748,7 @@ public class AIAnalyzerTab extends JPanel {
     private void initializePassiveScanManager() {
         passiveScanManager = new PassiveScanManager(api);
         passiveScanManager.setThreadCount((Integer) threadCountSpinner.getValue());
+        refreshPassiveScanSources();
 
         passiveScanManager.setOnResultUpdated(result -> {
             SwingUtilities.invokeLater(() -> updatePassiveScanTable(result));
@@ -640,8 +764,12 @@ public class AIAnalyzerTab extends JPanel {
             SwingUtilities.invokeLater(() -> {
                 passiveScanStatusLabel.setText(status);
                 boolean running = passiveScanManager.isRunning();
-                startPassiveScanButton.setEnabled(enablePassiveScanCheckBox.isSelected() && !running);
-                stopPassiveScanButton.setEnabled(enablePassiveScanCheckBox.isSelected() && running);
+                // 保持开关与实际运行状态一致（例如启动失败或外部停止），不触发 action 递归
+                if (enablePassiveScanCheckBox.isSelected() != running) {
+                    updatingPassiveScanToggle = true;
+                    enablePassiveScanCheckBox.setSelected(running);
+                    updatingPassiveScanToggle = false;
+                }
             });
         });
 
@@ -795,54 +923,13 @@ public class AIAnalyzerTab extends JPanel {
     }
 
     private void syncApiConfigToPassiveScan() {
+        if (settingsPanel != null) {
+            settingsPanel.syncApiConfigToAgents();
+        }
         if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
-            PassiveScanApiClient psClient = passiveScanManager.getApiClient();
-
-            psClient.setApiUrl(apiClient.getApiUrl());
-            psClient.setApiKey(apiClient.getApiKey());
-            psClient.setModel(apiClient.getModel());
-            psClient.setMaxTokens(apiClient.getMaxTokens());
-            psClient.setCustomParameters(apiClient.getConfig().getCustomParameters());
-            psClient.setApiProvider(apiClient.getApiProvider().getDisplayName());
-            psClient.setEnableSearch(apiClient.isEnableSearch());
-            psClient.setSearchMode(apiClient.getConfig().getSearchMode());
-            psClient.setTavilyApiKey(apiClient.getConfig().getTavilyApiKey());
-            psClient.setTavilyBaseUrl(apiClient.getConfig().getTavilyBaseUrl());
-            psClient.setGoogleSearchApiKey(apiClient.getConfig().getGoogleSearchApiKey());
-            psClient.setGoogleSearchCsi(apiClient.getConfig().getGoogleSearchCsi());
-
-            psClient.setEnableMcp(apiClient.isEnableMcp());
-            psClient.setBurpMcpUrl(apiClient.getBurpMcpUrl());
-            psClient.setBurpMcpAuthorization(apiClient.getBurpMcpAuthorization());
-
-            psClient.setEnableRagMcp(apiClient.isEnableRagMcp());
-            psClient.setRagMcpUrl(apiClient.getRagMcpUrl());
-            psClient.setRagMcpDocumentsPath(apiClient.getRagMcpDocumentsPath());
-
-            psClient.setEnableChromeMcp(apiClient.isEnableChromeMcp());
-            psClient.setChromeMcpUrl(apiClient.getChromeMcpUrl());
-
-            psClient.setEnableFileSystemAccess(apiClient.isEnableFileSystemAccess());
-
-            psClient.setCustomMcpConfigJson(settingsPanel.isCustomMcpEnabled() ? apiClient.getConfig().getCustomMcpConfigJson() : "");
-
-            psClient.setEnablePythonScript(apiClient.isEnablePythonScript());
-            psClient.setEnableCliTool(apiClient.getConfig().isEnableCliTool());
-            psClient.setEnableFileSystemSandbox(apiClient.isEnableFileSystemSandbox());
-            psClient.setCliWhitelist(apiClient.getConfig().getCliWhitelist());
-            psClient.setCliToolPrompt(apiClient.getConfig().getCliToolPrompt());
-            psClient.setWorkplaceDirectoryPath(settingsPanel.getWorkplaceDirectoryPath());
-
-            if (preScanFilterManager != null) {
-                psClient.setPreScanFilterManager(preScanFilterManager);
-                apiClient.setPreScanFilterManager(preScanFilterManager);
-                api.logging().logToOutput("[AIAnalyzerTab] 已将前置扫描管理器同步到主动/被动扫描客户端");
-            }
-
-            api.logging().logToOutput("[AIAnalyzerTab] 已同步所有配置到被动扫描客户端");
-            api.logging().logToOutput("[AIAnalyzerTab] MCP配置 - EnableMcp: " + apiClient.isEnableMcp() +
-                                     ", EnableRagMcp: " + apiClient.isEnableRagMcp() +
-                                     ", EnableChromeMcp: " + apiClient.isEnableChromeMcp());
+            // 快照式统一分发：与 SettingsPanel.applySnapshot 同一实现，杜绝手抄漂移
+            passiveScanManager.getApiClient().applySnapshot(
+                    com.ai.analyzer.core.AgentConnectionConfig.from(apiClient.getConfig()));
         }
     }
 
@@ -859,23 +946,42 @@ public class AIAnalyzerTab extends JPanel {
         return vbar.getMaximum() - vbar.getValue() - vbar.getVisibleAmount() < 80;
     }
 
-    private void startPassiveScan() {
-        if (!enablePassiveScanCheckBox.isSelected()) {
-            passiveScanStatusLabel.setText("请先勾选「启用被动扫描」");
-            new javax.swing.Timer(3000, e -> {
-                ((javax.swing.Timer) e.getSource()).stop();
-                passiveScanStatusLabel.setText("就绪");
-            }).start();
-            return;
+    /** 单一开关：勾选即启动被动扫描，取消勾选即停止。 */
+    private void togglePassiveScan() {
+        if (updatingPassiveScanToggle) return;
+        if (enablePassiveScanCheckBox.isSelected()) {
+            if (!startPassiveScan()) {
+                updatingPassiveScanToggle = true;
+                enablePassiveScanCheckBox.setSelected(false);
+                updatingPassiveScanToggle = false;
+            }
+        } else {
+            stopPassiveScan();
         }
+    }
 
-        syncApiConfigToPassiveScan();
-        settingsPanel.applyPassiveScanFilters();
-        passiveScanManager.startPassiveScan();
+    private boolean startPassiveScan() {
+        if (passiveScanManager == null) {
+            return false;
+        }
+        // 配置同步/过滤应用也放进 try：任何一个 setter 抛异常（如解析坏配置）
+        // 都要走到 catch 的补偿逻辑，否则勾选框亮着但什么都没启动
+        try {
+            syncApiConfigToPassiveScan();
+            settingsPanel.applyPassiveScanFilters();
+            passiveScanManager.startPassiveScan();
+            return passiveScanManager.isRunning();
+        } catch (Exception e) {
+            passiveScanStatusLabel.setText("启动失败: " + e.getMessage());
+            api.logging().logToError("[PassiveScan] 启动失败: " + e.getMessage());
+            return false;
+        }
     }
 
     private void stopPassiveScan() {
-        passiveScanManager.stopPassiveScan();
+        if (passiveScanManager != null) {
+            passiveScanManager.stopPassiveScan();
+        }
     }
 
     private void clearPassiveScanResults() {
@@ -1318,6 +1424,13 @@ public class AIAnalyzerTab extends JPanel {
         JButton newSessionButton = new JButton("＋ 新会话");
         newSessionButton.setToolTipText("新开一个会话：销毁当前 Agent 会话与记忆，从头开始（结果区清空）");
         newSessionButton.addActionListener(e -> {
+            if (organizerCoordinator != null) {
+                organizerCoordinator.stop();
+                organizerCoordinator.resetLoop();
+            }
+            if (apiClient != null) {
+                apiClient.clearLastCompletedRun();
+            }
             if (activeAnalysisPanel != null) {
                 activeAnalysisPanel.startNewSession();
             }
@@ -1356,13 +1469,12 @@ public class AIAnalyzerTab extends JPanel {
             passiveControlDetailsPanel.setVisible(!active);
         }
         if (active) {
-            resultTextPane = activeAnalysisPanel.getResultPane();
             userPromptArea = activeAnalysisPanel.getPromptArea();
-            activeAnalysisPanel.setActiveMode(true, activeAnalysisPanel.getResultPane(), activeAnalysisPanel.getPromptArea());
+            activeAnalysisPanel.setActiveMode(true, null);
         } else {
             resultTextPane = passiveScanResultPane;
             userPromptArea = passiveModePromptArea;
-            activeAnalysisPanel.setActiveMode(false, passiveScanResultPane, passiveModePromptArea);
+            activeAnalysisPanel.setActiveMode(false, passiveModePromptArea);
         }
         revalidate();
         repaint();
@@ -1377,6 +1489,9 @@ public class AIAnalyzerTab extends JPanel {
         apiClient.setMaxTokens(settingsPanel.getMaxTokens());
         com.ai.analyzer.util.TokenUsageTracker.instance().setBudget(parseTokenBudget(settingsPanel.getTokenBudget()));
         apiClient.setEnableSearch(settingsPanel.isSearchEnabled());
+        if (settingsPanel != null) {
+            settingsPanel.syncApiConfigToAgents();
+        }
     }
 
     private void onAnalysisStateChanged(boolean analyzing) {
@@ -1462,17 +1577,32 @@ public class AIAnalyzerTab extends JPanel {
 
     private void performAnalysis() {
         if (activeAnalysisPanel != null) {
+            // 分析输出渲染在主动面板的会话时间线里；被动模式下点「开始分析」
+            // 必须先切到主动卡片，否则输出落在隐藏面板（几分钟零反馈）。
+            if (analysisModeComboBox != null
+                    && MODE_PASSIVE.equals(analysisModeComboBox.getSelectedItem())) {
+                analysisModeComboBox.setSelectedItem(MODE_ACTIVE);
+            }
             activeAnalysisPanel.performAnalysis();
         }
     }
 
     private void stopAnalysis() {
+        if (organizerCoordinator != null) {
+            organizerCoordinator.stop();
+        }
+        if (organizerClient != null) {
+            organizerClient.cancelStreaming();
+        }
         if (activeAnalysisPanel != null) {
             activeAnalysisPanel.stopAnalysis();
         }
     }
 
     private void clearResults() {
+        if (organizerCoordinator != null) {
+            organizerCoordinator.stop();
+        }
         if (activeAnalysisPanel != null) {
             activeAnalysisPanel.clearResults();
         }
@@ -1567,8 +1697,37 @@ public class AIAnalyzerTab extends JPanel {
         return settingsPanel.getSkillsDirectoryPath();
     }
 
+    /** 侧栏（Burp 编辑器侧边面板）使用的 agent */
     public AgentApiClient getApiClient() {
+        return sidebarApiClient;
+    }
+
+    /** 请求分析页主动扫描使用的 agent */
+    public AgentApiClient getActiveApiClient() {
         return apiClient;
+    }
+
+    public AgentApiClient getSidebarApiClient() {
+        return sidebarApiClient;
+    }
+
+    /** 插件卸载时释放主动审计管理器（否则其队列/监听一直挂在 Scanner 上）。 */
+    public void disposeForUnload() {
+        if (activeAuditManager != null) {
+            try {
+                activeAuditManager.dispose();
+            } catch (Exception ignored) {
+            }
+        }
+        if (apiClient != null) {
+            try { apiClient.shutdownForUnload(); } catch (Exception ignored) { }
+        }
+        if (sidebarApiClient != null) {
+            try { sidebarApiClient.shutdownForUnload(); } catch (Exception ignored) { }
+        }
+        if (organizerClient != null) {
+            try { organizerClient.shutdownForUnload(); } catch (Exception ignored) { }
+        }
     }
 
     private void clearHttpEditors() {

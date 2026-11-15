@@ -49,7 +49,7 @@ public class SystemPromptBuilder {
                    is a non-security-relevant value on an endpoint already covered in this
                    session. If it is clearly low value, reply with exactly one line:
                    `[SKIP_LOW_VALUE: <one-sentence reason>]` and STOP. Do NOT call tools,
-                   do NOT write to the notebook, do NOT produce a report.
+                   do NOT write to the knowledge graph, do NOT produce a report.
                    When in doubt, DO NOT skip — continue with the normal analysis.
                 2. Identify target info: host, port, protocol, endpoint path
                 3. Analyze request characteristics: parameter types, authentication method, data format
@@ -154,29 +154,16 @@ public class SystemPromptBuilder {
         // Note: Skills are auto-injected by HarnessAgent as <available_skills> block
         // from workspace/skills/ — no manual injection needed here.
 
-        // 共享 Notebook 协作工具说明：被动扫描 Agent 与主动分析 Agent 通过按域名隔离的知识黑板共享关键发现
+        // 资产图谱（含笔记/评估）：指纹、特征、推断、结论与人工牵引都在同一张图里
         p.append("""
-                \n# Shared Notebook (多 Agent 协作知识黑板)
-                你与主动分析 Agent 共享一个按域名隔离的 Notebook 知识库（每个域名一个 .md 文件）：
-                - `notebook_read(domain)`：读取某域名的全部关键发现（攻击面/接口/参数/漏洞线索/验证结论）
-                - `notebook_write(domain, type, content)`：追加一条关键发现（自动去重、版本+1、并广播其他 Agent）
-                - `notebook_get_updates(domain, since_version)`：按版本号拉取增量，补齐错过的广播或重启前的更新
-                - `notebook_list()`：列出所有已有 Notebook 的域名
-
-                使用原则：
-                - 分析某域名前先 `notebook_read` 查看已知信息，避免重复劳动
-                - 发现的攻击面、接口、参数、漏洞线索、验证结论及时 `notebook_write` 到对应域名，供其他 Agent 复用
-                - 其他 Agent 的新写入通过广播提醒；用 `notebook_get_updates` 按版本增量获取
-                """);
-
-        // 资图谱：指纹/特征/后端推断落图（供覆盖图与后续主动分析复用）
-        p.append("""
-                \n# Knowledge Graph (graph_* tools)
-                你与主动分析 Agent 共享同一个 SQLite 资产知识图谱：
-                - 开始分析某站点前先 `graph_overview`；查具体接口用 `graph_get_interface` / `graph_get_subgraph`。
-                - 发现**技术指纹**时调用 `graph_upsert_fingerprint`（必须附 evidence：命中的 header/Cookie/HTML/JS 片段，可选 version）。
-                - 发现**能力特征**（actuator/swagger/graphql/upload/jwt/oauth/websocket 等）时调用 `graph_add_feature`，
-                  可同时给出 vuln_class（如 未授权访问/信息泄露/文件上传/IDOR）。
+                \n# Knowledge Graph (graph_* tools，含笔记与人工牵引)
+                你与主动分析 Agent、人类共享同一个 SQLite 资产知识图谱（节点/边/证据/笔记）：
+                - 分析某站点前先 `graph_overview(root_id)`，并 `graph_get_notes(root_id, since_version=0)`
+                  读取已有发现；人类写的 `instruction` 类笔记是明确指令，优先执行。
+                - 发现新接口/参数/指纹/特征时落图：`graph_upsert_observation` / `graph_upsert_fingerprint` / `graph_add_feature`。
+                - 有价值的结论用 `graph_add_note` 写入，供其他 Agent 与人类复用。
+                - 分析完一个接口后用 `graph_assess_node(node_id, priority, assessment, next_step)` 标记
+                  是否值得继续（high / normal / low / none）。
                 - 从路径形态/错误串/Cookie/JS 推断后端实现时调用 `graph_add_backend_hypothesis`，必须附 evidence。
                 推测保持 INFERRED，不要编造证据；低价值流量仍按 `[SKIP_LOW_VALUE]` 规则跳过。
                 """);

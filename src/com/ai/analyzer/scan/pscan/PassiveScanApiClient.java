@@ -131,10 +131,8 @@ public class PassiveScanApiClient {
     /** 设置变更代数：构建期间发生的 invalidate 会让新 runtime 作废 */
     private final java.util.concurrent.atomic.AtomicLong runtimeGeneration = new java.util.concurrent.atomic.AtomicLong();
     private volatile Toolkit asToolkit;
-    /** 共享 Notebook 工具（知识黑板）。主动与被动 Agent 指向同一 {@link com.ai.analyzer.tools.NotebookUtils.NotebookStore} 单例 */
-    private com.ai.analyzer.tools.NotebookTool notebookTool;
-    /** Notebook 广播订阅是否已注册（避免运行时重建导致重复订阅） */
-    private volatile boolean notebookBroadcastSubscribed;
+    /** 图谱笔记广播是否已订阅（避免运行时重建导致重复订阅） */
+    private volatile boolean noteBroadcastSubscribed;
     /** 模型并发预算：同一时间最多允许的并流 LLM 调用数（模型是稀缺资源，不是线程） */
     private final java.util.concurrent.Semaphore modelSemaphore =
             new java.util.concurrent.Semaphore(DEFAULT_MODEL_CONCURRENCY);
@@ -190,6 +188,47 @@ public class PassiveScanApiClient {
             this.apiKey = apiKey;
             invalidateAgentScopeRuntime();
         }
+    }
+
+    /**
+     * 统一配置消费：与 {@code AgentApiClient.applySnapshot} 同源的一份
+     * {@link com.ai.analyzer.core.AgentConnectionConfig} 映射到被动侧字段。
+     * 替代历史手抄的 syncApiConfigToPassiveScan（30 行、多处易漂移）。
+     */
+    public void applySnapshot(com.ai.analyzer.core.AgentConnectionConfig snapshot) {
+        if (snapshot == null) return;
+        setApiUrl(snapshot.apiUrl());
+        setApiKey(snapshot.apiKey());
+        setModel(snapshot.model());
+        setMaxTokens(snapshot.maxTokens());
+        if (snapshot.apiProvider() != null) {
+            setApiProvider(snapshot.apiProvider().getDisplayName());
+        }
+        setEnableSearch(snapshot.enableSearch());
+        setSearchMode(snapshot.searchMode());
+        setTavilyApiKey(snapshot.tavilyApiKey());
+        setTavilyBaseUrl(snapshot.tavilyBaseUrl());
+        setGoogleSearchApiKey(snapshot.googleSearchApiKey());
+        setGoogleSearchCsi(snapshot.googleSearchCsi());
+        setEnableMcp(snapshot.enableMcp());
+        setBurpMcpUrl(snapshot.burpMcpUrl());
+        setBurpMcpAuthorization(snapshot.burpMcpAuthorization());
+        setEnableRagMcp(snapshot.enableRagMcp());
+        setRagMcpUrl(snapshot.ragMcpUrl());
+        setRagMcpDocumentsPath(snapshot.ragMcpDocumentsPath());
+        setEnableChromeMcp(snapshot.enableChromeMcp());
+        setChromeMcpUrl(snapshot.chromeMcpUrl());
+        setEnableFileSystemAccess(snapshot.enableFileSystemAccess());
+        setCustomMcpConfigJson(snapshot.customMcpConfigJson());
+        setEnablePythonScript(snapshot.enablePythonScript());
+        setEnableCliTool(snapshot.enableCliTool());
+        setEnableFileSystemSandbox(snapshot.enableFileSystemSandbox());
+        setCliWhitelist(snapshot.cliWhitelist());
+        setCliToolPrompt(snapshot.cliToolPrompt());
+        setEnableSkills(snapshot.enableSkills());
+        setSkillsDirectoryPath(snapshot.skillsDirectoryPath());
+        setCustomSystemPrompt(snapshot.customActiveSystemPrompt());
+        setWorkplaceDirectoryPath(snapshot.workplaceDirectoryPath());
     }
 
     public void setApiUrl(String apiUrl) {
@@ -361,7 +400,6 @@ public class PassiveScanApiClient {
         normalized = normalizePath(normalized);
         boolean changed = !java.util.Objects.equals(this.workplaceDirectoryPath, normalized);
         com.ai.analyzer.util.HttpFormatter.setWorkplaceDirectory(normalized);
-        com.ai.analyzer.tools.NotebookUtils.NotebookStore.getInstance().setWorkplaceDirectory(normalized);
         com.ai.analyzer.graph.GraphStore.getInstance().setWorkplaceDirectory(normalized);
         this.workplaceDirectoryPath = normalized;
         // RestrictedReadTool / ShellExecTool 在构建时捕获了旧路径，必须重建 runtime，
@@ -371,11 +409,20 @@ public class PassiveScanApiClient {
         }
     }
 
+    /** 解析自定义 MCP JSON：任何异常都降级为空列表。该构造器在插件加载路径上，绝不能抛。 */
+    private static List<com.ai.analyzer.agent.mcpclient.CustomMcpConfig> parseCustomMcpQuietly(String json) {
+        try {
+            return CustomMcpConfigParser.parse(json);
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
     public void setCustomMcpConfigJson(String v) {
         String normalized = v == null ? "" : v;
         if (!normalized.equals(this.customMcpConfigJson)) {
             this.customMcpConfigJson = normalized;
-            this.customMcpConfigs = CustomMcpConfigParser.parse(normalized);
+            this.customMcpConfigs = parseCustomMcpQuietly(normalized);
             invalidateAgentScopeRuntime();
         }
     }
@@ -410,6 +457,18 @@ public class PassiveScanApiClient {
                 agentScopeRuntime = null;
                 asToolkit = null;
             }
+        }
+    }
+
+    /** 后台预热（被动侧）：提前建模型/Toolkit/MCP，并构建一次轻量 ReActAgent。 */
+    public void warmup() {
+        if (apiKey == null || apiKey.isBlank()) {
+            return;
+        }
+        ensureAgentScopeInitialized();
+        ReActAgentRuntime runtime = agentScopeRuntime;
+        if (runtime != null) {
+            runtime.warmup();
         }
     }
 
@@ -455,19 +514,11 @@ public class PassiveScanApiClient {
             asToolkit.registerTool(new com.ai.analyzer.tools.RestrictedReadTool(workplaceDirectoryPath));
             logInfo("AgentScope RestrictedReadTool（受限 read_file）已注册");
 
-            // 注册共享 Notebook 知识黑板：被动扫描 Agent 与主动分析 Agent 共享关键发现
-            if (notebookTool == null) {
-                notebookTool = new com.ai.analyzer.tools.NotebookTool(
-                        com.ai.analyzer.tools.NotebookUtils.NotebookStore.getInstance(), "passive-agent");
-            }
-            asToolkit.registerTool(notebookTool);
-            ensureNotebookBroadcastSubscribed();
-            logInfo("AgentScope NotebookTool（共享知识黑板）已注册");
-
-            // 资产知识图谱（SQLite）：Origin→接口→参数→功能/实体/模块/技术/N-day 关联
+            // 资产知识图谱（SQLite）：节点/边/证据 + 人类与 Agent 的笔记、节点评估
             asToolkit.registerTool(new com.ai.analyzer.graph.GraphTool(
                     com.ai.analyzer.graph.GraphStore.getInstance(), "passive-agent"));
-            logInfo("AgentScope GraphTool（资产知识图谱）已注册");
+            ensureNoteBroadcastSubscribed();
+            logInfo("AgentScope GraphTool（资产知识图谱 + 笔记）已注册");
 
             // 注册 Burp 扩展工具（Intruder 发送 + 批量爆破）
             if (api != null) {
@@ -494,17 +545,15 @@ public class PassiveScanApiClient {
                     List<String> command = customConfig.getCommand();
                     String urlOrCommand = url != null && !url.isEmpty() ? url : (!command.isEmpty() ? command.get(0) : "");
                     List<String> args = command.size() > 1 ? command.subList(1, command.size()) : List.of();
-                    java.util.Map<String, String> headers = new java.util.HashMap<>();
-                    if (customConfig.getAuthorization() != null && !customConfig.getAuthorization().isEmpty()) {
-                        headers.put("Authorization",
-                                AgentScopeMcpManager.normalizeBearer(customConfig.getAuthorization()));
-                    }
+                    java.util.Map<String, String> headers =
+                            AgentScopeMcpManager.headersOf(customConfig);
                     AgentScopeMcpManager.registerCustomMcp(asToolkit,
                             customConfig.getName(),
                             transportType,
                             urlOrCommand,
                             args,
                             headers,
+                            customConfig.getEnv(),
                             "passive-mcp");
                 }
             }
@@ -644,7 +693,7 @@ public class PassiveScanApiClient {
         this.skillsDirectoryPath = settings.getSkillsDirectoryPath();
         setWorkplaceDirectoryPath(settings.getWorkplaceDirectoryPath());
         this.customMcpConfigJson = settings.getCustomMcpConfigJson();
-        this.customMcpConfigs = CustomMcpConfigParser.parse(this.customMcpConfigJson);
+        this.customMcpConfigs = parseCustomMcpQuietly(this.customMcpConfigJson);
         this.customSystemPrompt = settings.getCustomPassiveSystemPrompt();
         com.ai.analyzer.util.TokenUsageTracker.instance().setBudget(settings.getTokenBudgetTokens());
     }
@@ -729,7 +778,7 @@ public class PassiveScanApiClient {
         }
         httpContent = prepared.promptText;
 
-        String userContent = buildScanPrompt(httpContent, domainOf(requestResponse));
+        String userContent = buildScanPrompt(httpContent, domainOf(requestResponse), originOf(requestResponse));
 
         // ========== 前置扫描器集成 ==========
         if (preScanFilterManager != null && preScanFilterManager.isEnabled()) {
@@ -770,11 +819,16 @@ public class PassiveScanApiClient {
             return "## 风险等级: 无\n批次为空，无法分析。";
         }
 
+        // 预算闸门与单请求路径一致：批次是第 4 个消费点，跳过它会在预算耗尽后继续烧 token
+        if (com.ai.analyzer.util.TokenUsageTracker.sharedOverBudget()) {
+            return "## 风险等级: 无\nToken 预算已用尽，本批次已跳过。请重置统计或提高预算。";
+        }
+
         logDebug("开始会话批次分析: " + batchRequests.size() + " 个连续请求, 会话="
                 + RequestFingerprint.sessionKey(batchRequests.get(0)));
 
         String domain = domainOf(batchRequests.get(0));
-        String userContent = buildBatchScanPrompt(batchRequests, domain);
+        String userContent = buildBatchScanPrompt(batchRequests, domain, originOf(batchRequests.get(0)));
         return doAgentScopeAnalysis(userContent, stableSessionId(domain), cancelFlag, onChunk);
     }
 
@@ -841,6 +895,10 @@ public class PassiveScanApiClient {
                                 }
                                 case REPLY_END -> {
                                     logDebug("ReActAgent 流式输出完成");
+                                    futureResult.complete(resultBuilder.toString());
+                                }
+                                case INTERRUPTED -> {
+                                    // 被动扫描不存在人类插话入口；收到即视为正常收尾
                                     futureResult.complete(resultBuilder.toString());
                                 }
                                 case USAGE -> {
@@ -935,10 +993,26 @@ public class PassiveScanApiClient {
         }
     }
 
-    /** 取请求所属域名（用于 Notebook 按域隔离共享 + 稳定 sessionId）。 */
+    /** 取请求所属域名（用于稳定 sessionId）。 */
     private static String domainOf(HttpRequestResponse requestResponse) {
         String host = RequestFingerprint.hostOf(requestResponse);
         return (host == null || host.isEmpty()) ? "unknown" : host;
+    }
+
+    /** 与 GraphStore.rootOf 一致：scheme://host:port，作为图谱 root_id 传给 Agent。 */
+    private static String originOf(HttpRequestResponse requestResponse) {
+        try {
+            var svc = requestResponse.request() != null ? requestResponse.request().httpService() : null;
+            if (svc != null && svc.host() != null && !svc.host().isEmpty()) {
+                // 与 GraphStore.rootOf 一致：host 小写，避免混合大小写 Host 拆成两个 root
+                return (svc.secure() ? "https" : "http") + "://"
+                        + svc.host().toLowerCase(java.util.Locale.ROOT) + ":" + svc.port();
+            }
+            String url = requestResponse.request() == null ? null : requestResponse.request().url();
+            return url == null ? "" : com.ai.analyzer.graph.GraphNormalizers.parse("GET", url, null).origin();
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     /** 被动扫描稳定 sessionId：按域名稳定，避免每次分析都换 session 导致记忆/状态无法复用。 */
@@ -953,19 +1027,20 @@ public class PassiveScanApiClient {
     }
 
     /**
-     * 订阅共享 Notebook 的广播通知（只提醒，不承载数据）。
-     * 被动扫描 agent 收到其他 agent（含主动分析 agent）写入的域名更新后会在此记录一条日志，
-     * 实际的增量内容由 agent 自行 notebook_get_updates 拉取。
+     * 订阅图谱笔记的广播通知（只提醒，不承载数据）。
+     * 其他 agent（含主动分析 agent 与人类）写入笔记后记录一条日志，
+     * 正文由 agent 自行 graph_get_notes 拉取。
      */
-    private void ensureNotebookBroadcastSubscribed() {
-        if (notebookBroadcastSubscribed) return;
-        notebookBroadcastSubscribed = true;
+    private void ensureNoteBroadcastSubscribed() {
+        if (noteBroadcastSubscribed) return;
+        noteBroadcastSubscribed = true;
         try {
-            com.ai.analyzer.tools.NotebookUtils.NotebookStore.getInstance().subscribe(update ->
-                    logInfo("Notebook 有新内容: domain=" + update.domain()
-                            + " v" + update.version() + " source=" + update.sourceAgent()));
+            com.ai.analyzer.graph.GraphStore.getInstance().subscribeNotes(note ->
+                    logInfo("图谱笔记更新: root=" + note.rootId()
+                            + " v" + com.ai.analyzer.graph.GraphDatabase.noteVersion(note)
+                            + " author=" + note.prop("author")));
         } catch (Exception e) {
-            logDebug("Notebook 广播订阅失败: " + e.getMessage());
+            logDebug("图谱笔记广播订阅失败: " + e.getMessage());
         }
     }
 
@@ -991,16 +1066,21 @@ public class PassiveScanApiClient {
     }
 
     /**
-     * 构建扫描提示词（单个请求），并注入目标域名与共享黑板（Notebook）协作要求。
+     * 构建扫描提示词（单个请求），并注入目标域名与图谱协作要求。
      */
-    private String buildScanPrompt(String httpContent, String domain) {
+    private String buildScanPrompt(String httpContent, String domain, String origin) {
         String d = domain == null || domain.isEmpty() ? "unknown" : domain;
+        String root = origin == null || origin.isEmpty() ? d : origin;
         StringBuilder prompt = new StringBuilder();
-        prompt.append("目标域名: ").append(d).append("\n\n");
-        prompt.append("**协作要求（共享知识黑板 Notebook）**：\n");
-        prompt.append("- 分析前先调用 notebook_read(domain=\"").append(d)
-                .append("\") 读取该域名已知的关键发现，避免重复劳动\n");
-        prompt.append("- 发现新的攻击面 / 接口 / 参数 / 漏洞线索 / 验证结论后，调用 notebook_write 写入该域名，供其他 Agent 复用\n\n");
+        prompt.append("目标域名: ").append(d).append("（Origin: ").append(root).append("）\n\n");
+        prompt.append("**协作要求（知识图谱）**：\n");
+        prompt.append("- 分析前先调用 graph_overview(root_id=\"").append(root)
+                .append("\") 和 graph_get_notes(root_id=\"").append(root)
+                .append("\", since_version=0)，读取已知发现与人类留下的牵引\n");
+        prompt.append("- 发现新接口/参数/指纹/能力特征时写入图谱：graph_upsert_observation / graph_upsert_fingerprint / graph_add_feature\n");
+        prompt.append("- 有价值的结论、漏洞线索或下一步建议用 graph_add_note 写入，供其他 Agent 与人类复用\n");
+        prompt.append("- 分析完一个接口后用 graph_assess_node 标记是否值得继续\n");
+        prompt.append("- 人类写入的 instruction 类笔记是明确指令，优先执行\n\n");
         prompt.append("请分析以下HTTP请求/响应中的安全风险：\n\n");
         prompt.append("**特别注意**：\n");
         prompt.append("- 如果URL参数中包含URL（如 `src=http://...`、`url=https://...`、`redirect=...`），这是潜在的SSRF漏洞，**必须主动测试验证**\n");
@@ -1014,7 +1094,7 @@ public class PassiveScanApiClient {
      * 构建会话批次分析提示词：强调流程/逻辑漏洞的序列级分析。
      * 批次内容过长时优先保留最新的请求（逻辑异常通常出现在序列尾部）。
      */
-    private String buildBatchScanPrompt(List<HttpRequestResponse> batchRequests, String domain) {
+    private String buildBatchScanPrompt(List<HttpRequestResponse> batchRequests, String domain, String origin) {
         final int maxTotalLength = 30000;
 
         StringBuilder body = new StringBuilder();
@@ -1048,9 +1128,11 @@ public class PassiveScanApiClient {
 
         StringBuilder prompt = new StringBuilder();
         String d = domain == null || domain.isEmpty() ? "unknown" : domain;
-        prompt.append("目标域名: ").append(d).append("\n");
-        prompt.append("**协作要求（共享知识黑板 Notebook）**：分析前先 notebook_read(domain=\"").append(d)
-                .append("\")，发现新攻击面/参数/漏洞线索后 notebook_write 到该域名。\n\n");
+        String root = origin == null || origin.isEmpty() ? d : origin;
+        prompt.append("目标域名: ").append(d).append("（Origin: ").append(root).append("）\n");
+        prompt.append("**协作要求（知识图谱）**：分析前先 graph_overview 与 graph_get_notes(root_id=\"")
+                .append(root).append("\", since_version=0)；发现的新接口/特征/结论写入图谱；")
+                .append("人类写入的 instruction 类笔记是明确指令，优先执行。\n\n");
         prompt.append("请分析以下**连续用户操作流量序列**（同一会话内按时间先后排列）中的安全风险。\n\n");
         prompt.append("**核心关注（逻辑漏洞，本序列分析的重点）**：\n");
         prompt.append("- 业务流程：识别完整操作流程，发现流程跳跃、状态机绕过、验证码/确认步骤被跳过\n");

@@ -256,6 +256,91 @@ class GraphStoreTest {
                 .contains("GET /api/admin/users");
     }
 
+    @Test
+    @DisplayName("笔记：版本递增、内容去重、按版本增量读取")
+    void notes_version_dedup_and_since() {
+        String root = "https://target.com:443";
+        store.observe(rr("GET", "https://target.com/api/order/detail?id=1", "", true, 443));
+
+        GraphStore.NoteResult first = store.addNote(root, null, "人类关注的入口：登录后有越权", "instruction", "human", "human");
+        GraphStore.NoteResult dup = store.addNote(root, null, "人类关注的入口：登录后有越权 ", "instruction", "human", "human");
+        GraphStore.NoteResult second = store.addNote(root, null, "orderId 可枚举", "finding", "agent", "agent");
+
+        assertThat(first.version()).isEqualTo(1);
+        assertThat(first.duplicate()).isFalse();
+        assertThat(dup.duplicate()).isTrue();
+        assertThat(second.version()).isEqualTo(2);
+
+        assertThat(store.listNotes(root, 0)).hasSize(2);
+        assertThat(store.listNotes(root, 1)).hasSize(1);
+        assertThat(store.listNotes(root, 1).get(0).prop("content")).isEqualTo("orderId 可枚举");
+        assertThat(store.overview(root)).contains("站点笔记").contains("人类关注的入口");
+    }
+
+    @Test
+    @DisplayName("笔记不进入画布数据：listNodes/listEdges 不含 NOTE")
+    void notes_are_hidden_from_canvas_data() {
+        String root = "https://target.com:443";
+        store.observe(rr("GET", "https://target.com/api/order/detail?id=1", "", true, 443));
+        long ifaceId = extractNodeId(store.findInterfaces(root, "order", null, null));
+        store.addNote(root, ifaceId, "这个接口值得测 IDOR", "hint", "human", "human");
+
+        assertThat(store.listNodes(root, 500))
+                .noneMatch(n -> n.type() == GraphTypes.NodeType.NOTE);
+        java.util.Set<Long> noteIds = store.listNotes(root, 0).stream()
+                .map(GraphTypes.Node::id).collect(java.util.stream.Collectors.toSet());
+        assertThat(store.listEdges(root, 500)).noneMatch(e ->
+                noteIds.contains(e.sourceNodeId()) || noteIds.contains(e.targetNodeId()));
+        assertThat(store.listNotes(root, 0)).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("笔记可编辑与删除")
+    void note_update_and_delete() {
+        String root = "https://target.com:443";
+        long noteId = store.addNote(root, null, "旧内容", "note", "human", "human").nodeId();
+
+        store.updateNote(noteId, "新内容", "human");
+        assertThat(store.listNotes(root, 0).get(0).prop("content")).isEqualTo("新内容");
+
+        store.deleteNote(noteId);
+        assertThat(store.listNotes(root, 0)).isEmpty();
+        assertThat(store.getNode(noteId)).isNull();
+    }
+
+    @Test
+    @DisplayName("节点评估：priority/结论/下一步写入属性，并出现在接口上下文")
+    void assess_node_writes_properties() {
+        String root = "https://target.com:443";
+        store.observe(rr("GET", "https://target.com/api/order/detail?id=1", "", true, 443));
+        long ifaceId = extractNodeId(store.findInterfaces(root, "order", null, null));
+
+        String result = store.assessNode(ifaceId, "high", "orderId 直接可控，值得测越权",
+                "用另一账号的 orderId 重放并对比响应", "agent");
+        assertThat(result).contains("high");
+
+        GraphTypes.Node node = store.getNode(ifaceId);
+        assertThat(node.prop("assess_priority")).isEqualTo("high");
+        assertThat(node.prop("assess_summary")).asString().contains("越权");
+
+        String sub = store.subgraph(ifaceId, 1, null, true, 60);
+        assertThat(sub).contains("评估: high").contains("下一步:");
+    }
+
+    @Test
+    @DisplayName("人工新增节点：默认推测，勾选已验证后计入已测")
+    void human_node_defaults_to_inferred() {
+        String root = "https://target.com:443";
+        GraphTypes.Node guessed = store.addHumanNode(root, GraphTypes.NodeType.INTERFACE,
+                "https://target.com/api/manual/guess", 0, null, false, "");
+        assertThat(guessed.status()).isEqualTo(GraphTypes.FactStatus.INFERRED);
+
+        GraphTypes.Node verified = store.addHumanNode(root, GraphTypes.NodeType.INTERFACE,
+                "POST /api/manual/confirmed", 0, null, true, "人工验证通过");
+        assertThat(verified.status()).isEqualTo(GraphTypes.FactStatus.CONFIRMED);
+        assertThat(store.listNotes(root, 0)).hasSize(1);
+    }
+
     private static long extractNodeId(String findInterfacesOutput) {
         String line = findInterfacesOutput.lines().findFirst().orElseThrow();
         return Long.parseLong(line.replaceAll(".*node=(\\d+).*", "$1").trim());

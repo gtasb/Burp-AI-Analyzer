@@ -88,6 +88,10 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
     /** 文件沙箱开关：true=限制在工作区/project 根内；false=文件工具可读写任意路径（默认） */
     private final boolean sandboxEnabled;
     private final List<io.agentscope.core.skill.repository.AgentSkillRepository> skillRepositories;
+    private final String agentName;
+    private final Path stateWorkspacePath;
+    private final boolean disableMemoryTools;
+    private final boolean disableMemoryHooks;
 
     private volatile HarnessAgent harnessAgent;
     private final AtomicReference<Subscription> currentSubscription = new AtomicReference<>();
@@ -98,6 +102,17 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
     private volatile RequireConfirmHandler confirmHandler;
     /** 累积 ToolCallDeltaEvent 的部分参数字符串，key=toolCallId，在 ToolCallEndEvent 或 ToolResultStartEvent 时取用 */
     private final java.util.concurrent.ConcurrentHashMap<String, StringBuilder> toolCallArgBuffers = new java.util.concurrent.ConcurrentHashMap<>();
+    /** 最近一次 interject 是否已被本轮消费（AgentResultEvent INTERRUPTED 收尾） */
+    private volatile boolean interjectConsumed;
+    /** 当前运行轮的 sessionId（chat 入口设置，interject 需要 slotKey(userId, sessionId) 定位会话槽） */
+    private volatile String currentInterjectSessionId;
+    /**
+     * 待送入的插话队列：interrupt(Msg) 只会让本轮以 INTERRUPTED 收尾，
+     * AgentScope 不会把消息写进会话状态（实测 2026-11，probe6/7）。
+     * 收尾后由 chat 循环把队列内容作为下一轮输入，模型才能真正看到。
+     */
+    private final java.util.concurrent.ConcurrentLinkedQueue<String> pendingInterjections =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
 
     private AgentScopeAgentRuntime(Builder builder) {
         this.mode = builder.mode;
@@ -114,6 +129,10 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         this.maxIters = builder.maxIters;
         this.sandboxEnabled = builder.sandboxEnabled;
         this.skillRepositories = builder.skillRepositories;
+        this.agentName = builder.agentName;
+        this.stateWorkspacePath = builder.stateWorkspacePath;
+        this.disableMemoryTools = builder.disableMemoryTools;
+        this.disableMemoryHooks = builder.disableMemoryHooks;
     }
 
     /**
@@ -167,6 +186,11 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
                                      RuntimeEventListener listener) {
         CompletableFuture<String> future = new CompletableFuture<>();
         String userId = System.getProperty("user.name", "burp-user");
+        // interject 需要 (userId, sessionId) 定位会话槽位
+        currentInterjectSessionId = sessionId;
+        // 上一轮结束后残留的插话（UI 与 worker 状态的竞态窗口里入队，但没有后续 INTERRUPTED
+        // 收尾去投递）不能带进新一轮：新一轮有明确的用户输入，旧插话已失去时机
+        pendingInterjections.clear();
 
         List<Msg> asMessages = toAgentScopeMessages(messages);
         RuntimeContext ctx = RuntimeContext.builder()
@@ -191,9 +215,12 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
             // HITL 循环：agent 遇到 ASK 决策（如 plan_exit）时会暂停并发起确认，
             // 我们在收集到待确认工具调用后询问用户，用 ConfirmResult 恢复 agent，
             // 直到一次完整执行流程结束（或用户取消/出错）。
+            // 插话（interject）复用同一循环：本轮 INTERRUPTED 收尾后，把队列里的
+            // 人类消息作为下一轮输入送入（AgentScope 不会替我们持久化它）。
             List<Msg> currentMessages = asMessages;
             while (!future.isCancelled()) {
                 List<io.agentscope.core.message.ToolUseBlock> pendingConfirm = new java.util.ArrayList<>();
+                interjectConsumed = false;
                 reactor.core.publisher.Flux<AgentEvent> stream =
                         buildEventStream(currentMessages, ctx, listener, future, pendingConfirm);
                 // blockLast(Duration) 内部直接调 timeout.toNanos()，传 null 会 NPE；
@@ -204,7 +231,27 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
                     stream.blockLast();
                 }
 
-                if (future.isCancelled() || pendingConfirm.isEmpty()) {
+                if (future.isCancelled()) {
+                    break;
+                }
+
+                // 插话收尾：把待送入的人类消息作为下一轮输入（等待用户可能还想补充的短暂窗口不需要，
+                // 队列在收尾瞬间已冻结），只有队列非空才继续
+                String queued;
+                if (interjectConsumed && (queued = pendingInterjections.poll()) != null) {
+                    StringBuilder combined = new StringBuilder(queued);
+                    while ((queued = pendingInterjections.poll()) != null) {
+                        combined.append("\n\n").append(queued);
+                    }
+                    currentMessages = List.of(Msg.builder()
+                            .name("user")
+                            .role(MsgRole.USER)
+                            .textContent("【用户插话】" + combined)
+                            .build());
+                    continue;
+                }
+
+                if (pendingConfirm.isEmpty()) {
                     break;
                 }
 
@@ -330,9 +377,22 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
             // 缓存清理失败不阻断：下方仍会置空重建 + 清理 workspace 记忆
         }
         shutdown();
-        purgePersistentSessionData(workspacePath);
+        if (stateWorkspacePath != null) {
+            // 角色独立状态目录：只清自己的 memory/session，不碰共享文件工作区
+            deleteRecursivelyQuietly(resolveEffectiveWorkspace(stateWorkspacePath));
+        } else {
+            // SIDEBAR 分支：三个 agent 共用 <workspace>/<user.name> 作为文件工具根
+            // （ACTIVE/ORGANIZER 的 eviction 落盘也在里面），绝不能整目录删除。
+            // 侧栏的「新会话」只清自己的会话状态与记忆：memory/ 与 MEMORY.md 归侧栏独有，
+            // agents/<agentName> 按 agent 名隔离；large_tool_results 留给所有 agent 共用。
+            Path workspace = resolveEffectiveWorkspace(workspacePath);
+            Path fileRoot = resolveFileToolRoot(workspacePath);
+            deleteRecursivelyQuietly(fileRoot.resolve("MEMORY.md"));
+            deleteRecursivelyQuietly(fileRoot.resolve("memory"));
+            deleteRecursivelyQuietly(workspace.resolve("agents").resolve(agentName));
+        }
         DebugContext.log("AgentScopeAgentRuntime", "session_reset",
-                java.util.Map.of("mode", mode != null ? mode.name() : ""));
+                java.util.Map.of("mode", mode != null ? mode.name() : "", "agent", agentName));
     }
 
     /**
@@ -369,14 +429,7 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
                 .resolve(System.getProperty("user.name", "burp-user"));
     }
 
-    public static void purgePersistentSessionData(Path workspacePath) {
-        // workplace 未配置时 Harness 会使用默认 workspace（resolveEffectiveWorkspace 已复刻回退链），
-        // 此时也必须清理记忆，否则「新会话」仍会加载旧上下文。
-        Path workspace = resolveEffectiveWorkspace(workspacePath);
-        deleteRecursivelyQuietly(resolveFileToolRoot(workspacePath));
-        deleteRecursivelyQuietly(workspace.resolve("agents").resolve(AGENT_NAME));
-    }
-
+    
     private static void deleteRecursivelyQuietly(Path path) {
         if (path == null || !Files.exists(path)) return;
         try {
@@ -465,7 +518,8 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
             if (!args.isEmpty() && !"{}".equals(args)) {
                 String summary = args.length() > 200 ? args.substring(0, 200) + "…" : args;
                 com.ai.analyzer.util.AppLogBuffer.tool("AgentScopeAgentRuntime", e.getToolCallName() + " 参数: " + summary);
-                listener.onEvent(RuntimeEvent.textDelta("\n📥 参数: " + summary + "\n"));
+                // 不要把参数摘要作为 textDelta 发给上层：它会混进 assistant 文本，
+                // 污染侧栏摘要（约定“纯文本结论，不含工具轨迹”）与整理 agent 的交接内容
             }
         } else if (event instanceof ToolCallStartEvent e) {
             com.ai.analyzer.util.AppLogBuffer.tool("AgentScopeAgentRuntime", "调用工具: " + e.getToolCallName());
@@ -497,13 +551,24 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
             }
         } else if (event instanceof AgentResultEvent e) {
             Msg result = e.getResult();
-            if (result != null) {
+            boolean interrupted = result != null
+                    && result.getGenerateReason() == io.agentscope.core.message.GenerateReason.INTERRUPTED;
+            if (interrupted) {
+                // 用户插话（interject）触发的收尾：AgentScope 合成
+                // "I noticed that you have interrupted me…" 并结束本轮。
+                // 必须向监听者标记，否则上层会把这轮当作正常完成去触发整理 agent。
+                listener.onEvent(RuntimeEvent.interrupted(
+                        result.getTextContent() == null ? "" : result.getTextContent()));
+                interjectConsumed = true;
+            } else if (result != null) {
                 String text = result.getTextContent();
                 if (text != null && !text.isEmpty()) {
                     listener.onEvent(RuntimeEvent.replyEnd(text));
                 }
             }
-            DebugContext.log("AgentScopeAgentRuntime", "agent_result", Map.of("hasResult", String.valueOf(result != null)));
+            DebugContext.log("AgentScopeAgentRuntime", "agent_result", Map.of(
+                    "hasResult", String.valueOf(result != null),
+                    "interrupted", String.valueOf(interrupted)));
         } else if (event instanceof SubagentExposedEvent e) {
             listener.onEvent(RuntimeEvent.subagent(
                     e.getLabel() != null ? e.getLabel() : e.getSubagentId(), null));
@@ -524,18 +589,73 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
 
     // ---- Agent lifecycle ----
 
+    /**
+     * 预热：提前构建 {@link HarnessAgent}（工作区目录、memory 中间件、技能扫描等），
+     * 避免首次分析承担这部分一次性初始化。失败只记日志，后续仍会按需重新构建。
+     */
+    public void warmup() {
+        try {
+            getOrCreateHarnessAgent();
+        } catch (Exception e) {
+            DebugContext.log("AgentScopeAgentRuntime", "warmup_failed",
+                    Map.of("error", String.valueOf(e.getMessage())));
+        }
+    }
+
+    /**
+     * 向正在运行的 agent 插入一条人类消息（Claude Code 风格的“运行中插话”）。
+     *
+     * <p>两段式实现（AgentScope 2.0.4 实测语义）：
+     * <ol>
+     *   <li>调用 {@code interrupt(userId, sessionId, msg)} —— 会话槽位 key 是
+     *       {@code slotKey(userId, sessionId)}，不带上下文的 {@code interrupt(Msg)} 会落到
+     *       {@code (__anon__, defaultSessionId)}，与本运行时完全不匹配，插话会被静默丢弃；</li>
+     *   <li>本轮以 INTERRUPTED 收尾（“I noticed that you have interrupted me”），但消息文本
+     *       *不会*被写入会话状态——因此同时把文本放入 {@link #pendingInterjections}，
+     *       chat 循环在收尾后把它作为下一轮输入送入，模型才能真正读到。</li>
+     * </ol>
+     *
+     * @return true 表示消息已入队且 interrupt 已触发（当前确实有运行中的会话）
+     */
+    public boolean interject(String text) {
+        HarnessAgent agent = harnessAgent;
+        if (agent == null || text == null || text.isBlank()) {
+            return false;
+        }
+        String sessionId = currentInterjectSessionId;
+        if (sessionId == null || sessionId.isBlank()) {
+            return false;
+        }
+        try {
+            Msg msg = Msg.builder()
+                    .name("user")
+                    .role(MsgRole.USER)
+                    .textContent(text.trim())
+                    .build();
+            String userId = System.getProperty("user.name", "burp-user");
+            pendingInterjections.add(text.trim());
+            agent.interrupt(userId, sessionId, msg);
+            return true;
+        } catch (Exception e) {
+            DebugContext.log("AgentScopeAgentRuntime", "interject_failed",
+                    Map.of("error", String.valueOf(e.getMessage())));
+            return false;
+        }
+    }
+
     private HarnessAgent getOrCreateHarnessAgent() {
         if (harnessAgent == null) {
             synchronized (agentBuildLock) {
                 if (harnessAgent == null) {
                     var builder = HarnessAgent.builder()
-                            .name(AGENT_NAME)
+                            .name(agentName)
                             .model(model);
                     if (systemPrompt != null && !systemPrompt.isEmpty()) {
                         builder.sysPrompt(systemPrompt);
                     }
-                    if (workspacePath != null) {
-                        builder.workspace(workspacePath);
+                    Path harnessWorkspace = stateWorkspacePath != null ? stateWorkspacePath : workspacePath;
+                    if (harnessWorkspace != null) {
+                        builder.workspace(harnessWorkspace);
                     }
                     // .project() 对齐：shell 默认 cwd 指向文件工具实际根（workspace 下的 user.name 子目录），
                     // 而非 LocalFilesystemSpec 默认的 user.dir（Burp 安装目录）。
@@ -586,6 +706,12 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
                     builder.compaction(compactionCfg.build());
                     // 配置长期记忆（跨会话持久化）
                     builder.memory(MemoryConfig.defaults());
+                    if (disableMemoryTools) {
+                        builder.disableMemoryTools();
+                    }
+                    if (disableMemoryHooks) {
+                        builder.disableMemoryHooks();
+                    }
                     // 权限模式固定为 BYPASS（最大权限）：敏感工具（extension_info 等）直接执行，
                     // 不进入 ASKING 等待人工确认。历史上 BYPASS 曾被写死以根除 ASKING 暂停卡死，
                     // 故不提供 UI 切换。
@@ -755,6 +881,12 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         }
         private boolean sandboxEnabled;
         private List<io.agentscope.core.skill.repository.AgentSkillRepository> skillRepositories;
+        /** Harness 内部 agent 名：同时决定状态键与 workspace/agents/<name> 目录，必须按角色唯一 */
+        private String agentName = "burp-ai-analyzer";
+        /** Harness 自身的 workspace（memory/session/agents 状态）；文件工具仍用 {@link #workspacePath} */
+        private Path stateWorkspacePath;
+        private boolean disableMemoryTools;
+        private boolean disableMemoryHooks;
 
         /**
          * 是否启用文件沙箱。关闭时文件工具可读写任意路径（{@code LocalFsMode.UNRESTRICTED}），
@@ -846,6 +978,35 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
         /** 注入外部技能仓库（如 FileSystemSkillRepository），Harness 会自动将技能提示注入上下文 */
         public Builder skillRepositories(List<io.agentscope.core.skill.repository.AgentSkillRepository> skillRepositories) {
             this.skillRepositories = skillRepositories;
+            return this;
+        }
+
+        /** 按角色唯一的 Harness agent 名（active / sidebar / organizer），避免状态键冲突 */
+        public Builder agentName(String agentName) {
+            if (agentName != null && !agentName.isBlank()) {
+                this.agentName = agentName.trim();
+            }
+            return this;
+        }
+
+        /**
+         * Harness 自身的状态/记忆 workspace。不设时与文件工具 workspace 相同。
+         * 多个 agent 并存时必须分开，否则 MEMORY.md 与 session 状态会并发写同一目录。
+         */
+        public Builder stateWorkspacePath(Path stateWorkspacePath) {
+            this.stateWorkspacePath = stateWorkspacePath;
+            return this;
+        }
+
+        /** 禁用长期记忆工具（memory_save/search/get）；主动/整理 agent 使用 */
+        public Builder disableMemoryTools() {
+            this.disableMemoryTools = true;
+            return this;
+        }
+
+        /** 禁用记忆刷写/整合钩子，避免与侧栏 agent 并发写 MEMORY.md */
+        public Builder disableMemoryHooks() {
+            this.disableMemoryHooks = true;
             return this;
         }
 

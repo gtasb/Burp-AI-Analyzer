@@ -103,4 +103,17 @@ class SystemPromptBuilderTest {
             assertThat(prompt).doesNotContain("Web Search");
         }
     }
+
+    @Nested
+    @DisplayName("Knowledge graph prompt")
+    class GraphPrompt {
+
+        @Test
+        @DisplayName("should_point_to_graph_notes_and_assessment_instead_of_notebook")
+        void usesGraphNotesAndAssessment() {
+            String p = new SystemPromptBuilder().build();
+            assertThat(p).contains("graph_get_notes").contains("graph_assess_node");
+            assertThat(p).doesNotContain("notebook_");
+        }
+    }
 }

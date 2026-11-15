@@ -2,30 +2,28 @@ package com.ai.analyzer.ui.active;
 
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.http.message.HttpRequestResponse;
-import burp.api.montoya.http.message.requests.HttpRequest;
 
 import com.ai.analyzer.core.AgentApiClient;
 import com.ai.analyzer.core.RequestData;
 import com.ai.analyzer.scan.pscan.ScanResult;
 import com.ai.analyzer.ui.UIStyles;
 import com.ai.analyzer.util.HttpFormatter;
-import com.ai.analyzer.util.MarkdownRenderer;
 import com.ai.analyzer.util.TokenUsageTracker;
 
 import javax.swing.*;
+import javax.swing.border.EmptyBorder;
 import javax.swing.text.JTextComponent;
-import javax.swing.text.StyledDocument;
 import java.awt.*;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
 
 /**
- * 主动分析面板：请求分析、批量分析、目标速览、分析历史、
- * 结果工具以及 Plan Mode 切换与 HITL 批准对话框。
- * 与 AIAnalyzerTab 通过依赖注入解耦：
- * - bind(): 注入 apiClient、API 配置更新器、状态监听、被动数据源
- * - setActiveMode(): 切换当前渲染目标（主动/被动结果区）
+ * 主动分析面板（会话式 UI）。
+ *
+ * <p>信息结构参考 Claude Code / Codex：
+ * <ul>
+ *   <li>顶部状态栏：目标、阶段、轮次、自动继续、模式、历史</li>
+ *   <li>中部会话流：用户消息 / 主动分析 / 整理 agent / 工具调用 / 报告，按消息块排列</li>
+ *   <li>底部输入区：Enter 发送，Shift+Enter 换行</li>
+ * </ul>
  */
 public class ActiveAnalysisPanel extends JPanel {
 
@@ -37,40 +35,65 @@ public class ActiveAnalysisPanel extends JPanel {
     private AnalysisStateListener stateListener;
     private PassiveDataSource dataSource;
 
-    // ========== 渲染目标（由 AIAnalyzerTab 随模式切换） ==========
+    // ========== 渲染 / 交互 ==========
     private boolean activeModeSelected = true;
-    /** 外部右键发送的直接分析请求：设置后 performAnalysis 优先分析该请求，与表格选中项解耦 */
     private volatile HttpRequestResponse pendingDirectRequest;
-    private JTextPane targetPane;
     private JTextArea promptArea;
-
-    // ========== UI 组件 ==========
-    private JTextPane activeModeResultTextPane;
     private JTextArea activeModePromptArea;
+
+    private final ChatTimeline timeline = new ChatTimeline();
+    private ChatTimeline.AssistantBlock currentAssistant;
+
     private JComboBox<String> planModeComboBox;
-    private JLabel targetInfoLabel;
+    private JComboBox<com.ai.analyzer.core.AnalysisRunStore.Run> runHistoryCombo;
+    private JCheckBox autoContinueCheckBox;
+    private JLabel targetLabel;
     private JLabel targetDetailLabel;
-    private JTextArea behaviorTextArea;
-    private JScrollPane behaviorScrollPane;
-    /** 模型行为订阅（add/remove 成对使用，避免覆盖侧栏 ChatPanel 的订阅） */
-    private final java.util.function.Consumer<String> modelBehaviorConsumer =
-            behavior -> SwingUtilities.invokeLater(() -> handleModelBehavior(behavior));
-    /** 进行中的思考增量缓冲（THINKING 为流式增量块，累积后整行重写，避免每块一行刷屏） */
-    private final StringBuilder currentThinking = new StringBuilder();
-    /** 当前"思考"行在文档中的起始偏移，-1 表示当前没有进行中的思考行 */
-    private int thinkingLineStart = -1;
+    private JLabel phaseLabel;
+    private JLabel roundLabel;
+    private JLabel loopPolicyLabel;
+    private JLabel tokenLabel;
+    private JButton interjectButton;
+    private boolean updatingRunHistory;
+
+    private java.util.function.BooleanSupplier autoContinueGetter;
+    private java.util.function.Consumer<Boolean> autoContinueSetter;
 
     // ========== 分析状态 ==========
     private boolean isAnalyzing = false;
     private SwingWorker<Void, String> currentWorker;
     private volatile int analysisRunId = 0;
+    private int activeRound = 0;
+    private volatile java.util.function.Consumer<AgentApiClient.CompletedRun> onRunCompleted;
+    private volatile Runnable onRunStarted;
+
+    /** 上一轮上下文，供自动继续复用同一请求 */
+    private volatile String lastHttpContent = "";
+    private volatile String lastTargetDesc = "";
+    private volatile String lastDetail = "";
+    private volatile String lastMethod = null;
+    private volatile String lastUrl = null;
+    private volatile boolean lastHasRequest = false;
+    /** 本轮是否由整理 agent 自动继续触发（true 时不重复注入侧栏摘要） */
+    private boolean nextRunAuto;
+
+    /** 主动分析的思考增量（节流后显示在消息块里） */
+    private final StringBuilder currentThinking = new StringBuilder();
+    private static final int MAX_THINKING_CHARS = 8_000;
+    private static final long THINKING_RENDER_MS = 200;
+    private long lastThinkingRenderAt;
+
+    private final java.util.function.Consumer<String> modelBehaviorConsumer =
+            behavior -> SwingUtilities.invokeLater(() -> handleModelBehavior(behavior));
 
     public ActiveAnalysisPanel(MontoyaApi api) {
         this.api = api;
         buildUi();
+        refreshRunHistory();
     }
 
-    public void bind(AgentApiClient client, Runnable configUpdater, AnalysisStateListener listener, PassiveDataSource ds) {
+    public void bind(AgentApiClient client, Runnable configUpdater,
+                     AnalysisStateListener listener, PassiveDataSource ds) {
         this.apiClient = client;
         this.apiClientConfigUpdater = configUpdater;
         this.stateListener = listener;
@@ -78,39 +101,47 @@ public class ActiveAnalysisPanel extends JPanel {
         setupAgentHITL();
     }
 
-    /** 模式切换：目标渲染区与提示词输入区随模式变化 */
-    public void setActiveMode(boolean active, JTextPane target, JTextArea prompt) {
+    public void setActiveMode(boolean active, JTextArea prompt) {
         this.activeModeSelected = active;
-        this.targetPane = target;
-        this.promptArea = prompt;
-    }
-
-    /**
-     * 解析本次分析的目标渲染区。
-     *
-     * <p>{@code targetPane} 只在 {@link #setActiveMode} 里赋值，而该方法仅由
-     * AIAnalyzerTab 的模式 combo action 触发。构造时 combo 是先
-     * {@code setSelectedItem} 再 {@code addActionListener}，action 不会触发；
-     * 此外被动卡片自己也会给 {@code resultTextPane} 赋值但不会调用
-     * {@code setActiveMode}。因此用户没手动切过模式时 {@code targetPane} 一直是 null，
-     * 此时若直接拿去渲染，每一帧都会抛「textPane cannot be null」，
-     * 整条回复都不会显示。这里退回主动模式自带的结��区，保证渲染目标永不为 null。
-     */
-    private JTextPane resolveTargetPane() {
-        JTextPane t = targetPane;
-        return t != null ? t : activeModeResultTextPane;
-    }
-
-    public JTextPane getResultPane() {
-        return activeModeResultTextPane;
+        if (prompt != null) this.promptArea = prompt;
     }
 
     public JTextArea getPromptArea() {
         return activeModePromptArea;
     }
 
+    public void reloadRunHistory() {
+        refreshRunHistory();
+    }
+
     public boolean isAnalyzing() {
         return isAnalyzing;
+    }
+
+    public void setOnRunCompleted(java.util.function.Consumer<AgentApiClient.CompletedRun> callback) {
+        this.onRunCompleted = callback;
+    }
+
+    public void setOnRunStarted(Runnable callback) {
+        this.onRunStarted = callback;
+    }
+
+    public boolean continueWithInstruction(String instruction) {
+        if (isAnalyzing || apiClient == null) return false;
+        String prompt = instruction == null ? "" : instruction.trim();
+        if (prompt.isEmpty()) return false;
+        if (lastHttpContent.isEmpty() && "自由对话模式".equals(lastTargetDesc)) {
+            if (activeModePromptArea != null) activeModePromptArea.setText(prompt);
+            return false;
+        }
+        nextRunAuto = true;
+        try {
+            startAnalysisWorker(lastHttpContent, prompt, lastTargetDesc, lastDetail,
+                    lastMethod, lastUrl, lastHasRequest);
+        } finally {
+            nextRunAuto = false;
+        }
+        return true;
     }
 
     public boolean getPlanModeSelected() {
@@ -123,118 +154,170 @@ public class ActiveAnalysisPanel extends JPanel {
         }
     }
 
-    // ========== UI 构建 ==========
+    // ================= UI =================
 
     private void buildUi() {
-        setLayout(new BorderLayout(0, 5));
+        setLayout(new BorderLayout(0, 6));
+        setBorder(new EmptyBorder(4, 6, 4, 6));
 
-        // ---- 顶部区域：模式切换 + 工具按钮 / 快捷任务 / 目标速览（三层叠放，统一放入 NORTH） ----
-        JPanel topArea = new JPanel();
-        topArea.setLayout(new BoxLayout(topArea, BoxLayout.Y_AXIS));
+        JPanel header = new JPanel();
+        header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
+        header.add(buildTargetRow());
+        header.add(buildControlRow());
+        add(header, BorderLayout.NORTH);
 
-        JPanel modeBar = new JPanel(new BorderLayout(8, 0));
+        add(timeline, BorderLayout.CENTER);
+        add(buildComposer(), BorderLayout.SOUTH);
 
-        // 左侧：模式选择
-        JPanel modeSelect = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
-        JLabel modeLabel = new JLabel("Agent模式:");
-        UIStyles.setFont(modeLabel, 13f, Font.BOLD);
-        modeSelect.add(modeLabel);
-        planModeComboBox = new JComboBox<>(new String[]{"普通模式", "计划模式(Plan Mode)"});
-        planModeComboBox.setToolTipText("计划模式：Agent 先进行只读调查并写出计划，提交 plan_exit 时弹出批准确认框，您批准后才开始执行。适合复杂渗透测试任务；普通模式直接执行。");
-        planModeComboBox.addActionListener(e -> handlePlanModeChanged());
-        modeSelect.add(planModeComboBox);
-        modeBar.add(modeSelect, BorderLayout.WEST);
-        topArea.add(modeBar);
+    }
 
-        // ---- 目标上下文速览条 ----
-        JPanel infoBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 3));
-        targetInfoLabel = new JLabel("未选择请求 — 自由对话模式");
-        targetInfoLabel.setFont(new Font("Microsoft YaHei", Font.BOLD, 12));
-        targetInfoLabel.setForeground(new Color(0x2a7de1));
+    private JPanel buildTargetRow() {
+        JPanel row = new JPanel(new BorderLayout(10, 0));
+        row.setBorder(new EmptyBorder(2, 2, 2, 2));
+
+        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
+        JLabel title = new JLabel("主动分析");
+        UIStyles.setFont(title, 14f, Font.BOLD);
+        left.add(title);
+        targetLabel = new JLabel("未选择请求 — 自由对话模式");
+        UIStyles.setFont(targetLabel, 12f, Font.BOLD);
+        targetLabel.setForeground(new Color(0x2a7de1));
         targetDetailLabel = new JLabel("");
-        targetDetailLabel.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
-        targetDetailLabel.setForeground(new Color(0x666666));
-        infoBar.add(targetInfoLabel);
-        infoBar.add(targetDetailLabel);
-        topArea.add(infoBar);
+        UIStyles.setFont(targetDetailLabel, 11f, Font.PLAIN);
+        targetDetailLabel.setForeground(UIStyles.hintColor());
+        left.add(targetLabel);
+        left.add(targetDetailLabel);
+        row.add(left, BorderLayout.WEST);
 
-        add(topArea, BorderLayout.NORTH);
+        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 2));
+        phaseLabel = new JLabel("阶段：空闲");
+        UIStyles.setFont(phaseLabel, 12f, Font.BOLD);
+        phaseLabel.setForeground(new Color(0x2a7de1));
+        roundLabel = new JLabel("轮次：0");
+        UIStyles.setFont(roundLabel, 12f, Font.PLAIN);
+        loopPolicyLabel = new JLabel("自动继续：开");
+        UIStyles.setFont(loopPolicyLabel, 12f, Font.PLAIN);
+        right.add(phaseLabel);
+        right.add(roundLabel);
+        right.add(loopPolicyLabel);
+        row.add(right, BorderLayout.EAST);
+        return row;
+    }
 
-        // ---- 结果区域 ----
-        activeModeResultTextPane = new JTextPane() {
-            @Override
-            public boolean getScrollableTracksViewportWidth() {
-                return true;
-            }
-        };
-        activeModeResultTextPane.setEditable(false);
-        activeModeResultTextPane.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
-        activeModeResultTextPane.setContentType("text/plain");
-        applyEditorTheme(activeModeResultTextPane);
-        JScrollPane resultScrollPane = new JScrollPane(activeModeResultTextPane);
-        resultScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-        resultScrollPane.setBorder(UIStyles.titledBorder("AI分析结果"));
+    private JPanel buildControlRow() {
+        JPanel row = new JPanel(new BorderLayout(10, 0));
 
-        // ---- 右侧：模型行为观察窗（thinking / 工具调用实时流，保留并优化） ----
-        behaviorTextArea = new JTextArea();
-        behaviorTextArea.setEditable(false);
-        behaviorTextArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
-        behaviorTextArea.setLineWrap(true);
-        behaviorTextArea.setWrapStyleWord(true);
-        applyEditorTheme(behaviorTextArea);
-        behaviorScrollPane = new JScrollPane(behaviorTextArea);
-        behaviorScrollPane.setBorder(UIStyles.titledBorder("模型行为（思考/工具调用）"));
-        behaviorScrollPane.setVisible(true);
-        JPanel behaviorPanel = new JPanel(new BorderLayout(4, 2));
-        JButton clearBehaviorButton = new JButton("清空");
-        clearBehaviorButton.setToolTipText("清空模型行为观察窗");
-        clearBehaviorButton.addActionListener(e -> {
-            behaviorTextArea.setText("");
-            thinkingLineStart = -1;
-            currentThinking.setLength(0);
+        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
+        autoContinueCheckBox = new JCheckBox("自动继续", true);
+        autoContinueCheckBox.setToolTipText("每轮结束后由整理 agent 判断是否继续；关闭后只整理入图并出报告");
+        autoContinueCheckBox.setFocusable(false);
+        UIStyles.setFont(autoContinueCheckBox, 12f, Font.PLAIN);
+        autoContinueCheckBox.addActionListener(e -> {
+            if (autoContinueSetter != null) autoContinueSetter.accept(autoContinueCheckBox.isSelected());
+            updateLoopPolicyLabel();
         });
-        UIStyles.styleSecondary(clearBehaviorButton);
-        behaviorPanel.add(clearBehaviorButton, BorderLayout.NORTH);
-        behaviorPanel.add(behaviorScrollPane, BorderLayout.CENTER);
+        left.add(autoContinueCheckBox);
 
-        JSplitPane resultSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, resultScrollPane, behaviorPanel);
-        resultSplit.setDividerLocation(680);
-        resultSplit.setResizeWeight(0.75);
-        resultSplit.setContinuousLayout(true);
+        planModeComboBox = new JComboBox<>(new String[]{"普通模式", "计划模式(Plan Mode)"});
+        planModeComboBox.setToolTipText("计划模式：Agent 先只读调查并写计划，提交 plan_exit 时请求批准");
+        planModeComboBox.addActionListener(e -> handlePlanModeChanged());
+        left.add(planModeComboBox);
+        row.add(left, BorderLayout.WEST);
 
-        // ---- 底部：输入区域 ----
-        JPanel promptPanel = new JPanel(new BorderLayout());
-        promptPanel.setBorder(UIStyles.titledBorder("输入"));
+        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 2));
+        JLabel historyLabel = new JLabel("历史分析:");
+        UIStyles.setFont(historyLabel, 11f, Font.PLAIN);
+        right.add(historyLabel);
+        runHistoryCombo = new JComboBox<>();
+        runHistoryCombo.setPreferredSize(new Dimension(320, runHistoryCombo.getPreferredSize().height));
+        runHistoryCombo.addActionListener(e -> {
+            if (updatingRunHistory) return;
+            if (isAnalyzing) {
+                refreshRunHistory();
+                return;
+            }
+            Object selected = runHistoryCombo.getSelectedItem();
+            if (selected instanceof com.ai.analyzer.core.AnalysisRunStore.Run run) {
+                showHistoricalRun(run);
+            } else {
+                // 取消选择：从历史回看返回当前会话
+                exitHistoryView();
+            }
+        });
+        right.add(runHistoryCombo);
+        JButton clearHistoryButton = new JButton("清空历史");
+        UIStyles.styleSecondary(clearHistoryButton);
+        clearHistoryButton.addActionListener(e -> {
+            com.ai.analyzer.core.AnalysisRunStore.getInstance().clear();
+            refreshRunHistory();
+        });
+        right.add(clearHistoryButton);
+        row.add(right, BorderLayout.EAST);
+        return row;
+    }
 
-        activeModePromptArea = new JTextArea(5, 50);
+    private JPanel buildComposer() {
+        JPanel panel = new JPanel(new BorderLayout(6, 4));
+        panel.setBorder(UIStyles.titledBorder("输入"));
+
+        activeModePromptArea = new JTextArea(4, 60);
         activeModePromptArea.setLineWrap(true);
         activeModePromptArea.setWrapStyleWord(true);
-        activeModePromptArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 13));
+        UIStyles.setFont(activeModePromptArea, 13f, Font.PLAIN);
         applyEditorTheme(activeModePromptArea);
-
-        JScrollPane promptScroll = new JScrollPane(activeModePromptArea);
-        promptScroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
-        promptScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-
-        // Enter 发送，Shift+Enter 换行
         activeModePromptArea.addKeyListener(new java.awt.event.KeyAdapter() {
             @Override
             public void keyPressed(java.awt.event.KeyEvent e) {
                 if (e.getKeyCode() == java.awt.event.KeyEvent.VK_ENTER && !e.isShiftDown()) {
                     e.consume();
-                    performAnalysis();
+                    sendFromComposer();
                 }
             }
         });
+        promptArea = activeModePromptArea;
+        JScrollPane promptScroll = new JScrollPane(activeModePromptArea);
+        promptScroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+        promptScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        panel.add(promptScroll, BorderLayout.CENTER);
 
-        promptPanel.add(promptScroll, BorderLayout.CENTER);
+        JPanel bottom = new JPanel(new BorderLayout(8, 0));
+        JLabel hint = new JLabel("Enter 发送 · 运行中 Enter 插话 · Shift+Enter 换行");
+        UIStyles.setFont(hint, 11f, Font.PLAIN);
+        hint.setForeground(UIStyles.hintColor());
+        bottom.add(hint, BorderLayout.WEST);
 
-        // “AI分析结果” 与 “输入”区：垂直 JSplitPane，分隔条可自由拖拽调节上下大小
-        JSplitPane verticalSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, resultSplit, promptPanel);
-        verticalSplit.setResizeWeight(0.75);
-        verticalSplit.setContinuousLayout(true);
-        verticalSplit.setOneTouchExpandable(true);
-        add(verticalSplit, BorderLayout.CENTER);
+        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        interjectButton = new JButton("插话");
+        interjectButton.setToolTipText("不打断当前分析，向正在运行的 agent 补充一条消息");
+        UIStyles.styleSecondary(interjectButton);
+        interjectButton.setEnabled(false);
+        interjectButton.addActionListener(e -> sendFromComposer());
+        right.add(interjectButton);
+        tokenLabel = new JLabel(TokenUsageTracker.instance().snapshot().summary());
+        UIStyles.setFont(tokenLabel, 11f, Font.PLAIN);
+        tokenLabel.setForeground(UIStyles.hintColor());
+        right.add(tokenLabel);
+        bottom.add(right, BorderLayout.EAST);
+        panel.add(bottom, BorderLayout.SOUTH);
+        return panel;
+    }
+
+    /**
+     * 输入框发送：空闲时开始分析，运行中则把内容作为插话注入当前 agent。
+     */
+    private void sendFromComposer() {
+        String text = activeModePromptArea == null ? "" : activeModePromptArea.getText().trim();
+        if (isAnalyzing) {
+            if (text.isEmpty()) return;
+            if (apiClient != null && apiClient.interject(text)) {
+                timeline.addUser(text, "运行中插话");
+                activeModePromptArea.setText("");
+            } else {
+                timeline.addSystem("插话失败：当前没有可插入的运行实例");
+            }
+            return;
+        }
+        performAnalysis();
     }
 
     private void applyEditorTheme(JTextComponent component) {
@@ -243,63 +326,51 @@ public class ActiveAnalysisPanel extends JPanel {
         component.setCaretColor(UIManager.getColor("TextArea.caretForeground"));
     }
 
-    // ========== Plan Mode 切换与 HITL 批准 ==========
-
     private void handlePlanModeChanged() {
         if (planModeComboBox == null || apiClient == null) return;
         boolean planMode = planModeComboBox.getSelectedIndex() == 1;
         apiClient.setEnablePlanMode(planMode);
         api.logging().logToOutput(planMode
-            ? "已切换到计划模式：Agent 将先写计划并在执行前请求批准"
-            : "已切换到普通模式：Agent 直接执行");
+                ? "已切换到计划模式：Agent 将先写计划并在执行前请求批准"
+                : "已切换到普通模式：Agent 直接执行");
     }
 
     private void setupAgentHITL() {
-        // 计划模式下不再弹窗逐次确认：自动批准，Agent 按计划直接执行
         apiClient.setRequireConfirmHandler((toolName, summary) -> true);
     }
 
-    // ========== 分析入口 ==========
+    // ================= 分析入口 =================
 
-    /** 分析当前选中请求（或自由对话）。由 AIAnalyzerTab 的按钮/被动模式共用。 */
     public void performAnalysis() {
-        if (isAnalyzing) {
-            return;
-        }
-        if (apiClient == null) {
-            return;
-        }
+        if (isAnalyzing || apiClient == null) return;
 
-        // 侧栏与主动分析共用 AgentApiClient，并发会互相覆盖 consumer。
-        // 客户端已做单飞拦截，这里先给出干净提示，避免直接把结果区清空后再报错。
         if (apiClient.isAnalysisInFlight()) {
-            appendToResult(resolveTargetPane(),
-                    "\n[" + com.ai.analyzer.core.AgentApiClient.CONCURRENT_ANALYSIS_MESSAGE + "]\n");
+            timeline.addSystem(AgentApiClient.CONCURRENT_ANALYSIS_MESSAGE);
             return;
         }
 
-        // 外部直接分析的请求优先（右键发送到AI分析），与表格选中项解耦
+        Runnable started = onRunStarted;
+        if (started != null) started.run();
+
         HttpRequestResponse direct = pendingDirectRequest;
         pendingDirectRequest = null;
         if (direct != null) {
             String prompt = (promptArea != null ? promptArea.getText().trim() : "");
             String httpContent = HttpFormatter.formatHttpRequestResponse(direct);
-            String targetDesc = "";
+            String method = direct.request() != null ? direct.request().method() : "";
+            String url = "";
             try {
-                String method = direct.request() != null ? direct.request().method() : "";
-                String url = "";
                 try { url = direct.request().url(); } catch (Exception ignored) {}
-                targetDesc = method + " " + (url.length() > 100 ? url.substring(0, 100) + "..." : url);
             } catch (Exception ignored) {}
+            String targetDesc = method + " " + (url.length() > 100 ? url.substring(0, 100) + "..." : url);
             String detail = "报文 " + httpContent.length() + " 字节";
             updateTargetInfo(targetDesc, detail);
             if (isEmpty(prompt)) prompt = "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议";
             if (apiClientConfigUpdater != null) apiClientConfigUpdater.run();
-            startAnalysisWorker(httpContent, prompt, targetDesc, detail);
+            startAnalysisWorker(httpContent, prompt, targetDesc, detail, method, url, true);
             return;
         }
 
-        // 允许没有选择请求时也能进行分析（自由对话模式）
         Object selection = null;
         int viewRow = (!activeModeSelected && dataSource != null) ? dataSource.getSelectedViewRow() : -1;
         if (viewRow >= 0) {
@@ -310,20 +381,17 @@ public class ActiveAnalysisPanel extends JPanel {
 
         String userPrompt = (promptArea != null ? promptArea.getText().trim() : "");
         if (userPrompt.isEmpty()) {
-            if (requestData != null || scanResult != null) {
-                userPrompt = "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议";
-            } else {
-                userPrompt = "";
-            }
+            userPrompt = (requestData != null || scanResult != null)
+                    ? "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议" : "";
         }
 
-        // 构造分析报文与目标速览
         String httpContent = "";
         if (scanResult != null && scanResult.getRequestResponse() != null) {
             httpContent = HttpFormatter.formatHttpRequestResponse(scanResult.getRequestResponse());
         } else if (requestData != null) {
             httpContent = requestData.getFullRequestResponse();
         }
+
         String targetDesc;
         String detail;
         if (scanResult != null) {
@@ -339,150 +407,74 @@ public class ActiveAnalysisPanel extends JPanel {
             detail = "未选择请求";
         }
         updateTargetInfo(targetDesc, detail);
-
         if (requestData == null && scanResult == null) {
             api.logging().logToOutput("当前没有选择请求，将以自由对话模式进行分析");
         }
-
         if (apiClientConfigUpdater != null) {
             apiClientConfigUpdater.run();
         }
-        startAnalysisWorker(httpContent, userPrompt, targetDesc, detail);
+        String method = scanResult != null ? scanResult.getMethod()
+                : requestData != null ? requestData.getMethod() : null;
+        String url = scanResult != null ? scanResult.getUrl()
+                : requestData != null ? requestData.getUrl() : null;
+        boolean hasRequest = method != null && url != null;
+        startAnalysisWorker(httpContent, userPrompt, targetDesc, detail, method, url, hasRequest);
     }
 
-    private void startAnalysisWorker(String httpContent, String userPrompt, String targetDesc, String detail) {
+    private void startAnalysisWorker(String httpContent, String userPrompt, String targetDesc,
+                                     String detail, String method, String url, boolean hasRequest) {
         isAnalyzing = true;
+        lastHttpContent = httpContent == null ? "" : httpContent;
+        lastTargetDesc = targetDesc == null ? "" : targetDesc;
+        lastDetail = detail == null ? "" : detail;
+        lastMethod = method;
+        lastUrl = url;
+        lastHasRequest = hasRequest;
+        if (apiClient != null) {
+            apiClient.setNextRunContext(method, url, hasRequest);
+            if (nextRunAuto) {
+                apiClient.setNextRunIsAutoRound();
+            }
+            apiClient.clearLastCompletedRun();
+        }
         final int runId = ++analysisRunId;
+        activeRound++;
+        setLoopRound(activeRound);
+        setOrganizerPhase("主动分析中（第 " + activeRound + " 轮）");
         notifyStateChanged();
 
         if (apiClient != null) {
             apiClient.addModelBehaviorConsumer(modelBehaviorConsumer);
         }
-        if (behaviorTextArea != null) {
-            behaviorTextArea.setText("");
-        }
-
-        final boolean isActiveMode = activeModeSelected;
-        if (isActiveMode && activeModePromptArea != null) {
+        if (activeModePromptArea != null) {
             activeModePromptArea.setText("");
         }
 
-        final JTextPane targetResultPane = resolveTargetPane();
-        String finalUserPrompt = userPrompt;
-        String finalHttpContent = httpContent;
-        String finalTargetDesc = targetDesc;
-        String finalDetail = detail;
+        if (timeline.isShowingHistory()) {
+            exitHistoryView();
+        }
+        timeline.addUser(userPrompt == null ? "" : userPrompt, targetDesc);
+        if (httpContent != null && httpContent.length() > HttpFormatter.DEFAULT_MAX_LENGTH) {
+            timeline.addSystem("HTTP 内容过长（" + httpContent.length() + " 字符），完整报文已缓存，提示词仅含预览与 fileId");
+        }
+        currentAssistant = timeline.startAssistant("主动分析 · 第 " + activeRound + " 轮");
+        final ChatTimeline.AssistantBlock block = currentAssistant;
         final long startTime = System.currentTimeMillis();
 
         currentWorker = new SwingWorker<Void, String>() {
-            private StringBuilder fullResponse = new StringBuilder();
-            private int aiMessageStartPos = 0;
-
             @Override
-            protected Void doInBackground() throws Exception {
+            protected Void doInBackground() {
                 try {
-                    final boolean httpTooLong = !finalHttpContent.isEmpty()
-                        && finalHttpContent.length() > HttpFormatter.DEFAULT_MAX_LENGTH;
-                    final int httpOrigLen = finalHttpContent.length();
-
-                    try {
-                        SwingUtilities.invokeAndWait(() -> {
-                            if (isActiveMode) {
-                                try {
-                                    StyledDocument doc = targetResultPane.getStyledDocument();
-                                    if (doc.getLength() > 0) {
-                                        doc.insertString(doc.getLength(), "\n", doc.getStyle("regular"));
-                                    }
-                                    // "你:" 蓝色加粗
-                                    javax.swing.text.Style senderStyle = doc.addStyle("userSender", null);
-                                    javax.swing.text.StyleConstants.setBold(senderStyle, true);
-                                    javax.swing.text.StyleConstants.setForeground(senderStyle, Color.BLUE);
-                                    doc.insertString(doc.getLength(), "你: ", senderStyle);
-                                    // 消息文本
-                                    javax.swing.text.Style msgStyle = doc.addStyle("userMsg", null);
-                                    Color textColor = UIManager.getColor("TextArea.foreground");
-                                    javax.swing.text.StyleConstants.setForeground(msgStyle, textColor != null ? textColor : Color.BLACK);
-                                    doc.insertString(doc.getLength(), finalUserPrompt + "\n\n", msgStyle);
-                                    // "AI助手:" 绿色加粗
-                                    javax.swing.text.Style aiSenderStyle = doc.addStyle("aiSender", null);
-                                    javax.swing.text.StyleConstants.setBold(aiSenderStyle, true);
-                                    javax.swing.text.StyleConstants.setForeground(aiSenderStyle, Color.GREEN);
-                                    doc.insertString(doc.getLength(), "AI助手: \n", aiSenderStyle);
-                                } catch (Exception ignored) {}
-                            } else {
-                                targetResultPane.setText("");
-                            }
-                            if (httpTooLong) {
-                                try {
-                                    StyledDocument doc = targetResultPane.getStyledDocument();
-                                    javax.swing.text.Style warnStyle = doc.addStyle("httpWarning", null);
-                                    javax.swing.text.StyleConstants.setForeground(warnStyle, new Color(255, 140, 0));
-                                    javax.swing.text.StyleConstants.setItalic(warnStyle, true);
-                                    javax.swing.text.StyleConstants.setFontFamily(warnStyle, "Microsoft YaHei");
-                                    javax.swing.text.StyleConstants.setFontSize(warnStyle, 12);
-                                    doc.insertString(doc.getLength(),
-                                        "HTTP内容过长（" + httpOrigLen + " 字符），完整报文已缓存，提示词仅含预览与 fileId\n\n", warnStyle);
-                                } catch (Exception ignored) {}
-                            }
-                            aiMessageStartPos = targetResultPane.getStyledDocument().getLength();
-                        });
-                    } catch (Exception e) {
-                        aiMessageStartPos = 0;
-                    }
-
-                    final long[] lastRenderTime = {0L};
-                    final long RENDER_INTERVAL_MS = 120;
-
                     apiClient.analyzeRequestStream(
-                        finalHttpContent,
-                        finalUserPrompt,
-                        chunk -> {
-                            if (isCancelled() || !isAnalyzing || runId != analysisRunId) return;
-
-                            fullResponse.append(chunk);
-
-                            long now = System.currentTimeMillis();
-
-                            if (now - lastRenderTime[0] < RENDER_INTERVAL_MS) return;
-                            lastRenderTime[0] = now;
-                            String snapshot = fullResponse.toString();
-
-                            SwingUtilities.invokeLater(() -> {
+                            httpContent == null ? "" : httpContent,
+                            userPrompt == null ? "" : userPrompt,
+                            chunk -> {
                                 if (isCancelled() || !isAnalyzing || runId != analysisRunId) return;
-                                try {
-                                    MarkdownRenderer.appendMarkdownStreaming(targetResultPane, snapshot, aiMessageStartPos);
-                                    if (isResultPaneAtBottom(targetResultPane)) {
-                                        targetResultPane.setCaretPosition(targetResultPane.getStyledDocument().getLength());
-                                    }
-                                } catch (Exception e) {
-                                    api.logging().logToError("流式Markdown渲染失败: " + e.getMessage());
-                                }
+                                block.append(chunk);
                             });
-                        }
-                    );
-
-                    String finalContent = fullResponse.toString();
-                    if (!finalContent.isEmpty() && !isCancelled() && isAnalyzing && runId == analysisRunId) {
-                        SwingUtilities.invokeLater(() -> {
-                            if (isCancelled() || !isAnalyzing || runId != analysisRunId) return;
-                            try {
-                                StyledDocument doc = targetResultPane.getStyledDocument();
-                                int currentLength = doc.getLength();
-                                if (currentLength > aiMessageStartPos) {
-                                    doc.remove(aiMessageStartPos, currentLength - aiMessageStartPos);
-                                }
-                                MarkdownRenderer.appendMarkdown(targetResultPane, finalContent);
-                                scrollResultToEndIfAtBottom(targetResultPane);
-                            } catch (Exception e) {
-                                api.logging().logToError("最终Markdown渲染失败: " + e.getMessage());
-                            }
-                        });
-                    }
                 } catch (Exception e) {
                     if (isCancelled() || runId != analysisRunId) return null;
-                    SwingUtilities.invokeLater(() -> {
-                        appendToResult(targetResultPane, "分析过程中出现错误: " + e.getMessage());
-                    });
+                    SwingUtilities.invokeLater(() -> timeline.addSystem("分析错误: " + e.getMessage()));
                 }
                 return null;
             }
@@ -492,12 +484,24 @@ public class ActiveAnalysisPanel extends JPanel {
                 try {
                     get();
                     if (runId != analysisRunId) return;
-                    updateTargetInfo(finalTargetDesc, buildStatusSuffix(finalDetail, startTime));
+                    if (!isCancelled()) {
+                        block.finish();
+                        timeline.finishAssistant();
+                        currentAssistant = null;
+                        String result = block.text();
+                        recordRunAsync(method, url, userPrompt, result);
+                        java.util.function.Consumer<AgentApiClient.CompletedRun> cb = onRunCompleted;
+                        if (cb != null && apiClient != null) {
+                            AgentApiClient.CompletedRun completedRun = apiClient.getLastCompletedRun();
+                            if (completedRun != null) {
+                                SwingUtilities.invokeLater(() -> cb.accept(completedRun));
+                            }
+                        }
+                    }
+                    updateTargetInfo(targetDesc, buildStatusSuffix(detail, startTime));
                 } catch (Exception e) {
                     if (!isCancelled() && runId == analysisRunId) {
-                        SwingUtilities.invokeLater(() -> {
-                            appendToResult(targetResultPane, "分析过程中出现错误: " + e.getMessage());
-                        });
+                        SwingUtilities.invokeLater(() -> timeline.addSystem("分析错误: " + e.getMessage()));
                     }
                 } finally {
                     if (runId == analysisRunId) {
@@ -510,35 +514,26 @@ public class ActiveAnalysisPanel extends JPanel {
                 }
             }
         };
-
         currentWorker.execute();
     }
 
-    /** 状态条追加：耗时 + 模型 + 本次会话 token 用量 */
     private String buildStatusSuffix(String detail, long startTime) {
         long elapsedMs = System.currentTimeMillis() - startTime;
         String elapsed = elapsedMs < 1000 ? elapsedMs + " ms" : String.format("%.1f s", elapsedMs / 1000.0);
         StringBuilder sb = new StringBuilder();
-        if (detail != null && !detail.isEmpty()) {
-            sb.append(detail).append(" | ");
-        }
+        if (detail != null && !detail.isEmpty()) sb.append(detail).append(" | ");
         sb.append("耗时 ").append(elapsed);
-        if (apiClient != null) {
-            String model = apiClient.getModel();
-            if (model != null && !model.isBlank()) {
-                sb.append(" · 模型 ").append(model);
-            }
+        if (apiClient != null && apiClient.getModel() != null && !apiClient.getModel().isBlank()) {
+            sb.append(" · 模型 ").append(apiClient.getModel());
         }
         sb.append(" · ").append(TokenUsageTracker.instance().snapshot().summary());
         return sb.toString();
     }
 
-    /** 从 URL 提取 host（去掉协议与端口，失败返回空串） */
     private static boolean isEmpty(String s) {
         return s == null || s.isBlank();
     }
 
-    /** 外部右键「发送到AI分析」入口：直接分析指定请求，不依赖表格选中项 */
     public void analyzeDirectRequest(HttpRequestResponse requestResponse) {
         if (requestResponse == null || requestResponse.request() == null) return;
         this.pendingDirectRequest = requestResponse;
@@ -546,9 +541,7 @@ public class ActiveAnalysisPanel extends JPanel {
     }
 
     private static String extractHost(String url) {
-        if (url == null || url.isBlank()) {
-            return "";
-        }
+        if (url == null || url.isBlank()) return "";
         try {
             java.net.URI uri = java.net.URI.create(url);
             return uri.getHost() != null ? uri.getHost() : "";
@@ -556,6 +549,8 @@ public class ActiveAnalysisPanel extends JPanel {
             return "";
         }
     }
+
+    // ================= 运行控制 =================
 
     public void stopAnalysis() {
         if (currentWorker != null && !currentWorker.isDone()) {
@@ -566,18 +561,13 @@ public class ActiveAnalysisPanel extends JPanel {
             analysisRunId++;
             currentWorker.cancel(true);
             isAnalyzing = false;
-            notifyStateChanged();
-
-            try {
-                StyledDocument doc = resolveTargetPane().getStyledDocument();
-                javax.swing.text.Style stopStyle = doc.addStyle("stop", null);
-                javax.swing.text.StyleConstants.setForeground(stopStyle, java.awt.Color.ORANGE);
-                javax.swing.text.StyleConstants.setBold(stopStyle, true);
-                javax.swing.text.StyleConstants.setItalic(stopStyle, true);
-                doc.insertString(doc.getLength(), "\n\n[输出已中断]", stopStyle);
-            } catch (Exception e) {
-                e.printStackTrace();
+            if (currentAssistant != null) {
+                currentAssistant.finish();
+                timeline.finishAssistant();
+                currentAssistant = null;
             }
+            timeline.addSystem("[输出已中断]");
+            notifyStateChanged();
             api.logging().logToOutput("用户中断了AI分析");
         }
     }
@@ -593,18 +583,14 @@ public class ActiveAnalysisPanel extends JPanel {
             isAnalyzing = false;
             notifyStateChanged();
         }
-        if (targetPane != null) {
-            targetPane.setText("");
+        if (currentAssistant != null) {
+            currentAssistant.finish();
+            currentAssistant = null;
         }
-        if (activeModeResultTextPane != null && activeModeResultTextPane != targetPane) {
-            activeModeResultTextPane.setText("");
-        }
-        if (apiClient != null) {
-            apiClient.clearContext();
-        }
+        timeline.clear();
+        if (apiClient != null) apiClient.clearContext();
     }
 
-    /** 新开一个会话：销毁当前 Agent 会话与记忆，清空结果区、历史与行为日志 */
     public void startNewSession() {
         if (currentWorker != null && !currentWorker.isDone()) {
             if (apiClient != null) {
@@ -619,154 +605,156 @@ public class ActiveAnalysisPanel extends JPanel {
         if (apiClient != null) {
             apiClient.startNewSession();
         }
-        if (targetPane != null) {
-            targetPane.setText("");
+        if (currentAssistant != null) {
+            currentAssistant.finish();
+            currentAssistant = null;
         }
-        if (activeModeResultTextPane != null && activeModeResultTextPane != targetPane) {
-            activeModeResultTextPane.setText("");
-        }
-        if (behaviorTextArea != null) {
-            behaviorTextArea.setText("");
-        }
-        flushThinking();
+        timeline.clear();
+        currentThinking.setLength(0);
+        activeRound = 0;
+        setLoopRound(0);
+        setOrganizerPhase("空闲");
         api.logging().logToOutput("已新开会话");
     }
 
-    // ========== 目标速览 / 分析历史 / 结果工具 ==========
+    // ================= 状态 / 事件 =================
 
     private void updateTargetInfo(String targetDesc, String detail) {
-        if (targetInfoLabel != null) {
-            targetInfoLabel.setText(targetDesc == null || targetDesc.isEmpty() ? "自由对话模式" : targetDesc);
-        }
-        if (targetDetailLabel != null) {
-            targetDetailLabel.setText(detail == null ? "" : detail);
+        SwingUtilities.invokeLater(() -> {
+            if (targetLabel != null) {
+                targetLabel.setText(targetDesc == null || targetDesc.isEmpty() ? "自由对话模式" : targetDesc);
+            }
+            if (targetDetailLabel != null) {
+                targetDetailLabel.setText(detail == null ? "" : detail);
+            }
+        });
+    }
+
+    public void bindAutoContinue(java.util.function.BooleanSupplier getter,
+                                 java.util.function.Consumer<Boolean> setter) {
+        this.autoContinueGetter = getter;
+        this.autoContinueSetter = setter;
+        boolean enabled = getter == null || getter.getAsBoolean();
+        if (autoContinueCheckBox != null) autoContinueCheckBox.setSelected(enabled);
+        updateLoopPolicyLabel();
+    }
+
+    private void updateLoopPolicyLabel() {
+        if (loopPolicyLabel != null) {
+            loopPolicyLabel.setText("自动继续：" + (autoContinueCheckBox != null && autoContinueCheckBox.isSelected() ? "开" : "关"));
         }
     }
 
-    // ========== 模型行为可观测（thinking / 工具调用实时流） ==========
-
-    private void appendBehaviorLog(String line) {
-        if (behaviorTextArea == null) return;
-        behaviorTextArea.append(line + "\n");
-        scrollBehaviorToBottom();
+    public void setOrganizerPhase(String phase) {
+        SwingUtilities.invokeLater(() -> {
+            if (phaseLabel != null && phase != null) phaseLabel.setText("阶段：" + phase);
+            if (tokenLabel != null) tokenLabel.setText(TokenUsageTracker.instance().snapshot().summary());
+        });
     }
 
-    private void scrollBehaviorToBottom() {
-        if (behaviorScrollPane == null) return;
-        JScrollBar vbar = behaviorScrollPane.getVerticalScrollBar();
-        boolean atBottom = vbar.getMaximum() - vbar.getValue() - vbar.getVisibleAmount() < 80;
-        if (atBottom) {
-            behaviorTextArea.setCaretPosition(behaviorTextArea.getDocument().getLength());
+    public void setLoopRound(int round) {
+        SwingUtilities.invokeLater(() -> {
+            if (roundLabel != null) roundLabel.setText("轮次：" + Math.max(0, round));
+        });
+    }
+
+    public void appendOrganizerEvent(String text) {
+        if (text == null || text.isBlank()) return;
+        SwingUtilities.invokeLater(() -> {
+            String timestamp = java.time.LocalDateTime.now().format(
+                    java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+            timeline.addOrganizerEvent("[" + timestamp + "] " + text.replaceAll("\\s+", " ").trim());
+        });
+    }
+
+    public void showOrganizerReport(String markdown, java.nio.file.Path file) {
+        if (markdown == null || markdown.isBlank()) return;
+        SwingUtilities.invokeLater(() -> {
+            timeline.finishOrganizer();
+            timeline.addReport(markdown, file);
+            if (tokenLabel != null) tokenLabel.setText(TokenUsageTracker.instance().snapshot().summary());
+        });
+    }
+
+    /** 刷新历史下拉框（最新在前，默认不选中）。 */
+    private void refreshRunHistory() {
+        if (runHistoryCombo == null) return;
+        updatingRunHistory = true;
+        try {
+            runHistoryCombo.removeAllItems();
+            for (com.ai.analyzer.core.AnalysisRunStore.Run run
+                    : com.ai.analyzer.core.AnalysisRunStore.getInstance().list()) {
+                runHistoryCombo.addItem(run);
+            }
+            runHistoryCombo.setSelectedIndex(-1);
+        } finally {
+            updatingRunHistory = false;
         }
     }
 
-    /** 模型行为流：TYPE|detail（THINKING / TOOL_START / TOOL_END），与 ChatPanel 相同格式 */
+    private void showHistoricalRun(com.ai.analyzer.core.AnalysisRunStore.Run run) {
+        if (run == null) return;
+        // 历史回看不销毁当前会话流：快照保存，取消选择/新分析时恢复
+        timeline.showHistoryMode();
+        timeline.replayRun(run.time(), run.method(), run.url(), run.prompt(), run.result());
+        timeline.addSystem("（历史回看中 — 选择框清空或开始新分析可返回当前会话）");
+        updateTargetInfo("历史记录 · " + run.time(), "");
+    }
+
+    /** 离开历史回看：恢复当前会话流。 */
+    private void exitHistoryView() {
+        if (timeline.isShowingHistory()) {
+            timeline.restoreLive();
+        }
+    }
+
+    private void recordRunAsync(String method, String url, String prompt, String result) {
+        if (result == null || result.isBlank()) return;
+        Thread t = new Thread(() -> {
+            try {
+                com.ai.analyzer.core.AnalysisRunStore.getInstance().add(method, url, prompt, result);
+            } catch (Exception ignored) {
+            }
+            SwingUtilities.invokeLater(this::refreshRunHistory);
+        }, "analysis-run-save");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    // ================= 模型行为流 =================
+
     private void handleModelBehavior(String message) {
-        if (message == null || message.isEmpty()) return;
+        if (message == null || message.isEmpty() || currentAssistant == null) return;
         int sep = message.indexOf('|');
         String type = sep >= 0 ? message.substring(0, sep) : "OTHER";
         String detail = sep >= 0 ? message.substring(sep + 1) : message;
-        String timestamp = java.time.LocalDateTime.now().format(
-                java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
         switch (type) {
             case "THINKING" -> {
-                // 流式增量块：累积到当前"思考"行并整行重写，而不是每块新起一行
-                if (detail != null && !detail.isEmpty()) {
-                    currentThinking.append(detail);
-                    renderThinkingLine(timestamp);
+                if (detail == null || detail.isEmpty()) return;
+                currentThinking.append(detail);
+                if (currentThinking.length() > MAX_THINKING_CHARS) {
+                    currentThinking.delete(0, currentThinking.length() - MAX_THINKING_CHARS);
+                }
+                long now = System.currentTimeMillis();
+                if (now - lastThinkingRenderAt >= THINKING_RENDER_MS) {
+                    lastThinkingRenderAt = now;
+                    currentAssistant.setThinking(currentThinking.toString());
                 }
             }
-            case "TOOL_START" -> {
-                flushThinking();
-                appendBehaviorLog("[" + timestamp + "] 调用工具: " + detail);
-            }
+            case "TOOL_START" -> currentAssistant.addTool(detail, true);
             case "TOOL_END" -> {
-                flushThinking();
                 boolean failed = detail.endsWith("|failed");
                 String tool = failed ? detail.substring(0, detail.length() - 7) : detail;
-                appendBehaviorLog("[" + timestamp + "] " + (failed ? "工具失败: " : "工具完成: ") + tool);
+                currentAssistant.addTool(tool, false);
             }
-            default -> {
-                flushThinking();
-                appendBehaviorLog("[" + timestamp + "] " + detail);
-            }
-        }
-    }
-
-    /** 把累积的思考缓冲渲染为一行（首次追加，后续整行重写） */
-    private void renderThinkingLine(String timestamp) {
-        if (behaviorTextArea == null) return;
-        String compact = currentThinking.toString().replaceAll("\\s+", " ").trim();
-        if (compact.length() > 200) {
-            compact = compact.substring(0, 200) + "...";
-        }
-        String line = "[" + timestamp + "] 思考: " + compact;
-        try {
-            javax.swing.text.Document doc = behaviorTextArea.getDocument();
-            if (thinkingLineStart < 0) {
-                thinkingLineStart = doc.getLength();
-                doc.insertString(doc.getLength(), line + "\n", null);
-            } else {
-                doc.remove(thinkingLineStart, doc.getLength() - thinkingLineStart);
-                doc.insertString(thinkingLineStart, line + "\n", null);
-            }
-        } catch (Exception e) {
-            thinkingLineStart = -1;
-        }
-        scrollBehaviorToBottom();
-    }
-
-    /** 思考段落结束：固化当前行，重置缓冲 */
-    private void flushThinking() {
-        currentThinking.setLength(0);
-        thinkingLineStart = -1;
-    }
-
-    // ========== 渲染工具 ==========
-
-    private static boolean isResultPaneAtBottom(JTextPane pane) {
-        JScrollPane scrollPane = findScrollPane(pane);
-        if (scrollPane == null) return true;
-        javax.swing.JScrollBar vbar = scrollPane.getVerticalScrollBar();
-        return vbar.getValue() + vbar.getVisibleAmount() >= vbar.getMaximum() - 20;
-    }
-
-    private static void scrollResultToEndIfAtBottom(JTextPane pane) {
-        JScrollPane scrollPane = findScrollPane(pane);
-        if (scrollPane == null) return;
-        javax.swing.JScrollBar vbar = scrollPane.getVerticalScrollBar();
-        if (vbar.getValue() + vbar.getVisibleAmount() >= vbar.getMaximum() - 20) {
-            vbar.setValue(vbar.getMaximum());
-        }
-    }
-
-    private static JScrollPane findScrollPane(Component c) {
-        Component parent = c.getParent();
-        while (parent != null) {
-            if (parent instanceof JScrollPane scrollPane) {
-                return scrollPane;
-            }
-            parent = parent.getParent();
-        }
-        return null;
-    }
-
-    private static void appendToResult(JTextPane pane, String text) {
-        try {
-            StyledDocument doc = pane.getStyledDocument();
-            javax.swing.text.Style regularStyle = doc.addStyle("regular", null);
-            javax.swing.text.StyleConstants.setFontFamily(regularStyle, "Microsoft YaHei");
-            javax.swing.text.StyleConstants.setFontSize(regularStyle, 12);
-            Color textColor = UIManager.getColor("TextArea.foreground");
-            javax.swing.text.StyleConstants.setForeground(regularStyle, textColor != null ? textColor : Color.BLACK);
-            doc.insertString(doc.getLength(), text + "\n", regularStyle);
-            scrollResultToEndIfAtBottom(pane);
-        } catch (Exception e) {
-            e.printStackTrace();
+            default -> { }
         }
     }
 
     private void notifyStateChanged() {
+        if (interjectButton != null) {
+            interjectButton.setEnabled(isAnalyzing);
+        }
         if (stateListener != null) {
             stateListener.onAnalysisStateChanged(isAnalyzing);
         }

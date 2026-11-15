@@ -6,12 +6,17 @@ import burp.api.montoya.http.message.requests.HttpRequest;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -73,6 +78,16 @@ public final class GraphStore {
 
     private volatile Path baseDir;
     private volatile GraphDatabase db;
+    /** 已完成旧 Notebook 导入的工作区（避免重复扫描） */
+    private volatile Path importedLegacyBase;
+
+    /** 笔记广播（只提醒，不携带正文）：UI/正在运行的 Agent 订阅后自行拉取增量。 */
+    private final CopyOnWriteArrayList<Consumer<Node>> noteListeners = new CopyOnWriteArrayList<>();
+    private final ExecutorService noteBroadcast = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "graph-note-broadcast");
+        t.setDaemon(true);
+        return t;
+    });
 
     private GraphStore() {
     }
@@ -124,7 +139,28 @@ public final class GraphStore {
         } catch (Exception e) {
             throw new IllegalStateException("知识图谱数据库初始化失败: " + e.getMessage(), e);
         }
+        maybeImportLegacyNotebooks(base);
         return db;
+    }
+
+    /** 首次打开某工作区的库时，把旧的 notebooks/*.md 迁成 NOTE 节点并删除原文件。 */
+    private void maybeImportLegacyNotebooks(Path base) {
+        if (base.equals(importedLegacyBase)) {
+            return;
+        }
+        // 先置位，导入过程中 listRoots()/upsertNote 再次进入 db() 时不会递归
+        importedLegacyBase = base;
+        try {
+            LegacyNotebookImporter.importOnce(base, this);
+        } catch (Exception e) {
+            com.ai.analyzer.util.DebugContext.log("GraphStore", "legacy_notebook_import_failed",
+                    Map.of("error", String.valueOf(e.getMessage())));
+        }
+    }
+
+    /** 导入器遇到“暂无 root 可挂”时调用：让下次 db() 打开时重试导入。 */
+    void markLegacyImportRetry() {
+        importedLegacyBase = null;
     }
 
     /** 关闭底层数据库（测试用）。 */
@@ -151,7 +187,22 @@ public final class GraphStore {
         try {
             String method = rr.request().method() != null ? rr.request().method() : "GET";
             String url = rr.request().url();
-            String body = rr.request().bodyToString();
+            // 大请求体（上传）不解析参数：bodyToString() 会把整包解码成字符串，
+            // 在流量线程/图谱线程上都是不必要的大对象
+            String body = "";
+            try {
+                var rawBody = rr.request().body();
+                if (rawBody != null && rawBody.length() > 0 && rawBody.length() <= 256 * 1024) {
+                    body = rawBody.toString();
+                } else if (rawBody == null) {
+                    // 兜底：部分 Montoya 实现/测试替身只提供 bodyToString()
+                    String text = rr.request().bodyToString();
+                    if (text != null && text.length() <= 256 * 1024) {
+                        body = text;
+                    }
+                }
+            } catch (Exception ignored) {
+            }
             Node iface = observeInterface(method, url, body, "burp", null);
             if (rr.response() != null) {
                 observeResponseMeta(method, url, rr, iface);
@@ -177,11 +228,30 @@ public final class GraphStore {
                 break;
             }
         }
-        String body = rr.response().bodyToString();
-        if (body == null) body = "";
-        // 只取前缀做标题/资源/JS 特征分析，避免在流量线程上处理超大响应
+        // 只取前缀做标题/资源/JS 特征分析：不要先 bodyToString() 再截断，
+        // 大响应（视频/安装包）会整包解码成字符串
         int maxProbe = 256 * 1024;
-        if (body.length() > maxProbe) body = body.substring(0, maxProbe);
+        int responseBytes = 0;
+        String body = "";
+        try {
+            var rawResponseBody = rr.response().body();
+            if (rawResponseBody != null) {
+                responseBytes = rawResponseBody.length();
+                if (responseBytes > 0) {
+                    body = responseBytes > maxProbe
+                            ? rawResponseBody.subArray(0, maxProbe).toString()
+                            : rawResponseBody.toString();
+                }
+            } else {
+                // 兜底：测试替身/旧实现只提供 bodyToString()
+                String text = rr.response().bodyToString();
+                if (text != null) {
+                    responseBytes = text.length();
+                    body = text.length() > maxProbe ? text.substring(0, maxProbe) : text;
+                }
+            }
+        } catch (Exception ignored) {
+        }
         String title = "";
         Matcher tm = Pattern.compile("(?is)<title[^>]*>(.*?)</title>").matcher(body);
         if (tm.find()) {
@@ -208,8 +278,21 @@ public final class GraphStore {
         props.put("kind", kind);
         if (!contentType.isBlank()) props.put("content_type", contentType);
         props.put("status_code", rr.response().statusCode());
-        props.put("bytes", body.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
-        if (body.contains("sourceMappingURL=")) props.put("has_sourcemap", true);
+        props.put("bytes", responseBytes);
+        // sourceMappingURL 注释通常在大文件末尾；body 只有前 256KB，末尾也要看一眼
+        boolean hasSourceMap = body.contains("sourceMappingURL=");
+        if (!hasSourceMap) {
+            try {
+                var rawTail = rr.response().body();
+                if (rawTail != null && rawTail.length() > 0) {
+                    int tailStart = Math.max(0, rawTail.length() - 4096);
+                    hasSourceMap = rawTail.subArray(tailStart, rawTail.length()).toString()
+                            .contains("sourceMappingURL=");
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        if (hasSourceMap) props.put("has_sourcemap", true);
         Node resource = d.upsertNode(rootId, NodeType.RESOURCE, parsed.path(), key,
                 FactStatus.OBSERVED, 1.0, "burp", null, props);
         Node originNode = d.getNodeByCanonical(rootId, NodeType.ORIGIN, rootId);
@@ -256,6 +339,12 @@ public final class GraphStore {
 
     private Node upsertObservation(String method, String url, String body,
                                    String sourceType, String sourceId) {
+        return upsertObservation(method, url, body, sourceType, sourceId, FactStatus.OBSERVED);
+    }
+
+    /** status 只作用于本次新建的 INTERFACE 节点；已存在节点仍按事实等级推进规则处理。 */
+    private Node upsertObservation(String method, String url, String body,
+                                   String sourceType, String sourceId, FactStatus status) {
         ParsedRequest parsed = GraphNormalizers.parse(method, url, body);
         GraphDatabase d = db();
         String rootId = d.ensureRoot(parsed.origin(), parsed.scheme(), parsed.host(), parsed.port());
@@ -267,7 +356,7 @@ public final class GraphStore {
         String ifaceKey = GraphNormalizers.interfaceKey(parsed.origin(), parsed.method(), parsed.path());
         Node iface = d.upsertNode(rootId, NodeType.INTERFACE,
                 parsed.method() + " " + parsed.path(), ifaceKey,
-                FactStatus.OBSERVED, 1.0, sourceType, sourceId,
+                status, 1.0, sourceType, sourceId,
                 Map.of("module", GraphNormalizers.guessModule(parsed.path())));
         d.upsertEdge(rootId, originNode.id(), iface.id(), EdgeType.HAS_INTERFACE,
                 FactStatus.OBSERVED, 1.0, sourceType, sourceId, Map.of());
@@ -316,10 +405,20 @@ public final class GraphStore {
             }
         } catch (Exception ignored) {
         }
+        // 只取 body 前 4KB：与 observeResponseMeta 的 256KB 纪律一致。
+        // bodyToString() 会把整个响应（含被特意入图的大压缩包）物化成 String，
+        // 在流量线程/图谱线程上造成 GB 级分配，甚至 OOM（Error 不被 catch(Exception) 捕获）。
         try {
-            String body = rr.response().bodyToString();
-            if (body != null) {
-                probe.append(body, 0, Math.min(body.length(), 4096));
+            var rawBody = rr.response().body();
+            if (rawBody != null && rawBody.length() > 0) {
+                int take = Math.min(rawBody.length(), 4096);
+                probe.append(rawBody.subArray(0, take).toString());
+            } else {
+                // 兜底：测试替身/旧实现只提供 bodyToString()
+                String body = rr.response().bodyToString();
+                if (body != null) {
+                    probe.append(body, 0, Math.min(body.length(), 4096));
+                }
             }
         } catch (Exception ignored) {
         }
@@ -420,7 +519,9 @@ public final class GraphStore {
     private String rootOf(HttpRequestResponse rr) {
         HttpService svc = rr.request() != null ? rr.request().httpService() : null;
         if (svc != null && svc.host() != null && !svc.host().isEmpty()) {
-            return (svc.secure() ? "https" : "http") + "://" + svc.host() + ":" + svc.port();
+            // host 统一小写：混合大小写 Host 头会把同一站点拆成两个 root
+            return (svc.secure() ? "https" : "http") + "://"
+                    + svc.host().toLowerCase(Locale.ROOT) + ":" + svc.port();
         }
         try {
             String u = rr.request().url();
@@ -435,6 +536,9 @@ public final class GraphStore {
     /** Agent 观察事实写入（type/name/root 形式，url 自动落 Origin+接口）。 */
     public String upsertAgentObservation(String type, String name, String rootOrUrl, String sourceType, String sourceId) {
         NodeType nt = safeNodeType(type);
+        if (nt == NodeType.NOTE) {
+            return "错误: NOTE 请使用 graph_add_note 创建";
+        }
         if (rootOrUrl == null || rootOrUrl.isBlank()) {
             return "错误: root 或 url 不能为空";
         }
@@ -459,6 +563,11 @@ public final class GraphStore {
      * 把 origin 当成 URL，路径恒为 /。
      */
     private String upsertAgentInterface(String name, String rootOrUrl, String sourceType, String sourceId) {
+        return nodeIdRepr(upsertInterfaceNode(name, rootOrUrl, sourceType, sourceId, FactStatus.OBSERVED));
+    }
+
+    private Node upsertInterfaceNode(String name, String rootOrUrl, String sourceType,
+                                     String sourceId, FactStatus status) {
         String n = name == null ? "" : name.trim();
         String method = "GET";
         String url;
@@ -479,8 +588,7 @@ public final class GraphStore {
             if (!path.startsWith("/")) path = "/" + path;
             url = root.endsWith("/") ? root.substring(0, root.length() - 1) + path : root + path;
         }
-        Node node = upsertObservation(method, url, null, sourceType, sourceId);
-        return nodeIdRepr(node);
+        return upsertObservation(method, url, null, sourceType, sourceId, status);
     }
 
     private static boolean hasNonRootPath(String url) {
@@ -508,6 +616,9 @@ public final class GraphStore {
             return "错误: subject 节点不存在 (" + subjectNodeId + ")";
         }
         NodeType tt = safeNodeType(targetType);
+        if (tt == NodeType.NOTE) {
+            return "错误: NOTE 不能作为推测目标，请使用 graph_add_note";
+        }
         EdgeType et = safeEdgeType(relation);
         Node target = upsertNamed(subject.rootId(), tt, targetName, FactStatus.INFERRED, confidence, "agent", null);
         Map<String, Object> props = new LinkedHashMap<>();
@@ -698,6 +809,198 @@ public final class GraphStore {
         }
     }
 
+    // ============ 笔记 / 评估 / 人工节点（原 Notebook 合并入图） ============
+
+    private static final java.time.format.DateTimeFormatter NOTE_TS =
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
+
+    private static String nowTs() {
+        return java.time.LocalDateTime.now().format(NOTE_TS);
+    }
+
+    /** 订阅笔记写入提醒（只提醒，正文请用 {@link #listNotes} 拉取）。 */
+    public void subscribeNotes(Consumer<Node> listener) {
+        if (listener != null) noteListeners.addIfAbsent(listener);
+    }
+
+    public void unsubscribeNotes(Consumer<Node> listener) {
+        if (listener != null) noteListeners.remove(listener);
+    }
+
+    private void publishNote(Node note) {
+        for (Consumer<Node> listener : noteListeners) {
+            noteBroadcast.execute(() -> {
+                try {
+                    listener.accept(note);
+                } catch (Exception ignored) {
+                }
+            });
+        }
+    }
+
+    public record NoteResult(long nodeId, int version, boolean duplicate) {
+    }
+
+    /**
+     * 追加一条笔记/牵引。nodeId 为空时挂在该 Origin 上（站点级笔记）。
+     * 同目标下内容等价的笔记会被去重。
+     */
+    public NoteResult addNote(String root, Long nodeId, String content, String kind,
+                              String author, String sourceType) {
+        String text = content == null ? "" : content.trim();
+        if (text.isEmpty()) {
+            throw new IllegalArgumentException("笔记内容不能为空");
+        }
+        String src = sourceType == null || sourceType.isBlank() ? "agent" : sourceType;
+        String who = author == null || author.isBlank() ? src : author;
+        String rootId = resolveRootId(nodeId == null ? 0 : nodeId, root);
+        if (rootId == null) {
+            throw new IllegalArgumentException("需要 node_id 或 root");
+        }
+        GraphDatabase.NoteInsert ins = db().upsertNote(rootId, nodeId, text, kind, who, src, who, null);
+        if (!ins.duplicate()) {
+            publishNote(ins.node());
+        }
+        return new NoteResult(ins.node().id(), ins.version(), ins.duplicate());
+    }
+
+    /** 历史 Notebook 导入：保留原版本号与作者，不广播。 */
+    NoteResult importNote(String rootId, String content, String kind, String author, int version) {
+        GraphDatabase.NoteInsert ins = db().upsertNote(rootId, null, content, kind, author,
+                "notebook-import", author, version);
+        return new NoteResult(ins.node().id(), ins.version(), ins.duplicate());
+    }
+
+    /** 某 Origin 的笔记，按版本升序；sinceVersion 只返回更新的条目。 */
+    public List<Node> listNotes(String root, int sinceVersion) {
+        String rootId = resolveRootId(0, root);
+        if (rootId == null) {
+            return List.of();
+        }
+        List<Node> all = new ArrayList<>(db().findNodes(rootId, NodeType.NOTE, null, 0));
+        all.removeIf(n -> GraphDatabase.noteVersion(n) <= sinceVersion);
+        all.sort(Comparator.comparingInt(GraphDatabase::noteVersion));
+        return all;
+    }
+
+    /** 人类编辑笔记正文：递增版本并广播，让增量读取方（graph_get_notes since_version）能重新看到。 */
+    public void updateNote(long noteId, String content, String author) {
+        Node n = db().getNode(noteId);
+        if (n == null || n.type() != NodeType.NOTE) {
+            throw new IllegalArgumentException("笔记不存在: " + noteId);
+        }
+        String text = content == null ? "" : content.trim();
+        if (text.isEmpty()) {
+            throw new IllegalArgumentException("笔记内容不能为空");
+        }
+        Map<String, Object> props = new LinkedHashMap<>();
+        props.put("content", text);
+        props.put("edited_at", nowTs());
+        if (author != null && !author.isBlank()) {
+            props.put("edited_by", author);
+        }
+        db().bumpNoteVersionAndUpdate(noteId, GraphDatabase.noteTitle(text), props);
+        Node updated = db().getNode(noteId);
+        if (updated != null) {
+            publishNote(updated);
+        }
+    }
+
+    public void deleteNote(long noteId) {
+        Node n = db().getNode(noteId);
+        if (n == null || n.type() != NodeType.NOTE) {
+            throw new IllegalArgumentException("笔记不存在: " + noteId);
+        }
+        db().deleteNode(noteId);
+    }
+
+    /**
+     * 记录 Agent 对某个节点「是否值得继续」的判断。
+     * priority: high / normal / low / none；low/none 表示已确认的死路。
+     */
+    public String assessNode(long nodeId, String priority, String assessment, String nextStep,
+                             String author) {
+        Node n = db().getNode(nodeId);
+        if (n == null) {
+            return "错误: 节点不存在 (" + nodeId + ")";
+        }
+        String p = normalizePriority(priority);
+        Map<String, Object> props = new LinkedHashMap<>();
+        props.put("assess_priority", p);
+        if (assessment != null && !assessment.isBlank()) {
+            props.put("assess_summary", GraphNormalizers.truncate(assessment.trim(), 500));
+        }
+        if (nextStep != null && !nextStep.isBlank()) {
+            props.put("assess_next_step", GraphNormalizers.truncate(nextStep.trim(), 500));
+        }
+        props.put("assess_by", author == null || author.isBlank() ? "agent" : author);
+        props.put("assess_at", nowTs());
+        db().mergeNodePropertiesById(nodeId, props);
+        return "已记录评估: " + n.name() + " → " + p;
+    }
+
+    static String normalizePriority(String priority) {
+        String p = priority == null ? "" : priority.trim().toLowerCase(Locale.ROOT);
+        return switch (p) {
+            case "high", "high-priority", "高" -> "high";
+            case "low", "低" -> "low";
+            case "none", "no", "无" -> "none";
+            default -> "normal";
+        };
+    }
+
+    /**
+     * 人类在图谱中手工新增节点。默认按推测处理（INFERRED）；
+     * verified=true 表示人工已验证，直接记为 CONFIRMED（计入已测）。
+     */
+    public Node addHumanNode(String root, NodeType type, String name, long parentNodeId,
+                             EdgeType relation, boolean verified, String note) {
+        if (type == null || type == NodeType.NOTE || type == NodeType.ANALYSIS_FACT
+                || type == NodeType.ORIGIN) {
+            throw new IllegalArgumentException("该类型不能手工新增: " + type);
+        }
+        String nm = name == null ? "" : name.trim();
+        if (nm.isEmpty()) {
+            throw new IllegalArgumentException("节点名称不能为空");
+        }
+        String rootId = resolveRootId(parentNodeId, root);
+        if (rootId == null) {
+            throw new IllegalArgumentException("需要 root 或父节点");
+        }
+        FactStatus status = verified ? FactStatus.CONFIRMED : FactStatus.INFERRED;
+        Node node = type == NodeType.INTERFACE
+                ? upsertInterfaceNode(nm, rootId, "human", null, status)
+                : upsertNamed(rootId, type, nm, status, verified ? 1.0 : 0.5, "human", null);
+        if (verified) {
+            db().setNodeStatus(node.id(), FactStatus.CONFIRMED, 1.0);
+        }
+        if (parentNodeId > 0) {
+            Node parent = db().getNode(parentNodeId);
+            if (parent != null && parent.id() != node.id()) {
+                EdgeType rel = relation == null ? EdgeType.RELATED_TO : relation;
+                // 边方向必须与 agent 创建边一致：BELONGS_TO/INDICATES/SUPPORTS/CALLS
+                // 等是 child→parent，新节点是 source；否则图谱视图的包含树会反向嵌套
+                // （整个站点挂到新 FEATURE 节点下面）。
+                boolean childFirst = switch (rel) {
+                    case BELONGS_TO, INDICATES, SUPPORTS, DERIVED_FROM, CALLS,
+                            SUGGESTS, RELATED_TO -> false;
+                    default -> true;
+                };
+                if (childFirst) {
+                    db().upsertEdge(rootId, parent.id(), node.id(), rel,
+                            status, verified ? 1.0 : 0.5, "human", null, Map.of("origin", "human"));
+                } else {
+                    db().upsertEdge(rootId, node.id(), parent.id(), rel,
+                            status, verified ? 1.0 : 0.5, "human", null, Map.of("origin", "human"));
+                }
+            }
+        }
+        if (note != null && !note.isBlank()) {
+            addNote(null, node.id(), note, "note", "human", "human");
+        }
+        return db().getNode(node.id());
+    }
+
     // ============ 查询 / 子图 / 渲染 ============
 
     public Node getNode(long nodeId) {
@@ -779,6 +1082,19 @@ public final class GraphStore {
         if (resources > 0) {
             sb.append("前端资源：").append(resources).append(" 个（JS/CSS/source map，见 graph_get_subgraph）\n");
         }
+        List<Node> notes = listNotes(rootId, 0);
+        if (!notes.isEmpty()) {
+            sb.append("站点笔记/人工牵引（").append(notes.size()).append(" 条，最新在前）：\n");
+            int from = Math.max(0, notes.size() - 10);
+            for (int i = notes.size() - 1; i >= from; i--) {
+                Node n = notes.get(i);
+                sb.append("  - [v").append(GraphDatabase.noteVersion(n)).append(" · ")
+                        .append(n.prop("kind")).append(" · ").append(n.prop("author")).append("] ")
+                        .append(GraphNormalizers.truncate(
+                                String.valueOf(n.prop("content")).replace('\n', ' '), 200))
+                        .append('\n');
+            }
+        }
         return sb.toString().trim();
     }
 
@@ -855,7 +1171,43 @@ public final class GraphStore {
                 queue.add(new long[]{j.node().id(), level + 1});
             }
         }
-        return render(seed, junctions);
+        StringBuilder out = new StringBuilder(render(seed, junctions));
+        appendNodeContext(out, seed, d);
+        return out.toString();
+    }
+
+    /** 在子图文本后追加当前节点的评估与相关笔记（人工牵引必须让 Agent 看到）。 */
+    private static void appendNodeContext(StringBuilder sb, Node seed, GraphDatabase d) {
+        Object priority = seed.prop("assess_priority");
+        if (priority != null && !String.valueOf(priority).isBlank()) {
+            sb.append("\n评估: ").append(priority);
+            Object summary = seed.prop("assess_summary");
+            if (summary != null && !String.valueOf(summary).isBlank()) {
+                sb.append(" · ").append(summary);
+            }
+            Object next = seed.prop("assess_next_step");
+            if (next != null && !String.valueOf(next).isBlank()) {
+                sb.append("\n下一步: ").append(next);
+            }
+            sb.append('\n');
+        }
+        List<Node> notes = new ArrayList<>(d.findNodes(seed.rootId(), NodeType.NOTE, null, 0));
+        notes.removeIf(n -> {
+            Object t = n.prop("target");
+            long target = t instanceof Number num ? (long) num.doubleValue() : 0;
+            return target != 0 && target != seed.id();
+        });
+        if (!notes.isEmpty()) {
+            notes.sort(Comparator.comparingInt(GraphDatabase::noteVersion));
+            int from = Math.max(0, notes.size() - 5);
+            sb.append("\n相关笔记:");
+            for (int i = from; i < notes.size(); i++) {
+                Node n = notes.get(i);
+                sb.append("\n  - [").append(n.prop("kind")).append(" · ").append(n.prop("author")).append("] ")
+                        .append(GraphNormalizers.truncate(String.valueOf(n.prop("content")), 300));
+            }
+            sb.append('\n');
+        }
     }
 
     /** 把种子节点 + 邻接集合渲染成紧凑、相关性排序的文本上下文（§14 样例格式）。 */

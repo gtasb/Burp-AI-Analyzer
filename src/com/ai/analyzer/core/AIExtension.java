@@ -41,6 +41,14 @@ public class AIExtension implements BurpExtension {
         // 注册卸载清理：释放 SQLite 连接（知识图谱）与 WAL 文件句柄
         api.extension().registerUnloadingHandler(() -> {
             try {
+                analyzerTab.disposeForUnload();
+            } catch (Exception ignored) {
+            }
+            try {
+                com.ai.analyzer.agent.mcpclient.AgentScopeMcpManager.closeAllSharedClients();
+            } catch (Exception ignored) {
+            }
+            try {
                 com.ai.analyzer.graph.GraphStore.getInstance().close();
             } catch (Exception ignored) {
             }

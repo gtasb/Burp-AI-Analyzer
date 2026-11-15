@@ -34,7 +34,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * <ul>
  *   <li>无共享可变状态，天然隔离 —— 一个请求的工具调用/取消不会污染另一个请求；</li>
  *   <li>可被 {@code Semaphore} 安全地限定并发，实现「有界的模型并发预算」；</li>
- *   <li>无 workspace / session 持久化，跨请求的长期记忆交给共享 Notebook（黑板）承载。</li>
+ *   <li>无 workspace / session 持久化，跨请求的长期记忆交给共享知识图谱（笔记节点）承载。</li>
  * </ul>
  *
  * <p>只在 {@code Model} 与 {@code Toolkit} 两处共享（两者被设计为可跨 agent 复用），
@@ -71,6 +71,44 @@ public class ReActAgentRuntime implements AgentRuntime {
         this.skillRepositories = builder.skillRepositories;
     }
 
+    /** 构建一个 ReActAgent；被动扫描每请求一个，用后即关。 */
+    private ReActAgent buildAgent() {
+        var builder = ReActAgent.builder()
+                .name(agentName)
+                .model(model)
+                .toolkit(toolkit)
+                .maxIters(maxIters)
+                .permissionContext(PermissionContextState.builder()
+                        .mode(PermissionMode.BYPASS)
+                        .build())
+                // 2.0.3：会话状态并发写入冲突策略（每请求 agent 并发场景下允许覆盖而不是抛错）
+                .conflictPolicy(io.agentscope.core.state.ConflictPolicy.OVERWRITE)
+                .toolExecutionConfig(ExecutionConfig.builder()
+                        .timeout(Duration.ofSeconds(120))
+                        .maxAttempts(2)
+                        .build());
+        if (systemPrompt != null && !systemPrompt.isEmpty()) {
+            builder.sysPrompt(systemPrompt);
+        }
+        if (skillRepositories != null && !skillRepositories.isEmpty()) {
+            builder.skillRepositories(skillRepositories);
+        }
+        return builder.build();
+    }
+
+    /**
+     * 预热：提前构建并关闭一个 agent，把类加载与技能仓库扫描等一次性成本
+     * 从「第一次被动扫描」挪到插件加载后的后台线程。
+     */
+    public void warmup() {
+        try (ReActAgent ignored = buildAgent()) {
+            // 只为触发初始化
+        } catch (Exception e) {
+            com.ai.analyzer.util.DebugContext.log("ReActAgentRuntime", "warmup_failed",
+                    java.util.Map.of("error", String.valueOf(e.getMessage())));
+        }
+    }
+
     @Override
     public StreamSession chat(String userMessage, String sessionId, RuntimeEventListener listener) {
         return chat(List.of(ChatMessage.user(userMessage)), sessionId, listener);
@@ -96,29 +134,8 @@ public class ReActAgentRuntime implements AgentRuntime {
         }, timeout());
 
         try {
-            var builder = ReActAgent.builder()
-                    .name(agentName)
-                    .model(model)
-                    .toolkit(toolkit)
-                    .maxIters(maxIters)
-                    .permissionContext(PermissionContextState.builder()
-                            .mode(PermissionMode.BYPASS)
-                            .build())
-                    // 2.0.3：会话状态并发写入冲突策略（每请求 agent 并发场景下允许覆盖而不是抛错）
-                    .conflictPolicy(io.agentscope.core.state.ConflictPolicy.OVERWRITE)
-                    .toolExecutionConfig(ExecutionConfig.builder()
-                            .timeout(Duration.ofSeconds(120))
-                            .maxAttempts(2)
-                            .build());
-            if (systemPrompt != null && !systemPrompt.isEmpty()) {
-                builder.sysPrompt(systemPrompt);
-            }
-            if (skillRepositories != null && !skillRepositories.isEmpty()) {
-                builder.skillRepositories(skillRepositories);
-            }
-
             // 每请求一个 agent，用后即关（AutoCloseable）
-            try (ReActAgent agent = builder.build()) {
+            try (ReActAgent agent = buildAgent()) {
                 reactor.core.publisher.Flux<AgentEvent> stream =
                         agent.streamEvents(asMessages, ctx)
                                 .doOnSubscribe(sub -> {

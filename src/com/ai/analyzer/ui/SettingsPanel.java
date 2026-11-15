@@ -10,10 +10,7 @@ import com.ai.analyzer.agent.skills.Skill;
 import com.ai.analyzer.agent.skills.SkillManager;
 import com.ai.analyzer.scan.rulesmatch.PreScanFilterManager;
 import com.ai.analyzer.ui.active.ActiveAnalysisPanel;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
+import com.ai.analyzer.core.ModelListFetcher;
 
 import javax.swing.*;
 import javax.swing.event.DocumentEvent;
@@ -33,6 +30,10 @@ import java.util.Map;
 public class SettingsPanel {
     private final MontoyaApi api;
     private final AgentApiClient apiClient;
+    /** 侧栏聊天 agent（与主动分析拆分后需要同步同一份配置） */
+    private AgentApiClient sidebarApiClient;
+    /** 证据整理 agent（独立上下文，同一份 API 配置） */
+    private AgentApiClient organizerApiClient;
     private final PreScanFilterManager preScanFilterManager;
     private PassiveScanManager passiveScanManager;
     private ActiveAnalysisPanel activeAnalysisPanel;
@@ -109,6 +110,8 @@ public class SettingsPanel {
 
     private JButton saveSettingsButton;
     private JButton loadSettingsButton;
+    private JCheckBox organizerAutoContinueCheckBox;
+    private JSpinner organizerRoundsSpinner;
 
     public interface SettingsHost {
         ActiveAnalysisPanel getActiveAnalysisPanel();
@@ -116,6 +119,8 @@ public class SettingsPanel {
         void flashStatusMessage(String message);
         void setPromptTextForAllModes(String text);
         String getUserPromptText();
+        /** 设置加载后刷新「请求分析」页的被动扫描流量来源勾选。 */
+        void refreshPassiveScanSources();
     }
 
     public SettingsPanel(MontoyaApi api, AgentApiClient apiClient,
@@ -145,8 +150,9 @@ public class SettingsPanel {
         HTTP_DUMPS("HTTP 报文缓存", "工作区 .cache/ 下由超长报文落盘产生的文件"),
         TOOL_RESULTS("大工具结果", "工具输出超过 16KB 时自动落盘的 large_tool_results/"),
         AGENT_MEMORY("Agent 会话与记忆", "agent 的 MEMORY.md、memory/ 与会话状态（等同新会话）"),
-        NOTEBOOKS("Notebook 知识黑板", "工作区 notebooks/ 下按域名保存的 .md 知识库（不可恢复）"),
-        GRAPH("知识图谱数据", "knowledge-graph.db 及 WAL 文件（不可恢复，等同重置图谱）"),
+        ANALYSIS_RUNS("主动分析历史", "工作区 analysis-runs/ 下的 run 历史（清空后历史下拉框为空）"),
+        ORGANIZER_ARTIFACTS("渗透报告与POC", "工作区 reports/ 与 pocs/（整理 agent 产出的报告与复测脚本）"),
+        GRAPH("知识图谱数据", "knowledge-graph.db 及 WAL 文件（不可恢复，等同重置图谱与笔记）"),
         PYTHON_WORKDIR("Python 工作目录", "agent 生成并复用的 python-workdir/ 脚本"),
         CHAT_HISTORY("聊天历史", "~/.burp_ai_chat_history.dat（侧栏对话记录，删除不可恢复）"),
         RUNTIME_LOGS("运行时日志与统计", "Logger/Debug 内存日志与 Token 统计（仅内存）");
@@ -169,7 +175,7 @@ public class SettingsPanel {
 
         JLabel pathLabel = new JLabel();
         pathLabel.setFont(pathLabel.getFont().deriveFont(Font.PLAIN, 12f));
-        JLabel noteLabel = new JLabel("清理不可恢复；清理 Notebook/知识图谱建议先停止扫描。收藏列表不在本页清理。");
+        JLabel noteLabel = new JLabel("清理不可恢复；清理知识图谱建议先停止扫描。收藏列表不在本页清理。");
         noteLabel.setForeground(Color.GRAY);
         noteLabel.setFont(noteLabel.getFont().deriveFont(Font.PLAIN, 11f));
 
@@ -259,15 +265,26 @@ public class SettingsPanel {
                 if (ws != null) {
                     paths.add(ws.resolve(user).resolve("MEMORY.md"));
                     paths.add(ws.resolve(user).resolve("memory"));
+                    // 拆分后的角色状态目录 + 历史遗留目录
+                    paths.add(ws.resolve(".agents"));
                     paths.add(ws.resolve("agents").resolve("burp-ai-analyzer"));
+                    paths.add(ws.resolve("agents").resolve("burp-ai-active"));
+                    paths.add(ws.resolve("agents").resolve("burp-ai-sidebar"));
+                    paths.add(ws.resolve("agents").resolve("burp-ai-organizer"));
                 }
             }
-            case NOTEBOOKS -> {
-                // 与 NotebookStore 一致：未配置工作区时回落到 ~/ai-analyzer-workplace
+            case ANALYSIS_RUNS -> {
                 java.nio.file.Path base = ws != null
                         ? ws
                         : java.nio.file.Path.of(System.getProperty("user.home"), "ai-analyzer-workplace");
-                paths.add(base.resolve("notebooks"));
+                paths.add(base.resolve("analysis-runs"));
+            }
+            case ORGANIZER_ARTIFACTS -> {
+                java.nio.file.Path base = ws != null
+                        ? ws
+                        : java.nio.file.Path.of(System.getProperty("user.home"), "ai-analyzer-workplace");
+                paths.add(base.resolve("reports"));
+                paths.add(base.resolve("pocs"));
             }
             case GRAPH -> {
                 // 与 GraphStore 一致：未配置工作区时回落到 ~/ai-analyzer-workplace
@@ -366,9 +383,34 @@ public class SettingsPanel {
                         } catch (Exception ignored) {
                         }
                     }
+                    if (kind == CacheKind.AGENT_MEMORY) {
+                        // 活着的 agent 会把会话/记忆状态再写回刚删的目录：
+                        // 必须先销毁三个运行时，清理才不会“复活”，也符合「等同新会话」
+                        try {
+                            apiClient.startNewSession();
+                        } catch (Exception ignored) {
+                        }
+                        if (sidebarApiClient != null) {
+                            try {
+                                sidebarApiClient.startNewSession();
+                            } catch (Exception ignored) {
+                            }
+                        }
+                        if (organizerApiClient != null) {
+                            try {
+                                organizerApiClient.startNewSession();
+                            } catch (Exception ignored) {
+                            }
+                        }
+                    }
                     for (java.nio.file.Path p : cachePaths(kind, workplace)) {
-                        freed += sizeOf(p);
-                        if (!deleteRecursively(p)) failures++;
+                        long size = sizeOf(p);
+                        if (deleteRecursively(p)) {
+                            // 只统计实际删掉的：被占用删除失败的字节不算“已释放”
+                            freed += size;
+                        } else {
+                            failures++;
+                        }
                     }
                 }
                 return new long[]{freed, failures};
@@ -519,6 +561,17 @@ public class SettingsPanel {
     public String getPassiveScanSkipExtensions() { return passiveScanSkipExtensionsArea != null ? passiveScanSkipExtensionsArea.getText() : ""; }
     public String getPassiveScanDomainBlacklist() { return passiveScanDomainBlacklistArea != null ? passiveScanDomainBlacklistArea.getText() : ""; }
     public String getPassiveScanDomainWhitelist() { return passiveScanDomainWhitelistArea != null ? passiveScanDomainWhitelistArea.getText() : ""; }
+    public boolean isOrganizerAutoContinue() { return organizerAutoContinueCheckBox == null || organizerAutoContinueCheckBox.isSelected(); }
+    public void setOrganizerAutoContinue(boolean enabled) {
+        if (organizerAutoContinueCheckBox != null) {
+            organizerAutoContinueCheckBox.setSelected(enabled);
+        }
+    }
+    public int getOrganizerMaxRounds() {
+        if (organizerRoundsSpinner == null) return 0;
+        Object v = organizerRoundsSpinner.getValue();
+        return v instanceof Number n ? Math.max(0, n.intValue()) : 0;
+    }
     public int getSearchModeIndex() { return searchModeComboBox != null ? searchModeComboBox.getSelectedIndex() : 0; }
     public String getSearchMode() {
         if (searchModeComboBox == null) return "enableSearch";
@@ -1177,6 +1230,8 @@ public class SettingsPanel {
         if (result != JOptionPane.YES_OPTION) return;
         apiProfiles.removeIf(p -> p != null && profile.getName().equals(p.getName()));
         refreshApiProfileCombo();
+        // 删除必须立即落盘：否则重启后档案从旧设置文件里复活
+        saveSettings();
         api.logging().logToOutput("API 配置档案已删除: " + profile.getName());
     }
 
@@ -1272,55 +1327,12 @@ public class SettingsPanel {
     /** 同步调模型列表接口，返回每行一个模型名的字符串；失败返回空串。 */
     private String fetchModelList(String provider, String apiUrl, String apiKey) {
         try {
-            if (apiKey == null || apiKey.isBlank()) return "";
-            String endpoint;
-            java.util.Map<String, String> headers = new java.util.HashMap<>();
-            headers.put("Authorization", "Bearer " + apiKey);
-            if ("DashScope".equals(provider)) {
-                String base = (apiUrl == null || apiUrl.isEmpty())
-                        ? "https://dashscope.aliyuncs.com/api/v1" : apiUrl;
-                endpoint = (base.endsWith("/") ? base : base + "/") + "models";
-            } else if ("Anthropic兼容".equals(provider)) {
-                String base = (apiUrl == null || apiUrl.isEmpty())
-                        ? "https://api.anthropic.com" : apiUrl;
-                endpoint = (base.endsWith("/") ? base : base + "/") + "v1/models";
-                headers.put("anthropic-version", "2023-06-01");
-                headers.put("x-api-key", apiKey);
-            } else { // OpenAI 兼容
-                String base = (apiUrl == null || apiUrl.isEmpty())
-                        ? "https://api.openai.com/v1" : apiUrl;
-                endpoint = (base.endsWith("/") ? base : base + "/") + "models";
-            }
-            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
-                    .connectTimeout(java.time.Duration.ofSeconds(10))
-                    .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
-                    .build();
-            java.net.http.HttpRequest.Builder rb = java.net.http.HttpRequest.newBuilder()
-                    .uri(java.net.URI.create(endpoint))
-                    .timeout(java.time.Duration.ofSeconds(15))
-                    .GET();
-            headers.forEach(rb::header);
-            java.net.http.HttpResponse<String> resp = client.send(rb.build(),
-                    java.net.http.HttpResponse.BodyHandlers.ofString());
-            if (resp.statusCode() != 200) {
-                api.logging().logToError("[Settings] 模型列表接口 HTTP " + resp.statusCode() + " : " + endpoint);
+            java.util.List<String> models = ModelListFetcher.fetch(provider, apiUrl, apiKey);
+            if (models.isEmpty()) {
+                api.logging().logToError("[Settings] 模型列表响应为空: "
+                        + ModelListFetcher.endpoint(provider, apiUrl));
                 return "";
             }
-            JsonObject root = JsonParser.parseString(resp.body()).getAsJsonObject();
-            JsonArray arr = root.getAsJsonArray("data");
-            if (arr == null || arr.isEmpty()) {
-                api.logging().logToError("[Settings] 模型列表响应无 data: " + endpoint);
-                return "";
-            }
-            java.util.List<String> models = new java.util.ArrayList<>();
-            for (JsonElement el : arr) {
-                JsonObject o = el.getAsJsonObject();
-                if (o == null) continue;
-                // Anthropic data: {type:"model", id:"claude-3-5-sonnet-..."}；其余: {id:"..."}
-                String id = o.has("id") ? o.get("id").getAsString() : null;
-                if (id != null && !id.isBlank()) models.add(id);
-            }
-            models.sort(String::compareTo);
             return String.join("\n", models);
         } catch (Exception e) {
             api.logging().logToError("[Settings] 获取模型列表失败: " + e.getMessage());
@@ -1373,6 +1385,24 @@ public class SettingsPanel {
             apiClient.setEnablePythonScript(enablePythonScriptCheckbox.isSelected());
         });
         panel.add(enablePythonScriptCheckbox, gbc);
+
+        // 证据整理 / 自动继续
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2;
+        gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weighty = 0;
+        organizerAutoContinueCheckBox = new JCheckBox("启用证据整理与自动继续（完全自动化循环）", true);
+        organizerAutoContinueCheckBox.setToolTipText(
+                "主动分析每轮结束后，由独立的整理 agent 入图并判断是否继续；关闭后只整理/出报告，不自动继续。");
+        panel.add(organizerAutoContinueCheckBox, gbc);
+
+        row++;
+        gbc.gridy = row;
+        JPanel organizerRoundsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        organizerRoundsPanel.add(new JLabel("最大自动继续轮次（0 = 不限）:"));
+        organizerRoundsSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 999, 1));
+        organizerRoundsSpinner.setPreferredSize(new Dimension(70, 25));
+        organizerRoundsPanel.add(organizerRoundsSpinner);
+        panel.add(organizerRoundsPanel, gbc);
 
         // 底部填充
         row++;
@@ -1559,7 +1589,7 @@ public class SettingsPanel {
         row++;
         gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0; gbc.weighty = 0;
-        JLabel customMcpLabel = new JLabel("自定义 MCP 服务器配置（JSON 数组）：");
+        JLabel customMcpLabel = new JLabel("自定义 MCP 服务器配置（JSON 数组，或单个服务器对象）：");
         customMcpLabel.setFont(customMcpLabel.getFont().deriveFont(Font.BOLD));
         panel.add(customMcpLabel, gbc);
 
@@ -1572,9 +1602,11 @@ public class SettingsPanel {
         customMcpConfigArea.setWrapStyleWord(true);
         customMcpConfigArea.setEnabled(false);
         customMcpConfigArea.setToolTipText("""
-                简版数组格式，每个对象支持：
+                支持 JSON 数组，或直接粘贴单个服务器对象。
+                每个对象支持：
                 name, enabled, type(sse|streamableHttp|stdio|websocket),
-                url, command(数组), env(对象), toolWhitelist(数组)
+                url, headers(对象，如 {"Authorization": "Bearer xxx"}),
+                authorization(字符串，等价写法), command(数组), env(对象), toolWhitelist(数组)
                 示例会显示默认配置。""");
         customMcpConfigArea.setText(com.ai.analyzer.agent.mcpclient.CustomMcpConfigParser.defaultConfigJson());
         customMcpConfigArea.getDocument().addDocumentListener(new DocumentListener() {
@@ -2029,6 +2061,7 @@ public class SettingsPanel {
             "• 以 / 开头且以 / 结尾的条目按路径匹配（如 /images/），只匹配 URL 的 path，不受 query 影响\n" +
             "• 域名白名单非空时，只有匹配的主机才会被扫描；黑名单在其后生效\n" +
             "• 域名规则支持通配符 * 和 ?，也可直接粘贴 URL，每行一条，# 开头为注释\n" +
+            "• 流量来源（Proxy/Repeater/Scanner-Crawler 等）在「请求分析」页的被动扫描设置条里勾选\n" +
             "• 修改后需点击「立即应用」或「保存设置」后生效");
         hint.setEditable(false);
         hint.setOpaque(false);
@@ -2123,6 +2156,16 @@ public class SettingsPanel {
             apiClient.setWorkplaceDirectoryPath(workplaceDir.getAbsolutePath());
             apiClient.setRagMcpDocumentsPath(ragDir.getAbsolutePath());
             apiClient.setSkillsDirectoryPath(skillsDir.getAbsolutePath());
+            if (sidebarApiClient != null) {
+                sidebarApiClient.setWorkplaceDirectoryPath(workplaceDir.getAbsolutePath());
+                sidebarApiClient.setRagMcpDocumentsPath(ragDir.getAbsolutePath());
+                sidebarApiClient.setSkillsDirectoryPath(skillsDir.getAbsolutePath());
+            }
+            if (organizerApiClient != null) {
+                organizerApiClient.setWorkplaceDirectoryPath(workplaceDir.getAbsolutePath());
+                organizerApiClient.setRagMcpDocumentsPath(ragDir.getAbsolutePath());
+                organizerApiClient.setSkillsDirectoryPath(skillsDir.getAbsolutePath());
+            }
             com.ai.analyzer.util.MessageCollectionStore.setWorkplaceDirectory(workplaceDir.getAbsolutePath());
             if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
                 passiveScanManager.getApiClient().setWorkplaceDirectoryPath(workplaceDir.getAbsolutePath());
@@ -2132,65 +2175,36 @@ public class SettingsPanel {
         }
     }
 
-    private void syncApiConfigToPassiveScan() {
-        if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
-            PassiveScanApiClient psClient = passiveScanManager.getApiClient();
-
-            // 基础 API 配置
-            psClient.setApiUrl(apiClient.getApiUrl());
-            psClient.setApiKey(apiClient.getApiKey());
-            psClient.setModel(apiClient.getModel());
-            psClient.setMaxTokens(apiClient.getMaxTokens());
-            psClient.setCustomParameters(apiClient.getConfig().getCustomParameters());
-            psClient.setApiProvider(apiClient.getApiProvider().getDisplayName());
-            psClient.setEnableSearch(apiClient.isEnableSearch());
-            psClient.setSearchMode(apiClient.getConfig().getSearchMode());
-            psClient.setTavilyApiKey(apiClient.getConfig().getTavilyApiKey());
-            psClient.setTavilyBaseUrl(apiClient.getConfig().getTavilyBaseUrl());
-            psClient.setGoogleSearchApiKey(apiClient.getConfig().getGoogleSearchApiKey());
-            psClient.setGoogleSearchCsi(apiClient.getConfig().getGoogleSearchCsi());
-
-            // MCP 配置（关键：这些配置决定了工具是否可用）
-            psClient.setEnableMcp(apiClient.isEnableMcp());
-            psClient.setBurpMcpUrl(apiClient.getBurpMcpUrl());
-            psClient.setBurpMcpAuthorization(apiClient.getBurpMcpAuthorization());
-
-            // RAG MCP 配置
-            psClient.setEnableRagMcp(apiClient.isEnableRagMcp());
-            psClient.setRagMcpUrl(apiClient.getRagMcpUrl());
-            psClient.setRagMcpDocumentsPath(apiClient.getRagMcpDocumentsPath());
-
-            // Chrome MCP 配置
-            psClient.setEnableChromeMcp(apiClient.isEnableChromeMcp());
-            psClient.setChromeMcpUrl(apiClient.getChromeMcpUrl());
-
-            // 文件系统访问配置
-            psClient.setEnableFileSystemAccess(apiClient.isEnableFileSystemAccess());
-
-            // 自定义 MCP 配置
-            psClient.setCustomMcpConfigJson(settingsEnableCustomMcp() ? apiClient.getConfig().getCustomMcpConfigJson() : "");
-
-            // Python 脚本执行配置
-            psClient.setEnablePythonScript(apiClient.isEnablePythonScript());
-            psClient.setEnableCliTool(apiClient.getConfig().isEnableCliTool());
-            psClient.setEnableFileSystemSandbox(apiClient.isEnableFileSystemSandbox());
-            psClient.setCliWhitelist(apiClient.getConfig().getCliWhitelist());
-            psClient.setCliToolPrompt(apiClient.getConfig().getCliToolPrompt());
-            // 被动单轮上限是独立配置项，从设置面板读取
-            psClient.setPassiveMaxIters(getPassiveMaxIters());
-            psClient.setWorkplaceDirectoryPath(workplaceDirectoryField != null ? workplaceDirectoryField.getText().trim() : "");
-
-            // ========== 同步前置扫描管理器 ==========
+    /** 主动与侧栏拆成两个 agent 后，把主客户端的配置以快照形式推给侧栏/整理实例。 */
+    private void syncApiConfigToSidebar() {
+        com.ai.analyzer.core.AgentConnectionConfig snapshot =
+                com.ai.analyzer.core.AgentConnectionConfig.from(apiClient.getConfig());
+        if (sidebarApiClient != null && sidebarApiClient != apiClient) {
+            sidebarApiClient.applySnapshot(snapshot);
             if (preScanFilterManager != null) {
-                psClient.setPreScanFilterManager(preScanFilterManager);
+                sidebarApiClient.setPreScanFilterManager(preScanFilterManager);
+            }
+        }
+        if (organizerApiClient != null && organizerApiClient != apiClient) {
+            organizerApiClient.applySnapshot(snapshot);
+            if (preScanFilterManager != null) {
+                organizerApiClient.setPreScanFilterManager(preScanFilterManager);
+            }
+        }
+    }
+
+    private void syncApiConfigToPassiveScan() {
+        syncApiConfigToSidebar();
+        if (passiveScanManager != null && passiveScanManager.getApiClient() != null) {
+            com.ai.analyzer.core.AgentConnectionConfig snapshot =
+                    com.ai.analyzer.core.AgentConnectionConfig.from(apiClient.getConfig());
+            passiveScanManager.getApiClient().applySnapshot(snapshot);
+            if (preScanFilterManager != null) {
+                passiveScanManager.getApiClient().setPreScanFilterManager(preScanFilterManager);
                 apiClient.setPreScanFilterManager(preScanFilterManager);
                 api.logging().logToOutput("[AIAnalyzerTab] 已将前置扫描管理器同步到主动/被动扫描客户端");
             }
-
             api.logging().logToOutput("[AIAnalyzerTab] 已同步所有配置到被动扫描客户端");
-            api.logging().logToOutput("[AIAnalyzerTab] MCP配置 - EnableMcp: " + apiClient.isEnableMcp() +
-                                     ", EnableRagMcp: " + apiClient.isEnableRagMcp() +
-                                     ", EnableChromeMcp: " + apiClient.isEnableChromeMcp());
         }
     }
 
@@ -2252,6 +2266,10 @@ public class SettingsPanel {
 
             // 设置 Python 脚本执行选项
             settings.setEnablePythonScript(enablePythonScriptCheckbox != null && enablePythonScriptCheckbox.isSelected());
+
+            // 证据整理 / 自动继续
+            settings.setOrganizerAutoContinue(isOrganizerAutoContinue());
+            settings.setOrganizerMaxRounds(getOrganizerMaxRounds());
 
             // CLI 工具选项
             settings.setEnableCliTool(enableCliToolCheckBox != null && enableCliToolCheckBox.isSelected());
@@ -2350,6 +2368,8 @@ public class SettingsPanel {
             if (passiveScanDomainWhitelistArea != null) {
                 settings.setPassiveScanDomainWhitelist(passiveScanDomainWhitelistArea.getText().trim());
             }
+            settings.setPassiveScanToolSources(PassiveScanManager.formatToolSources(
+                    passiveScanManager != null ? passiveScanManager.getToolSources() : null));
 
             // 应用系统提示词到 API 客户端
             apiClient.setCustomSystemPrompt(settings.getCustomActiveSystemPrompt());
@@ -2387,9 +2407,11 @@ public class SettingsPanel {
                 psClient.setMaxTokens(maxTokensField.getText().trim());
                 psClient.setCustomParameters(customParametersField.getText().trim());
             }
+            syncApiConfigToSidebar();
 
             api.logging().logToOutput("设置已保存");
             host.flashStatusMessage("设置已保存 ✔");
+            scheduleWarmup();
         } catch (Exception e) {
             host.flashStatusMessage("保存设置失败: " + e.getMessage());
             api.logging().logToError("保存设置失败: " + e.getMessage());
@@ -2438,6 +2460,47 @@ public class SettingsPanel {
         }
 
         // 如果没有找到配置文件，使用默认值（不输出日志，这是正常情况）
+        scheduleWarmup();
+    }
+
+    private final java.util.concurrent.atomic.AtomicBoolean warmupPending =
+            new java.util.concurrent.atomic.AtomicBoolean();
+
+    /**
+     * 插件加载/设置保存后延迟预热 AgentScope 运行时（守护线程）。
+     * 只建本地对象与 MCP 连接，不发送真实 LLM 请求，避免产生 token 费用。
+     */
+    private void scheduleWarmup() {
+        if (!warmupPending.compareAndSet(false, true)) {
+            return;
+        }
+        Thread t = new Thread(() -> {
+            try {
+                // 等 Burp/UI 初始化稳定，避免和启动阶段争抢网络与磁盘
+                Thread.sleep(2500);
+                if (apiClient != null) {
+                    apiClient.warmup();
+                }
+                if (sidebarApiClient != null) {
+                    sidebarApiClient.warmup();
+                }
+                if (organizerApiClient != null) {
+                    organizerApiClient.warmup();
+                }
+                if (passiveScanManager != null) {
+                    passiveScanManager.getApiClient().warmup();
+                }
+                api.logging().logToOutput("[Warmup] AgentScope 运行时预热完成");
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (Exception e) {
+                api.logging().logToOutput("[Warmup] 预热失败（不影响正常使用）: " + e.getMessage());
+            } finally {
+                warmupPending.set(false);
+            }
+        }, "agent-warmup");
+        t.setDaemon(true);
+        t.start();
     }
 
     /**
@@ -2618,6 +2681,12 @@ public class SettingsPanel {
             enablePythonScriptCheckbox.setSelected(settings.isEnablePythonScript());
             apiClient.setEnablePythonScript(settings.isEnablePythonScript());
         }
+        if (organizerAutoContinueCheckBox != null) {
+            organizerAutoContinueCheckBox.setSelected(settings.isOrganizerAutoContinue());
+        }
+        if (organizerRoundsSpinner != null) {
+            organizerRoundsSpinner.setValue(settings.getOrganizerMaxRounds());
+        }
 
         // Skills 配置
         if (enableSkillsCheckBox != null) {
@@ -2689,7 +2758,16 @@ public class SettingsPanel {
         if (passiveScanDomainWhitelistArea != null) {
             passiveScanDomainWhitelistArea.setText(settings.getPassiveScanDomainWhitelist());
         }
+        if (passiveScanManager != null) {
+            passiveScanManager.setToolSources(PassiveScanManager.parseToolSources(
+                    settings.getPassiveScanToolSources()));
+        }
+        // 流量来源勾选在「请求分析」页的被动扫描设置条里，通知它刷新显示
+        if (host != null) {
+            host.refreshPassiveScanSources();
+        }
         applyPassiveScanFilters();
+        syncApiConfigToSidebar();
     }
 
     private void setPromptTextForAllModes(String text) {
@@ -2718,6 +2796,7 @@ public class SettingsPanel {
 
             api.logging().logToOutput("设置已加载: " + source.getAbsolutePath());
             flashStatusMessage("设置已加载 ✔");
+            scheduleWarmup();
         } catch (Exception e) {
             api.logging().logToError("加载设置失败: " + e.getMessage());
             flashStatusMessage("加载设置失败: " + e.getMessage());
@@ -2733,10 +2812,24 @@ public class SettingsPanel {
         apiClient.setMaxTokens(maxTokensField.getText().trim());
         com.ai.analyzer.util.TokenUsageTracker.instance().setBudget(parseTokenBudget(tokenBudgetField.getText()));
         apiClient.setEnableSearch(enableSearchCheckBox.isSelected());
+        syncApiConfigToSidebar();
     }
 
     public void setPassiveScanManager(PassiveScanManager mgr) {
         this.passiveScanManager = mgr;
+    }
+
+    public void setSidebarApiClient(AgentApiClient client) {
+        this.sidebarApiClient = client;
+    }
+
+    public void setOrganizerApiClient(AgentApiClient client) {
+        this.organizerApiClient = client;
+    }
+
+    /** 供请求分析页在开始扫描前把当前配置同步给侧栏 agent。 */
+    public void syncApiConfigToAgents() {
+        syncApiConfigToSidebar();
     }
 
     public void setActiveAnalysisPanel(ActiveAnalysisPanel panel) {

@@ -22,6 +22,19 @@ public final class CustomMcpConfigParser {
 
     public static List<CustomMcpConfig> parse(String json) throws JsonParseException {
         List<CustomMcpConfig> result = new ArrayList<>();
+        try {
+            return parseInternal(json);
+        } catch (JsonParseException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            // 用户 JSON 结构出乎意料：降级为“空配置”，绝不让异常击穿调用方
+            // （PassiveScanApiClient 构造器在插件加载路径上，抛了整个 Tab 就没了）
+            return result;
+        }
+    }
+
+    private static List<CustomMcpConfig> parseInternal(String json) throws JsonParseException {
+        List<CustomMcpConfig> result = new ArrayList<>();
         if (json == null || json.trim().isEmpty()) {
             return result;
         }
@@ -31,11 +44,17 @@ public final class CustomMcpConfigParser {
             return result;
         }
 
-        if (!root.isJsonArray()) {
-            throw new JsonParseException("自定义 MCP 配置必须是一个 JSON 数组");
+        // 兼容两种写法：JSON 数组，或单个服务器对象（用户常直接粘一段对象）
+        JsonArray array;
+        if (root.isJsonArray()) {
+            array = root.getAsJsonArray();
+        } else if (root.isJsonObject()) {
+            array = new JsonArray();
+            array.add(root.getAsJsonObject());
+        } else {
+            throw new JsonParseException("自定义 MCP 配置必须是 JSON 数组或单个服务器对象");
         }
 
-        JsonArray array = root.getAsJsonArray();
         for (JsonElement element : array) {
             if (!element.isJsonObject()) {
                 continue;
@@ -68,6 +87,27 @@ public final class CustomMcpConfigParser {
         if (obj.has("url")) {
             config.setUrl(getString(obj, "url"));
         }
+        // headers / header 对象：Authorization 单独抽出，其余作为额外请求头
+        JsonObject headerObj = null;
+        if (obj.has("headers") && obj.get("headers").isJsonObject()) {
+            headerObj = obj.getAsJsonObject("headers");
+        } else if (obj.has("header") && obj.get("header").isJsonObject()) {
+            headerObj = obj.getAsJsonObject("header");
+        }
+        if (headerObj != null) {
+            Map<String, String> extra = new HashMap<>();
+            for (Map.Entry<String, JsonElement> entry : headerObj.entrySet()) {
+                JsonElement value = entry.getValue();
+                if (value == null || value.isJsonNull()) continue;
+                if (!value.isJsonPrimitive()) continue;
+                if ("authorization".equalsIgnoreCase(entry.getKey())) {
+                    config.setAuthorization(value.getAsString());
+                } else {
+                    extra.put(entry.getKey(), value.getAsString());
+                }
+            }
+            config.setHeaders(extra);
+        }
         if (obj.has("authorization")) {
             config.setAuthorization(getString(obj, "authorization"));
         }
@@ -86,13 +126,17 @@ public final class CustomMcpConfigParser {
     private static String getString(JsonObject obj, String key) {
         JsonElement element = obj.get(key);
         if (element == null || element.isJsonNull()) return "";
-        return element.getAsString();
+        // 数字/布尔可安全转字符串；对象/数组是用户笔误，返回空串而不是抛
+        // UnsupportedOperationException（会击穿 PassiveScanApiClient 构造器）
+        if (element.isJsonPrimitive()) return element.getAsString();
+        return "";
     }
 
     private static boolean getBoolean(JsonObject obj, String key, boolean defaultValue) {
         JsonElement element = obj.get(key);
         if (element == null || element.isJsonNull()) return defaultValue;
-        return element.getAsBoolean();
+        if (element.isJsonPrimitive()) return element.getAsBoolean();
+        return defaultValue;
     }
 
     private static List<String> getStringList(JsonObject obj, String key) {
@@ -101,6 +145,7 @@ public final class CustomMcpConfigParser {
         List<String> list = new ArrayList<>();
         for (JsonElement item : element.getAsJsonArray()) {
             if (item == null || item.isJsonNull()) continue;
+            if (!item.isJsonPrimitive()) continue;
             list.add(item.getAsString());
         }
         return list;
@@ -113,6 +158,7 @@ public final class CustomMcpConfigParser {
         for (Map.Entry<String, JsonElement> entry : element.getAsJsonObject().entrySet()) {
             JsonElement value = entry.getValue();
             if (value == null || value.isJsonNull()) continue;
+            if (!value.isJsonPrimitive()) continue;
             map.put(entry.getKey(), value.getAsString());
         }
         return map;
@@ -122,12 +168,12 @@ public final class CustomMcpConfigParser {
         return """
                 [
                   {
-                    "name": "fetch",
+                    "name": "preview-mcp",
                     "enabled": false,
                     "type": "streamableHttp",
-                    "url": "http://127.0.0.1:3001/mcp",
-                    "authorization": "Bearer your-token-here",
-                    "toolWhitelist": ["fetch", "fetch_url"]
+                    "url": "https://mcp.example.com/mcp",
+                    "headers": {"Authorization": "Bearer your-token-here"},
+                    "toolWhitelist": []
                   }
                 ]
                 """.stripIndent();
@@ -144,6 +190,12 @@ public final class CustomMcpConfigParser {
             obj.addProperty("type", config.getType().getValue());
             obj.addProperty("url", config.getUrl());
             obj.addProperty("authorization", config.getAuthorization());
+
+            JsonObject headersObj = new JsonObject();
+            for (Map.Entry<String, String> entry : config.getHeaders().entrySet()) {
+                headersObj.addProperty(entry.getKey(), entry.getValue());
+            }
+            obj.add("headers", headersObj);
 
             JsonArray commandArray = new JsonArray();
             for (String item : config.getCommand()) {

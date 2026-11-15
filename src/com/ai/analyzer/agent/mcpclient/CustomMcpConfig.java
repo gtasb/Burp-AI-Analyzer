@@ -62,6 +62,7 @@ public class CustomMcpConfig {
     private TransportType type = TransportType.STREAMABLE_HTTP;
     private String url = "";
     private String authorization = "";
+    private Map<String, String> headers = Collections.emptyMap();
     private List<String> command = new ArrayList<>();
     private Map<String, String> env = Collections.emptyMap();
     private List<String> toolWhitelist = new ArrayList<>();
@@ -125,6 +126,15 @@ public class CustomMcpConfig {
 
     public void setAuthorization(String authorization) {
         this.authorization = authorization;
+    }
+
+    /** 额外 HTTP 请求头（不含 Authorization，后者统一走 {@link #getAuthorization()}）。 */
+    public Map<String, String> getHeaders() {
+        return headers != null ? headers : Collections.emptyMap();
+    }
+
+    public void setHeaders(Map<String, String> headers) {
+        this.headers = headers != null ? headers : Collections.emptyMap();
     }
 
     public List<String> getCommand() {

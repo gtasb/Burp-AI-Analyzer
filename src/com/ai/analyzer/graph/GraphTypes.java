@@ -52,7 +52,9 @@ public final class GraphTypes {
         /** 已测试但未确认的候选漏洞 */
         CANDIDATE,
         /** 分析事实锚点：一次完成的扫描/验证在资产上的落点（沿用 ARTEX fact-anchor 语义） */
-        ANALYSIS_FACT
+        ANALYSIS_FACT,
+        /** 笔记/牵引：人类或 Agent 写的备注、结论、下一步指令；不参与覆盖统计，也不直接绘制 */
+        NOTE
     }
 
     /** 边类型（§5），第一版只实现以下集合。 */

@@ -18,7 +18,8 @@ Requires JDK 21 + `--enable-preview` (Maven config handles this).
 
 ## Key dependencies
 
-`io.agentscope:agentscope-harness:2.0.3` (via `${agentscope.version}`) — HarnessAgent provides native tools:
+`io.agentscope:agentscope-harness:2.0.5` (via `${agentscope.version}`, the latest stable; 2.1.0
+still BETA) — HarnessAgent provides native tools:
 - `execute` (native shell tool; the actual `ShellExecuteTool.NAME` constant is `execute`, **not** `execute_shell_command` — controlled by `enableCliTool` checkbox)
 - `agent_spawn`/`agent_send`/`agent_list` (sub-agents, always enabled)
 - `read_file`/`write_file`/`edit_file`/`grep`/`glob` (filesystem, controlled by `enableFileSystemAccess`)
@@ -50,28 +51,144 @@ Relative paths passed to file tools get a **namespace prefix** (`user.name`) inj
 (`resolveFileToolRoot`). Without this alignment the agent writes a file and then cannot find it from
 `execute`. Absolute paths are NOT namespaced.
 
-## Knowledge graph (assets / fingerprints / inference)
+## Knowledge graph (assets / fingerprints / inference / notes)
 
 - Node types: `ORIGIN, INTERFACE, PARAMETER, MODULE, TECHNOLOGY, VERSION` plus `RESOURCE`
   (JS/CSS/source map), `EVIDENCE`, `FEATURE`, `BACKEND_HYPOTHESIS`, `VULN_CLASS`, `CANDIDATE`,
-  `ANALYSIS_FACT`. Fingerprints are first-class `TECHNOLOGY` nodes (property `category` =
+  `ANALYSIS_FACT`, `NOTE`. Fingerprints are first-class `TECHNOLOGY` nodes (property `category` =
   frontend/backend/server/middleware/library) with `EVIDENCE --INDICATES--> TECHNOLOGY`.
+- **Notebook was merged into the graph** (the `.md` subsystem is gone). Notes are `NOTE` nodes:
+  `canonical_key = root|note:<uuid>`, properties `{content, kind, version, author, target, edited_at}`,
+  attached with `NOTE --RELATED_TO--> node` (site-level notes hang off ORIGIN). Version is per-root,
+  allocated inside `GraphDatabase.upsertNote` (single synchronized call) and used for incremental
+  `graph_get_notes(root, since_version)`. Notes are excluded from `listNodes`/`listEdges`, so they
+  never consume the viewer's 500-node budget and are never drawn on the canvas.
+- One-time migration: `graph/LegacyNotebookImporter` imports `<workspace>/notebooks/*.md` into NOTE
+  nodes on first open of a workspace, then deletes the files. Import failures keep the original files.
+- Node assessment: `graph_assess_node(node_id, priority, assessment, next_step)` writes
+  `assess_priority|assess_summary|assess_next_step|assess_by|assess_at` into the node's properties.
+  `low`/`none` mean a confirmed dead end. The viewer sidebar renders this as “Agent 判断”.
 - `PassiveScanManager.enqueueRequest` calls `GraphStore.observe` **before** the L0 static filter,
   so JS/CSS/source maps are recorded as `RESOURCE` (never sent to the LLM) and JS API paths add
   `RESOURCE --CALLS--> INTERFACE` edges when the interface already exists.
 - Agent write tools: `graph_upsert_fingerprint`, `graph_add_feature` (optional `vuln_class` →
-  `FEATURE --SUGGESTS--> VULN_CLASS`), `graph_add_backend_hypothesis` (evidence → `SUPPORTS`).
-  Both system prompts instruct agents to use them with evidence.
+  `FEATURE --SUGGESTS--> VULN_CLASS`), `graph_add_backend_hypothesis` (evidence → `SUPPORTS`),
+  `graph_add_note`, `graph_get_notes`, `graph_assess_node`. Both system prompts instruct agents to
+  read human `instruction` notes first and to assess nodes after analysis.
 - `graph_upsert_observation` for `INTERFACE` accepts `name` = full URL, or `name` = `METHOD /path`
   with `root` = Origin, or (legacy) a full URL in `root`. Do **not** parse `root` as the request URL
-  when it is just an Origin — that historical bug always produced `GET /`.
+  when it is just an Origin — that historical bug always produced `GET /`. `NOTE` is rejected there;
+  notes must go through `graph_add_note`.
 - Coverage follows ARTEX's fact-anchor semantics: a completed passive scan writes an
   `ANALYSIS_FACT` node plus `COVERS --> INTERFACE`; the viewer paints only COVERS-anchored assets
   as “已分析”. Skipped/low-value scans do not anchor. Active/chat analysis also anchors after a
   normal (non-cancelled, non-throwing) completion via `AgentApiClient.recordActiveAnalysisFact`.
-- Viewer (`ui/GraphViewerPanel`) uses ARTEX-like force parameters, folds sibling groups by
-  parent+type (PARAMETER 0, EVIDENCE 2, RESOURCE 6, others 12 by default, click “…” to expand),
-  and exports a self-contained HTML with the same look.
+  Human-added nodes default to `INFERRED`; ticking “我已验证” creates them as `CONFIRMED`.
+- Viewer (`ui/GraphViewerPanel` + `ui/GraphSidebarPanel` + `ui/GraphNodeDialog`): horizontal split
+  (canvas | resizable sidebar), sidebar has node detail (assessment, neighbor counts, parameters)
+  over an editable notes list. ARTEX-like force parameters, folds by parent+type (PARAMETER 0,
+  EVIDENCE 2, RESOURCE 6, others 12; click “…” to expand), and exports a self-contained HTML.
+  **Containment direction is edge-specific**: `HAS_*`/`LOADS`/`USES_*`/`EXPOSES`/`RESOLVES_TO`/`HOSTS`
+  are parent→child; `BELONGS_TO`/`INDICATES`/`SUPPORTS`/`SUGGESTS`/`DERIVED_FROM`/`CALLS` are
+  child→parent. Treating every source as a child inverted the tree and made the graph collapse.
+  The layout also runs a separation pass and auto-zooms (√n, cap 4×) for large graphs; “重新布局”
+  resets pan/zoom.
+- Custom MCP config (`agent/mcpclient/CustomMcpConfigParser`) accepts a JSON array **or a single
+  object**, and both `authorization` (string) and `headers`/`header` (object). `AgentScopeMcpManager.headersOf`
+  merges them (auto `Bearer `); registration, `testConnection` and the shared-client key all use it.
+
+
+## Multi-agent architecture (active / sidebar / organizer)
+
+Three independent `AgentApiClient` instances, each with its own runtime, session id, single-flight
+lock and consumers:
+
+- **SIDEBAR** (`AIAnalyzerTab.sidebarApiClient`, returned by `getApiClient()`): Burp side panels;
+  behavior unchanged; owns long-term memory (shared workspace, `MemoryConfig` hooks enabled).
+- **ACTIVE** (`AIAnalyzerTab.apiClient`): request-analysis tab. Registers `GraphReadTool` (read-only
+  graph), never writes graph facts/notes. `AgentApiClient.analyzeRequestStream` no longer calls
+  `recordActiveAnalysisFact`; it records a `CompletedRun` handoff (method/url/prompt/response) and a
+  run history entry instead. State lives in `<workspace>/.agents/active` with memory hooks disabled.
+- **ORGANIZER** (`AIAnalyzerTab.organizerClient`): independent context, state in
+  `<workspace>/.agents/organizer`, memory disabled. Registers full `GraphTool` + `OrganizerTool`
+  (`organizer_send_to_repeater`, `organizer_save_script`, `organizer_finish`) and a dedicated
+  organizer system prompt. After each completed ACTIVE run, `OrganizerCoordinator` runs it to
+  normalize evidence into the graph (`graph_record_analysis_fact` anchors coverage), inspect other
+  agents' notes, and either continue the active agent with a concrete instruction or finish with a
+  report saved under `<workspace>/reports/`. POCs are loaded into Repeater (never auto-sent);
+  scripts go to `<workspace>/pocs/` and are never executed.
+
+Cross-agent context is **one-way digests only**: sidebar's completed assistant text is recorded in
+`AgentDigestStore` and prepended to ACTIVE prompts. Never inject raw messages/tool-call transcripts
+between agents (tool pairing / DeepSeek reasoning would break).
+
+Settings (`PluginSettings.organizerAutoContinue` default true, `organizerMaxRounds` default 0 =
+unlimited) live in 配置 → 功能开关; `SettingsPanel` mirrors API config to sidebar + organizer via
+`syncApiConfigToSidebar()`/`applyConfigTo()` and warms all three runtimes.
+
+- **Active mode UI** (`ui/active/ActiveAnalysisPanel` + `ui/active/ChatTimeline`): session-style
+  timeline with message cards (user / active analysis / organizer / report), inline tool rows and a
+  throttled thinking line; header shows target, phase, round, auto-continue and history; composer at
+  the bottom. During a run, Enter (or the 插话 button) calls `AgentApiClient.interject`, forwarded to
+  `AgentScopeAgentRuntime.interject` → AgentScope `HarnessAgent.interrupt(Msg)`; it does not start a
+  new analysis. `getResultPane()`/`setActiveMode()` remain only for compatibility.
+
+**Interjection semantics (probed against AgentScope 2.0.4, 2026-11; covered by `AgentInterjectTest`)**:
+`interrupt(Msg)` without a slot key lands on `(__anon__, defaultSessionId)` and is silently dropped —
+you must call `agent.interrupt(userId, sessionId, msg)` with the exact `slotKey(userId, sessionId)`
+the run used. Even then the framework does NOT persist the message into session state: the turn ends
+with `AgentResultEvent` whose `getGenerateReason() == GenerateReason.INTERRUPTED` (text
+“I noticed that you have interrupted me…”), and the next request does not contain the message.
+`AgentScopeAgentRuntime` therefore keeps a `pendingInterjections` queue: on the INTERRUPTED result it
+emits a `RuntimeEventType.INTERRUPTED` event (consumers must treat the run as NOT completed — this is
+what stops the organizer from firing after a stop/interject), then the chat loop re-enters
+`buildEventStream` with the queued text as the next user message so the model actually reads it.
+Timing caveat: an interject before the run registers (during agent build / first model call) is lost —
+the UI disables the button until `isAnalyzing` is set, and `chatLocked` clears `pendingInterjections`
+at the start of every new chat so a raced enqueue can never leak into a later turn.
+
+**Session-context audit (2.0.5, covered by `MultiTurnContextAuditTest`)**: within one
+`AgentScopeAgentRuntime`, turn N's model request must still contain turn 1's user text, the
+assistant tool_calls, and the tool results — the full current-session context, not just the last
+turn; different sessionIds are fully isolated (ACTIVE vs ORGANIZER never see each other's history);
+every historical assistant message with `tool_calls` must carry `reasoning_content` (DeepSeek
+protocol). ACTIVE/ORGANIZER additionally disable memory hooks and tools, so their context lives only
+in the in-memory session — a runtime rebuild (settings change mid-loop) intentionally loses it.
+
+**Auto-loop guards (unlimited rounds must not blow up)**: `OrganizerCoordinator` refuses to continue
+when the shared token budget is exhausted, when the instruction repeats, or when the reported gaps
+repeat (no-progress); it resets the organizer session every 10 rounds; it keeps only the latest
+pending `CompletedRun` when organizing is already in flight. `ActiveAnalysisPanel` clears
+`lastCompletedRun` when a run starts so a cancelled/failed run can never re-trigger the organizer
+with a stale handoff. Active UI shows 阶段/轮次/自动继续 plus a timeline that includes organizer tool
+calls and decisions.
+
+MCP connections are shared per endpoint with reference counting (`AgentScopeMcpManager.acquireSharedClient`/
+`releaseSharedClient`), because each `HarnessAgent.close()` calls `Toolkit.closeMcpClients()` and
+would otherwise kill the other agents' MCP connections. `AIExtension` unload calls
+`closeAllSharedClients()`.
+
+## Config distribution (snapshot pattern)
+
+`core/AgentConnectionConfig` is an immutable record of everything the UI distributes to agent
+clients. `AgentApiClient.applySnapshot` and `PassiveScanApiClient.applySnapshot` consume it
+through the existing diff-aware setters. All fan-out paths (`SettingsPanel.syncApiConfigToSidebar`,
+`syncApiConfigToPassiveScan`, `AIAnalyzerTab.syncApiConfigToPassiveScan`) build the snapshot once
+from `apiClient.getConfig()` and call `applySnapshot` — **never hand-copy setter lists again**;
+the pre-refactor code had 4 hand-copied blocks / 71 setter calls and the audit found two drift
+bugs in them. Adding a config field = add to the record + both `applySnapshot` implementations +
+`from()`. UI→primary-client writes (`updateApiClientConfigForAnalysis`) stay explicit and then
+fan out via snapshot.
+
+## Active-mode rendering contract
+
+`ActiveAnalysisPanel` renders into its own `ChatTimeline`; there is **no shared result pane
+anymore** (`setActiveMode(active, prompt)` — the target-pane parameter and `getResultPane()` are
+deleted; `AIAnalyzerTab` no longer assigns `resultTextPane` in active mode). Passive-mode
+「开始分析」switches to the active card before running. History replay snapshots the live
+timeline (`showHistoryMode`/`restoreLive`) instead of destroying it. AssistantBlock streams
+plain-text deltas per tick (O(1)) and renders full Markdown once at finish — the old
+every-tick full re-parse was O(n²).
 
 ## Known bugs & quirks
 
@@ -94,13 +211,86 @@ Relative paths passed to file tools get a **namespace prefix** (`user.name`) inj
   `AgentScopeModelFactory` auto-detects DeepSeek (model name `deepseek*` or URL containing `deepseek`)
   and installs `DeepSeekReasoningFormatter` (extends `OpenAIChatFormatter`; keeps real reasoning,
   pads assistant messages whose reasoning is missing with an empty string — the official API accepts
-  empty — and `supportsStrict=false`). Do **not** switch to AgentScope 2.0.4's
-  `compat.deepseek.DeepSeekFormatter`: it strips reasoning for historical turns and causes
-  intermittent 400s in long sessions. Upstream 2.1.0-BETA1 changed its compat formatter to the same
-  “pad empty instead of strip” behavior. Covered by `DeepSeekReasoningPassthroughTest`,
+  empty — and `supportsStrict=false`). This mirrors upstream's own fix, which landed in 2.0.5's
+  `compat.deepseek.DeepSeekFormatter` (verified in bytecode: `applyDeepSeekFixes` now pads empty
+  string). Keeping our own formatter remains deliberate: it also forces `supportsStrict=false` and
+  preserves real reasoning. Covered by `DeepSeekReasoningPassthroughTest`,
   `DeepSeekToolLoopReasoningTest`, and `DeepSeekHarnessLoopReasoningTest` (long loop + compaction,
   local fake server).
+- **Model list & provider URLs**: `core/ModelListFetcher` normalizes the models endpoint
+  (`…/v1`, `…/api/v1`, or a pasted full endpoint all collapse to one `/models`), uses
+  `x-api-key` + `anthropic-version` for Anthropic (Bearer is only added for non-`anthropic.com`
+  gateways), and accepts both `{data:[{id}]}` and `{models:[{name|id}]}`. Do not append `/v1`
+  blindly — that produced the historical `/v1/v1/models` 404. `AgentScopeModelFactory.normalizeAnthropicBaseUrl`
+  strips a user-supplied `/v1` or `/v1/messages` because the official Anthropic SDK appends its own path.
+  **OpenAI Responses (`/v1/responses`) is not supported**: AgentScope 2.0.x has no Responses client and
+  the plugin intentionally does not implement one (decision 2026-11); use an OpenAI-compatible
+  chat/completions endpoint instead.
+- **Lazy init + background warm-up**: each role builds its model/Toolkit/MCP on first analysis
+  (`ensureAgentScopeInitialized`), and `HarnessAgent` is built one step later on the first `chat()`
+  (`getOrCreateHarnessAgent`). `SettingsPanel.scheduleWarmup()` runs 2.5s after settings load/save on
+  a daemon thread and calls `warmup()` on ACTIVE, SIDEBAR, ORGANIZER and passive clients, which build
+  the runtime and agent in the background **without sending an LLM request**.
+  Warm-up skips when the API key is blank or an analysis is in flight.
+- **Model HTTP retries**: `AgentScopeModelFactory.MODEL_RETRY` overrides AgentScope's 3-attempt
+  default with 10 attempts, 3s initial backoff → 60s max (multiplier 2.0), reusing
+  `ExecutionConfig.MODEL_DEFAULTS.getRetryOn()` so 4xx errors are not retried endlessly.
+- **MCP init timeouts** (`AgentScopeMcpManager`): stdio keeps 30s (uvx may download), local HTTP is
+  5s, remote HTTP is 8s; per-mode handshakes slower than 1.5s are logged to AppLogBuffer. The old
+  30s HTTP timeout made one dead MCP endpoint stall the first analysis.
+- **Passive scan traffic sources**: `PassiveScanManager` registers a global `HttpHandler` (live traffic,
+  not a backfill of Proxy history) and filters by `responseReceived.toolSource().toolType()`.
+  Default is `PROXY` only; `passiveScanToolSources` (CSV of ToolType names) plus the checkboxes in
+  the「请求分析」passive-scan settings bar (Proxy / Repeater / Scanner-Crawler / Intruder / Extensions)
+  enable the other sources. `SettingsHost.refreshPassiveScanSources()` keeps the checkboxes in sync
+  after settings load.
+  Keep `EXTENSIONS` off by default — the plugin's own tool traffic would re-enter analysis and can loop.
+  An empty selection falls back to `PROXY`. Covered by `PassiveScanManagerTest` (流量来源) and
+  `SettingsPanelToolSourcesTest`.
+- **Performance hot paths (do not regress)**: the global `HttpHandler` and per-analysis helpers must
+  never materialize whole messages. `PassiveScanTask.shouldSkipRequest` reads only `Content-Type`
+  headers (old `response().toString()` serialized entire response bodies on Burp's traffic thread);
+  `RequestFingerprint.bodyDigest` skips bodies >256KB; `GraphStore.observe/observeResponseMeta` use
+  `body().length()`/`subArray(0, 256KB)` instead of `bodyToString()`; passive graph observation skips
+  static binaries (images/fonts/media/archives) while keeping JS/CSS/source maps. `RequestSourceDetector`
+  must not call `api.proxy().history()` per analysis — use `ProxyHttpRequestResponse.id()`/class names.
+  `ChatPanel` throttles THINKING rendering to 200ms, caps the buffer at 8k chars and logs at most 2k
+  chars to Burp Output.
 - **Legacy Java-serialized settings**: removing a field needs no `serialVersionUID` bump; native deserialization ignores extra stream fields. The substitution fallback only exists for UID mismatches.
+- **Cross-cutting bugfixes from the 2026-11 deep audit** (7月以来全部新功能对抗式复查): GraphStore.fingerprint uses
+  `body().subArray(0,4096)` (was full `bodyToString()` — GB-scale allocation on large archives, OOM kills the
+  graph-observe thread since `catch(Exception)` misses `Error`); `graph_record_analysis_fact` generates a unique sid
+  per call (constant agent-name sid collapsed ALL organizer facts into one node and dropped every summary after the
+  first); `GraphStore.addHumanNode` writes child→parent edges in the child-is-source direction for
+  BELONGS_TO/INDICATES/SUPPORTS/DERIVED_FROM/CALLS/SUGGESTS/RELATED_TO (dialog previously inverted them, nesting the
+  whole site under the new node); note edits bump the version and broadcast (`bumpNoteVersionAndUpdate`) so
+  `since_version` readers re-fetch human corrections; legacy notebook import defers (no phantom `https://host:443`
+  root, `markLegacyImportRetry` re-arms the guard) when no matching root exists; host is lowercased in
+  `GraphNormalizers.parse`/`rootOf`/`originOf`/`hostOf` (mixed-case Host header split one site into two roots);
+  sidebar save-note reports dedupe truthfully; sourceMappingURL tail-probe (last 4KB) for large bundles.
+  **Sidebar「新会话」no longer purges the shared `<workspace>/<user.name>` file root** — it deletes only
+  MEMORY.md/memory/agents-<agentName> (the old purge destroyed ACTIVE/ORGANIZER files and evicted tool results
+  mid-run). Passive-mode「开始分析」switches to the active card first (output previously rendered into the hidden
+  card — minutes with zero visible feedback). fetch_url blocks IPv4-mapped IPv6 literals (`::ffff:169.254.169.254`,
+  hex form too) and redirect hops re-check. CustomMcpConfigParser never throws on odd JSON shapes (primitive-only
+  reads + runtime catch → empty list; the old raw `getAsString` UnsupportedOperationException took down the whole
+  passive tab at plugin load). PassiveScanApiClient parses MCP JSON via `parseCustomMcpQuietly`. Burp MCP goes
+  through `acquireSharedClient` with auth in the key (was raw `endpointClient` — one transient listTools failure
+  could cross-kill the shared connection; token changes never applied). stdio MCP env is actually passed to the
+  child (`stdioTransport(cmd, args, envMap)` — env was parsed but silently dropped; key includes env hash).
+  `startPassiveScan` starts the producer before `isRunning`, and config sync runs inside the try (half-started
+  checkbox states). `analyzeBatch` checks the token budget (was the only spend site without the gate).
+  ActiveAuditManager/runtime disposal wired to extension unload (`disposeForUnload`). API-profile delete persists
+  immediately. BatchFuzzTool JSON-string branch escapes backslashes before quotes. Google CSE parsing has
+  isJsonNull guards. ChatPanel debugLogArea capped at 300KB. Organizer gets an auto-approve confirm handler
+  (plan_exit was silently DENIED for it — with Plan Mode saved on, the organizer could never reach
+  organizer_finish). Digest injection skips auto-continue rounds (was re-prepended every round, N copies in
+  persistent history). Tool-arg summaries no longer emitted as textDelta (polluted digest/handoff). 停止 during
+  the queued-continue window aborts the round (`isStopped` check in the continue lambda). `resetLoop` clears
+  lastGaps (first round of a new session was killed as “no progress”). Interject returns false while
+  `currentSession == null` (init window used to report success while dropping the message). Organizer re-reads
+  the OrganizerTool after runTurn (settings rebuild swaps instances mid-round). AnalysisRunStore exposes a
+  lock-free immutable snapshot (EDT no longer blocks on multi-MB saves) and callers pass real method/url.
 
 ## Project structure
 
