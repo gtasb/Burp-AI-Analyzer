@@ -569,16 +569,15 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
             // 工具调用参数完成：从 buffer 取出并重置，以便 ToolResultStartEvent 取用
             StringBuilder buf = toolCallArgBuffers.remove(e.getToolCallId());
             String args = buf != null ? buf.toString() : "";
-            // 参数随 TOOL_START 语义一起投递给 UI（模型行为流）：工具行现在要显示
-            // 「在什么时候对什么参数调了什么」。日志仍写 200 字符摘要。
+            // 参数完整投递给 UI（用户明确要求：工具行显示完整参数，不要省略号）。
+            // 日志面板是另一路（AppLogBuffer 自带 6000 字符上限），此处不受影响。
             if (e.getToolCallName() != null) {
-                String argSummary = args.isBlank() || "{}".equals(args)
-                        ? "" : (args.length() > 400 ? args.substring(0, 400) + "…" : args);
-                if (!argSummary.isEmpty()) {
-                    AppLogBuffer.tool("AgentScopeAgentRuntime", e.getToolCallName() + " 参数: " + argSummary);
+                String fullArgs = args.isBlank() || "{}".equals(args) ? "" : args;
+                if (!fullArgs.isEmpty()) {
+                    AppLogBuffer.tool("AgentScopeAgentRuntime", e.getToolCallName() + " 参数: " + fullArgs);
                 }
-                pendingToolArgs.put(e.getToolCallId(), argSummary);
-                listener.onEvent(RuntimeEvent.toolStart(e.getToolCallName(), argSummary));
+                pendingToolArgs.put(e.getToolCallId(), fullArgs);
+                listener.onEvent(RuntimeEvent.toolStart(e.getToolCallName(), fullArgs));
             }
         } else if (event instanceof ToolCallStartEvent e) {
             AppLogBuffer.tool("AgentScopeAgentRuntime", "调用工具: " + e.getToolCallName());

@@ -51,9 +51,6 @@ public class GraphViewerPanel extends JPanel {
     private final JLabel statusLabel = new JLabel("就绪");
     private final GraphCanvas canvas;
     private final GraphSidebarPanel sidebar;
-    /** 图例面板可收起，节点多时可以省出左上区域 */
-    private boolean showLegend = true;
-
     private boolean updatingRoots;
     private int loadGeneration;
 
@@ -75,13 +72,6 @@ public class GraphViewerPanel extends JPanel {
         JButton addNodeButton = new JButton("新增节点");
         UIStyles.styleSecondary(addNodeButton);
         addNodeButton.addActionListener(e -> openAddNodeDialog());
-
-        JButton legendButton = new JButton("图例");
-        UIStyles.styleSecondary(legendButton);
-        legendButton.addActionListener(e -> {
-            showLegend = !showLegend;
-            canvas.repaint();
-        });
 
         JButton relayoutButton = new JButton("重新布局");
         UIStyles.styleSecondary(relayoutButton);
@@ -105,7 +95,6 @@ public class GraphViewerPanel extends JPanel {
         top.add(exportButton);
         top.add(addNodeButton);
         top.add(relayoutButton);
-        top.add(legendButton);
         top.add(statusLabel);
 
         canvas.onNodeSelected = node -> {
@@ -631,8 +620,6 @@ public class GraphViewerPanel extends JPanel {
         private static final Font FONT_LABEL = new Font("Microsoft YaHei", Font.PLAIN, 11);
         private static final Font FONT_FOLD = new Font("Microsoft YaHei", Font.BOLD, 12);
         private static final Font FONT_EMPTY = new Font("Microsoft YaHei", Font.PLAIN, 14);
-        private static final Font FONT_LEGEND_TITLE = new Font("Microsoft YaHei", Font.BOLD, 12);
-        private static final Font FONT_LEGEND_HINT = new Font("Microsoft YaHei", Font.PLAIN, 10);
         private static final Stroke STROKE_THIN = new BasicStroke(1f);
         private static final Stroke STROKE_EDGE_DASH = new BasicStroke(1f,
                 BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1f, new float[]{4f, 4f}, 0f);
@@ -660,7 +647,7 @@ public class GraphViewerPanel extends JPanel {
                     dragStart = e.getPoint();
                     Node node = nodeAt(e.getX(), e.getY());
                     draggingNode = node;
-                    panning = node == null && !isOverLegend(e.getX(), e.getY());
+                    panning = node == null;
                 }
 
                 @Override
@@ -671,7 +658,6 @@ public class GraphViewerPanel extends JPanel {
 
                 @Override
                 public void mouseClicked(MouseEvent e) {
-                    if (isOverLegend(e.getX(), e.getY())) return;
                     Node node = nodeAt(e.getX(), e.getY());
                     if (node != null && isFold(node)) {
                         String groupId = String.valueOf(node.prop("groupId"));
@@ -1076,10 +1062,6 @@ public class GraphViewerPanel extends JPanel {
             return best;
         }
 
-        private boolean isOverLegend(int mx, int my) {
-            return showLegend && mx >= 12 && mx <= 292 && my >= 12 && my <= 210;
-        }
-
         @Override
         protected void paintComponent(Graphics g0) {
             Graphics2D g = (Graphics2D) g0.create();
@@ -1164,7 +1146,6 @@ public class GraphViewerPanel extends JPanel {
                     g.drawString(label, lx + 7, ly + fm.getAscent() + 3);
                 }
 
-                drawLegend(g, canvasBg, fg, pillBg, dark);
             } finally {
                 g.dispose();
             }
@@ -1316,62 +1297,6 @@ public class GraphViewerPanel extends JPanel {
                     g.fillOval((int) x - 2, (int) y - 2, 4, 4);
                 }
             }
-        }
-
-        private void drawLegend(Graphics2D g, Color canvasBg, Color fg, Color pillBg, boolean dark) {
-            if (!showLegend) return;
-            int x = 12, y = 12, w = 280, h = 196;
-            g.setColor(new Color(0, 0, 0, dark ? 70 : 18));
-            g.fillRoundRect(x + 1, y + 2, w, h, 12, 12);
-            g.setColor(pillBg);
-            g.fillRoundRect(x, y, w, h, 12, 12);
-            g.setColor(dark ? new Color(0x3A, 0x3F, 0x46) : new Color(0xE5, 0xE7, 0xEB));
-            g.drawRoundRect(x, y, w, h, 12, 12);
-
-            g.setFont(FONT_LEGEND_TITLE);
-            g.setColor(fg);
-            g.drawString("范围内 " + scopeCount() + " · 已分析 " + coveredCount(), x + 12, y + 20);
-
-            NodeType[] types = {NodeType.ORIGIN, NodeType.INTERFACE, NodeType.RESOURCE,
-                    NodeType.TECHNOLOGY, NodeType.FEATURE, NodeType.BACKEND_HYPOTHESIS,
-                    NodeType.VULN_CLASS, NodeType.PARAMETER};
-            g.setFont(FONT_LABEL);
-            int rowY = y + 40;
-            for (int i = 0; i < types.length; i++) {
-                int col = i % 2;
-                int row = i / 2;
-                int tx = x + 12 + col * 132;
-                int ty = rowY + row * 19;
-                g.setColor(colorFor(types[i]));
-                g.fillOval(tx, ty - 8, 9, 9);
-                g.setColor(fg);
-                g.drawString(typeLabel(types[i]), tx + 14, ty);
-            }
-
-            int sy = rowY + 4 * 19 + 6;
-            g.setColor(new Color(16, 185, 129));
-            g.fillOval(x + 12, sy - 8, 9, 9);
-            g.setColor(fg);
-            g.drawString("已分析（fact 锚定）", x + 26, sy);
-            g.setColor(dark ? new Color(0x2B, 0x2F, 0x36) : Color.WHITE);
-            g.fillOval(x + 12, sy + 11, 9, 9);
-            g.setColor(new Color(0x9C, 0xA3, 0xAF));
-            g.drawOval(x + 12, sy + 11, 9, 9);
-            g.setColor(fg);
-            g.drawString("未分析", x + 26, sy + 19);
-            g.setColor(dark ? new Color(0x2B, 0x2F, 0x36) : Color.WHITE);
-            g.fillOval(x + 84, sy + 11, 9, 9);
-            g.setColor(new Color(0x9C, 0xA3, 0xAF));
-            g.setStroke(STROKE_LEGEND_DASH);
-            g.drawOval(x + 84, sy + 11, 9, 9);
-            g.setStroke(STROKE_THIN);
-            g.setColor(fg);
-            g.drawString("推测", x + 98, sy + 19);
-
-            g.setColor(dark ? new Color(0x8B, 0x92, 0x9B) : new Color(0x9C, 0xA3, 0xAF));
-            g.setFont(FONT_LEGEND_HINT);
-            g.drawString("力导向布局，可拖拽节点、滚轮缩放；", x + 12, sy + 40);
-            g.drawString("虚线圈「…」是被折叠的同类节点，点开可展开。", x + 12, sy + 56);
         }
 
         private void drawCenteredLines(Graphics2D g, String text, Color bg) {

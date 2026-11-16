@@ -288,7 +288,10 @@ public class ChatTimeline extends JPanel {
             private final JLabel status = new JLabel();
             private final JLabel name = new JLabel();
             private final JTextArea argsArea = new JTextArea();
+            private final JScrollPane argsScroll;
             private final JLabel time = new JLabel();
+            private final JPanel headRow = new JPanel(new BorderLayout(4, 0));
+            private static final int MAX_ARGS_HEIGHT = 260;
 
             ToolRow(String toolName) {
                 this.toolName = toolName;
@@ -312,21 +315,40 @@ public class ChatTimeline extends JPanel {
                 UIStyles.setFont(argsArea, 11f, Font.PLAIN);
                 argsArea.setForeground(UIStyles.hintColor());
                 argsArea.setBorder(new EmptyBorder(0, 2, 0, 0));
-                argsArea.setVisible(false);
+
+                // 完整参数放进滚动视口：内容完整保留（不截断），超高时行内滚动
+                // 而不是把整条时间线撑爆
+                argsScroll = new JScrollPane(argsArea);
+                argsScroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+                argsScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+                argsScroll.setOpaque(false);
+                argsScroll.getViewport().setOpaque(false);
+                argsScroll.setBorder(null);
+                argsScroll.setAlignmentX(Component.LEFT_ALIGNMENT);
+                argsScroll.setVisible(false);
 
                 time.setFont(new Font("Microsoft YaHei", Font.PLAIN, 10));
                 time.setForeground(UIStyles.hintColor());
 
-                JPanel top = new JPanel(new BorderLayout(4, 0));
-                top.setOpaque(false);
-                top.add(head, BorderLayout.WEST);
-                top.add(time, BorderLayout.EAST);
+                headRow.setOpaque(false);
+                headRow.add(head, BorderLayout.WEST);
+                headRow.add(time, BorderLayout.EAST);
 
                 setLayout(new javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS));
-                top.setAlignmentX(Component.LEFT_ALIGNMENT);
-                argsArea.setAlignmentX(Component.LEFT_ALIGNMENT);
-                add(top);
-                add(argsArea);
+                headRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+                add(headRow);
+                add(argsScroll);
+            }
+
+            /** 参数区高度：短内容按内容自适应，长内容封顶 260px（完整保留、行内滚动）。 */
+            @Override
+            public Dimension getPreferredSize() {
+                Dimension d = super.getPreferredSize();
+                if (argsScroll.isVisible()) {
+                    int argHeight = Math.min(argsArea.getPreferredSize().height + 4, MAX_ARGS_HEIGHT);
+                    d = new Dimension(d.width, headRow.getPreferredSize().height + argHeight + 12);
+                }
+                return d;
             }
 
             void update(String args, boolean running, boolean failed) {
@@ -334,10 +356,9 @@ public class ChatTimeline extends JPanel {
                 status.setForeground(failed ? UIStyles.DANGER : running ? UIStyles.hintColor() : UIStyles.textColor());
                 name.setForeground(failed ? UIStyles.DANGER : UIStyles.textColor());
                 if (args != null && !args.isBlank()) {
-                    String compact = args.trim();
-                    if (compact.length() > 600) compact = compact.substring(0, 599) + "…";
-                    argsArea.setText(compact);
-                    argsArea.setVisible(true);
+                    // 完整显示参数（不截断不加省略号）：滚动视口内完整保留
+                    argsArea.setText(args.trim());
+                    argsScroll.setVisible(true);
                 }
                 if (!running) {
                     time.setText(LocalTime.now().format(TIME));
