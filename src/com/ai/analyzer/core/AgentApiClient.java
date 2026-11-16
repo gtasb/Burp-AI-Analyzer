@@ -671,6 +671,7 @@ public class AgentApiClient {
         com.ai.analyzer.util.HttpFormatter.setWorkplaceDirectory(normalized);
         com.ai.analyzer.graph.GraphStore.getInstance().setWorkplaceDirectory(normalized);
         AnalysisRunStore.getInstance().setWorkplaceDirectory(normalized);
+        com.ai.analyzer.core.SessionStore.getInstance().setWorkplaceDirectory(normalized);
         if (!java.util.Objects.equals(config.getWorkplaceDirectoryPath(), normalized)) {
             config.setWorkplaceDirectoryPath(normalized);
             if (!normalized.isEmpty()) {
@@ -957,6 +958,46 @@ public class AgentApiClient {
         }
         generateNewSessionId();
         logInfo("已新开会话（旧 Agent 会话已销毁）");
+    }
+
+    /**
+     * 切换到既有会话（会话下拉）：只换 sessionId，不销毁运行时。
+     * AgentScope 按 sessionId 保存各自的会话状态——切回旧 id 即续聊，
+     * 其上下文一直保留（SessionSwitchContextTest 验证了来回切换不丢、不串）。
+     *
+     * @return true 表示已切换；会话正在运行时拒绝切换
+     */
+    public boolean switchSession(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) return false;
+        if (analysisInFlight.get()) {
+            logInfo("会话切换被拒绝：当前有分析在运行");
+            return false;
+        }
+        if (sessionId.equals(currentSessionId)) return true;
+        cancelStreaming();
+        currentSessionId = sessionId;
+        // 运行时重建会让 AgentScope 丢弃所有内存中的会话状态；
+        // 保留运行时、只换 sessionId，让 streamEvents 重新加载该会话的历史。
+        // 会话状态持久化在 stateWorkspace（ACTIVE/ORGANIZER 有独立目录）。
+        logInfo("已切换会话: " + abbreviateSession(sessionId));
+        return true;
+    }
+
+    public String getCurrentSessionId() {
+        return currentSessionId;
+    }
+
+    /** 生成新会话 id 并在 SessionStore 登记（返回完整 id 供 UI 引用）。 */
+    public String beginTrackedSession(String firstTitle) {
+        String id = role.sessionPrefix() + java.util.UUID.randomUUID();
+        currentSessionId = id;
+        com.ai.analyzer.core.SessionStore.getInstance().createSession(id, firstTitle);
+        return id;
+    }
+
+    private static String abbreviateSession(String sessionId) {
+        if (sessionId == null) return "";
+        return sessionId.length() <= 24 ? sessionId : sessionId.substring(0, 12) + "…" + sessionId.substring(sessionId.length() - 8);
     }
 
     // ========== 配置加载 ==========

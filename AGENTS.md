@@ -183,6 +183,17 @@ bugs in them. Adding a config field = add to the record + both `applySnapshot` i
 `from()`. UI→primary-client writes (`updateApiClientConfigForAnalysis`) stay explicit and then
 fan out via snapshot.
 
+## Session switcher (会话下拉)
+
+`core/SessionStore`（`<workplace>/analysis-runs/sessions.json`，最多 30 会话/会话内 200 轮）
+按 session 划分主动分析对话。`AgentApiClient.switchSession(id)` 只换 `currentSessionId`
+不销毁运行时——AgentScope 按 sessionId 保存会话状态，切回即续聊（上下文保留、互不
+泄漏，`SessionSwitchContextTest` 验证来回切换语义）。旧 `analysis-runs.json` 在首次
+加载时按「相邻 run 间隔 <60min 归同会话」迁移成 sessions.json，原文件改名 .bak。
+`ActiveAnalysisPanel` 的下拉（替换原 run 历史下拉）可切换/删除会话，「＋ 会话」新开；
+新会话不再销毁旧会话状态，只是换 id。`beginTrackedSession` 建会话记录并与
+currentSessionId 同步。`AnalysisRunStore` 仍在（被动侧与既有测试依赖），但主动 UI 不再读它。
+
 ## Active-mode rendering contract
 
 `ActiveAnalysisPanel` renders into its own `ChatTimeline`; there is **no shared result pane

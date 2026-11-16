@@ -47,7 +47,7 @@ public class ActiveAnalysisPanel extends JPanel {
     private ChatTimeline.AssistantBlock currentAssistant;
 
     private JComboBox<String> planModeComboBox;
-    private JComboBox<com.ai.analyzer.core.AnalysisRunStore.Run> runHistoryCombo;
+    private JComboBox<com.ai.analyzer.core.SessionStore.Session> sessionCombo;
     private JCheckBox autoContinueCheckBox;
     /** 折叠开关：收起头部工具区，把整屏让给对话时间线（CC 风格） */
     private JToggleButton collapseButton;
@@ -60,7 +60,9 @@ public class ActiveAnalysisPanel extends JPanel {
     private JLabel loopPolicyLabel;
     private JLabel tokenLabel;
     private JButton interjectButton;
-    private boolean updatingRunHistory;
+    private boolean updatingSessionCombo;
+    /** 当前会话 id（= AgentApiClient 的 sessionId；null = 尚未开过会话） */
+    private volatile String currentSessionId;
 
     private java.util.function.BooleanSupplier autoContinueGetter;
     private java.util.function.Consumer<Boolean> autoContinueSetter;
@@ -95,7 +97,7 @@ public class ActiveAnalysisPanel extends JPanel {
     public ActiveAnalysisPanel(MontoyaApi api) {
         this.api = api;
         buildUi();
-        refreshRunHistory();
+        refreshSessionCombo();
     }
 
     public void bind(AgentApiClient client, Runnable configUpdater,
@@ -123,8 +125,9 @@ public class ActiveAnalysisPanel extends JPanel {
         return activeModePromptArea;
     }
 
+    /** workplace 变更后刷新会话列表（外部入口，保留旧方法名语义）。 */
     public void reloadRunHistory() {
-        refreshRunHistory();
+        refreshSessionCombo();
     }
 
     public boolean isAnalyzing() {
@@ -240,7 +243,7 @@ public class ActiveAnalysisPanel extends JPanel {
         return bar;
     }
 
-    /** 可折叠的控件行：目标详情 / 自动继续 / 计划模式 / 历史 / 清空。 */
+    /** 可折叠的控件行：目标详情 / 自动继续 / 计划模式 / 会话切换 / 新会话。 */
     private JPanel buildExpandedPanel() {
         JPanel row = new JPanel();
         row.setLayout(new BoxLayout(row, BoxLayout.X_AXIS));
@@ -266,42 +269,63 @@ public class ActiveAnalysisPanel extends JPanel {
         row.add(autoContinueCheckBox);
         row.add(Box.createHorizontalStrut(6));
 
-        planModeComboBox = new JComboBox<>(new String[]{"普通", "计划模式"});
+        planModeComboBox = new JComboBox<>(new String[]{"普通", "计划"});
         planModeComboBox.setToolTipText("计划模式：Agent 先只读调查并写计划，提交 plan_exit 时请求批准");
+        planModeComboBox.setMaximumSize(new Dimension(64, 24));
+        planModeComboBox.setPreferredSize(new Dimension(64, 24));
         planModeComboBox.setAlignmentY(Component.CENTER_ALIGNMENT);
         planModeComboBox.addActionListener(e -> handlePlanModeChanged());
         row.add(planModeComboBox);
         row.add(Box.createHorizontalStrut(6));
 
-        runHistoryCombo = new JComboBox<>();
-        runHistoryCombo.setMaximumSize(new Dimension(240, 24));
-        runHistoryCombo.setPreferredSize(new Dimension(240, 24));
-        runHistoryCombo.setAlignmentY(Component.CENTER_ALIGNMENT);
-        runHistoryCombo.addActionListener(e -> {
-            if (updatingRunHistory) return;
+        sessionCombo = new JComboBox<>();
+        sessionCombo.setMaximumSize(new Dimension(260, 24));
+        sessionCombo.setPreferredSize(new Dimension(260, 24));
+        sessionCombo.setAlignmentY(Component.CENTER_ALIGNMENT);
+        sessionCombo.setToolTipText("会话列表（最新在前）：切换到任意历史会话继续聊，上下文保留");
+        sessionCombo.setRenderer(new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public java.awt.Component getListCellRendererComponent(
+                    javax.swing.JList<?> list, Object value, int index,
+                    boolean isSelected, boolean cellHasFocus) {
+                java.awt.Component c = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                if (value instanceof com.ai.analyzer.core.SessionStore.Session s) {
+                    // 下拉条目换行显示：标题一行，时间+轮次一行
+                    setToolTipText(s.title() + "\n" + s.createdTime() + " · " + s.turnCount() + " 轮");
+                }
+                return c;
+            }
+        });
+        sessionCombo.addActionListener(e -> {
+            if (updatingSessionCombo) return;
             if (isAnalyzing) {
-                refreshRunHistory();
+                // 运行中拒绝切换并弹回当前选择
+                refreshSessionCombo();
+                timeline.addSystem("分析进行中，暂不能切换会话");
                 return;
             }
-            Object selected = runHistoryCombo.getSelectedItem();
-            if (selected instanceof com.ai.analyzer.core.AnalysisRunStore.Run run) {
-                showHistoricalRun(run);
-            } else {
-                exitHistoryView();
+            Object selected = sessionCombo.getSelectedItem();
+            if (selected instanceof com.ai.analyzer.core.SessionStore.Session s) {
+                switchToSession(s);
             }
         });
-        row.add(runHistoryCombo);
+        row.add(sessionCombo);
         row.add(Box.createHorizontalStrut(6));
 
-        JButton clearHistoryButton = new JButton("清空");
-        clearHistoryButton.setToolTipText("清空主动分析历史");
-        clearHistoryButton.setAlignmentY(Component.CENTER_ALIGNMENT);
-        UIStyles.styleSecondary(clearHistoryButton);
-        clearHistoryButton.addActionListener(e -> {
-            com.ai.analyzer.core.AnalysisRunStore.getInstance().clear();
-            refreshRunHistory();
-        });
-        row.add(clearHistoryButton);
+        JButton newSessionButton = new JButton("＋ 会话");
+        newSessionButton.setToolTipText("新开一个会话（当前会话保留在列表中，可随时切回）");
+        newSessionButton.setAlignmentY(Component.CENTER_ALIGNMENT);
+        UIStyles.styleSecondary(newSessionButton);
+        newSessionButton.addActionListener(e -> startNewSession());
+        row.add(newSessionButton);
+        row.add(Box.createHorizontalStrut(6));
+
+        JButton deleteSessionButton = new JButton("删除");
+        deleteSessionButton.setToolTipText("删除当前选中的会话（不可恢复）");
+        deleteSessionButton.setAlignmentY(Component.CENTER_ALIGNMENT);
+        UIStyles.styleSecondary(deleteSessionButton);
+        deleteSessionButton.addActionListener(e -> deleteCurrentSession());
+        row.add(deleteSessionButton);
         row.add(Box.createHorizontalGlue());
         return row;
     }
@@ -490,9 +514,6 @@ public class ActiveAnalysisPanel extends JPanel {
             activeModePromptArea.setText("");
         }
 
-        if (timeline.isShowingHistory()) {
-            exitHistoryView();
-        }
         timeline.addUser(userPrompt == null ? "" : userPrompt, targetDesc);
         if (httpContent != null && httpContent.length() > HttpFormatter.DEFAULT_MAX_LENGTH) {
             timeline.addSystem("HTTP 内容过长（" + httpContent.length() + " 字符），完整报文已缓存，提示词仅含预览与 fileId");
@@ -649,32 +670,6 @@ public class ActiveAnalysisPanel extends JPanel {
         if (apiClient != null) apiClient.clearContext();
     }
 
-    public void startNewSession() {
-        if (currentWorker != null && !currentWorker.isDone()) {
-            if (apiClient != null) {
-                apiClient.cancelStreaming();
-                apiClient.removeModelBehaviorConsumer(modelBehaviorConsumer);
-            }
-            analysisRunId++;
-            currentWorker.cancel(true);
-            isAnalyzing = false;
-            notifyStateChanged();
-        }
-        if (apiClient != null) {
-            apiClient.startNewSession();
-        }
-        if (currentAssistant != null) {
-            currentAssistant.finish();
-            currentAssistant = null;
-        }
-        timeline.clear();
-        currentThinking.setLength(0);
-        activeRound = 0;
-        setLoopRound(0);
-        setOrganizerPhase("空闲");
-        api.logging().logToOutput("已新开会话");
-    }
-
     // ================= 状态 / 事件 =================
 
     private void updateTargetInfo(String targetDesc, String detail) {
@@ -734,49 +729,175 @@ public class ActiveAnalysisPanel extends JPanel {
         });
     }
 
-    /** 刷新历史下拉框（最新在前，默认不选中）。 */
-    private void refreshRunHistory() {
-        if (runHistoryCombo == null) return;
-        updatingRunHistory = true;
+    /** 刷新会话下拉框（最新在前；选中当前会话）。 */
+    private void refreshSessionCombo() {
+        if (sessionCombo == null) return;
+        updatingSessionCombo = true;
         try {
-            runHistoryCombo.removeAllItems();
-            for (com.ai.analyzer.core.AnalysisRunStore.Run run
-                    : com.ai.analyzer.core.AnalysisRunStore.getInstance().list()) {
-                runHistoryCombo.addItem(run);
+            sessionCombo.removeAllItems();
+            String current = currentSessionId;
+            com.ai.analyzer.core.SessionStore.Session toSelect = null;
+            for (com.ai.analyzer.core.SessionStore.Session s
+                    : com.ai.analyzer.core.SessionStore.getInstance().list()) {
+                sessionCombo.addItem(s);
+                if (current != null && s.id().equals(current)) toSelect = s;
             }
-            runHistoryCombo.setSelectedIndex(-1);
+            sessionCombo.setSelectedItem(toSelect);
         } finally {
-            updatingRunHistory = false;
+            updatingSessionCombo = false;
         }
     }
 
-    private void showHistoricalRun(com.ai.analyzer.core.AnalysisRunStore.Run run) {
-        if (run == null) return;
-        // 历史回看不销毁当前会话流：快照保存，取消选择/新分析时恢复
-        timeline.showHistoryMode();
-        timeline.replayRun(run.time(), run.method(), run.url(), run.prompt(), run.result());
-        timeline.addSystem("（历史回看中 — 选择框清空或开始新分析可返回当前会话）");
-        updateTargetInfo("历史记录 · " + run.time(), "");
+    /** 切到历史会话：重放该会话的轮次到时间线，并把 agent 切回同一 sessionId 续聊。 */
+    private void switchToSession(com.ai.analyzer.core.SessionStore.Session s) {
+        if (s == null || apiClient == null) return;
+        if (s.id().equals(currentSessionId)) return;
+        if (!apiClient.switchSession(s.id())) {
+            refreshSessionCombo();
+            return;
+        }
+        currentSessionId = s.id();
+        timeline.clear();
+        currentThinking.setLength(0);
+        activeRound = 0;
+        setLoopRound(0);
+        setOrganizerPhase("会话 · " + s.title());
+        com.ai.analyzer.core.SessionStore.SessionDetail detail =
+                com.ai.analyzer.core.SessionStore.getInstance().detail(s.id());
+        if (detail != null && !detail.turns().isEmpty()) {
+            timeline.addSystem("已切换会话（上下文保留，可继续对话）");
+            for (com.ai.analyzer.core.SessionStore.Turn t : detail.turns()) {
+                timeline.replayRun(t.time() > 0
+                        ? java.time.LocalDateTime.ofInstant(
+                                java.time.Instant.ofEpochMilli(t.time()),
+                                java.time.ZoneId.systemDefault()).format(
+                                java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"))
+                        : "", t.method(), t.url(), t.prompt(), t.result());
+            }
+            activeRound = detail.turns().size();
+            setLoopRound(activeRound);
+        } else {
+            timeline.addSystem("已切换到空会话（" + s.title() + "）");
+        }
+        if (api != null) api.logging().logToOutput("[Session] 已切换会话: " + s.title());
+        notifyStateChanged();
     }
 
-    /** 离开历史回看：恢复当前会话流。 */
-    private void exitHistoryView() {
-        if (timeline.isShowingHistory()) {
-            timeline.restoreLive();
+    /** 新会话：不再销毁旧会话（保留在下拉里可切回），只换 sessionId + 清空时间线。 */
+    public void startNewSession() {
+        if (isAnalyzing) {
+            timeline.addSystem("分析进行中，先停止再新开会话");
+            return;
         }
+        if (currentWorker != null && !currentWorker.isDone()) {
+            if (apiClient != null) {
+                apiClient.cancelStreaming();
+                apiClient.removeModelBehaviorConsumer(modelBehaviorConsumer);
+            }
+            analysisRunId++;
+            currentWorker.cancel(true);
+            isAnalyzing = false;
+            notifyStateChanged();
+        }
+        String title = nextSessionTitle();
+        currentSessionId = apiClient != null
+                ? apiClient.beginTrackedSession(title) : "untracked-" + java.util.UUID.randomUUID();
+        if (apiClient != null) {
+            // beginTrackedSession 只换 id；重置运行时状态（挂起确认/工具缓冲），
+            // 但不清长期记忆目录——上下文随 sessionId 天然隔离
+            apiClient.startNewSession();
+            // startNewSession 又生成了新 id，覆盖回登记过的那个
+            apiClient.switchSession(currentSessionId);
+        }
+        if (currentAssistant != null) {
+            currentAssistant.finish();
+            currentAssistant = null;
+        }
+        timeline.clear();
+        currentThinking.setLength(0);
+        activeRound = 0;
+        setLoopRound(0);
+        setOrganizerPhase("空闲");
+        refreshSessionCombo();
+        if (api != null) api.logging().logToOutput("已新开会话（旧会话保留，可从下拉切回）");
+        notifyStateChanged();
+    }
+
+    private String nextSessionTitle() {
+        String target = lastTargetDesc == null ? "" : lastTargetDesc.trim();
+        if (target.isEmpty() || "自由对话模式".equals(target)) {
+            return "自由对话 " + java.time.LocalTime.now().format(
+                    java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+        }
+        return target.length() > 40 ? target.substring(0, 39) + "…" : target;
+    }
+
+    /** 删除当前选中会话（下拉里选中的那个，不一定是正在聊的）。 */
+    private void deleteCurrentSession() {
+        Object selected = sessionCombo == null ? null : sessionCombo.getSelectedItem();
+        if (!(selected instanceof com.ai.analyzer.core.SessionStore.Session s)) {
+            timeline.addSystem("先在下拉里选中要删除的会话");
+            return;
+        }
+        boolean isCurrent = s.id().equals(currentSessionId);
+        if (isCurrent && isAnalyzing) {
+            timeline.addSystem("正在分析当前会话，先停止再删除");
+            return;
+        }
+        int confirm = javax.swing.JOptionPane.showConfirmDialog(this,
+                "删除会话「" + s.title() + "」？不可恢复。", "确认删除",
+                javax.swing.JOptionPane.YES_NO_OPTION);
+        if (confirm != javax.swing.JOptionPane.YES_OPTION) return;
+        com.ai.analyzer.core.SessionStore.getInstance().deleteSession(s.id());
+        if (isCurrent) {
+            // 删的是当前会话：顺延到新会话
+            if (apiClient != null) {
+                apiClient.startNewSession();
+                currentSessionId = apiClient.getCurrentSessionId();
+            }
+            timeline.clear();
+            activeRound = 0;
+            setLoopRound(0);
+            setOrganizerPhase("空闲");
+        }
+        refreshSessionCombo();
     }
 
     private void recordRunAsync(String method, String url, String prompt, String result) {
         if (result == null || result.isBlank()) return;
+        // 会话归属：没开过会话（插件启动后直接分析）时按 target 建一个
+        final String sessionId = ensureSessionForRun(method, url);
         Thread t = new Thread(() -> {
             try {
-                com.ai.analyzer.core.AnalysisRunStore.getInstance().add(method, url, prompt, result);
+                com.ai.analyzer.core.SessionStore.getInstance().addTurn(sessionId,
+                        sessionTitle(method, url), method, url, prompt, result);
             } catch (Exception ignored) {
             }
-            SwingUtilities.invokeLater(this::refreshRunHistory);
+            SwingUtilities.invokeLater(this::refreshSessionCombo);
         }, "analysis-run-save");
         t.setDaemon(true);
         t.start();
+    }
+
+    /** 确保当前轮落在某个会话里：有 sessionId 用之；没有则新建并同步给 agent。 */
+    private String ensureSessionForRun(String method, String url) {
+        String sid = currentSessionId;
+        if (sid != null && !sid.isBlank()) return sid;
+        String title = sessionTitle(method, url);
+        sid = apiClient != null
+                ? apiClient.beginTrackedSession(title)
+                : "untracked-" + java.util.UUID.randomUUID();
+        currentSessionId = sid;
+        return sid;
+    }
+
+    private String sessionTitle(String method, String url) {
+        String target = (method == null ? "" : method + " ") + (url == null ? "" : url);
+        if (target.isBlank()) {
+            return "自由对话 " + java.time.LocalTime.now().format(
+                    java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+        }
+        return target.length() > 40 ? target.substring(0, 39) + "…" : target;
     }
 
     // ================= 模型行为流 =================
