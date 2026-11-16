@@ -772,26 +772,21 @@ public class AgentApiClient {
             // 注册浏览器渲染工具
             asToolkit.registerTool(new com.ai.analyzer.tools.BrowserRenderTool());
 
-            // 知识图谱：主动扫描 agent 只读（证据写入交给 organizer agent），侧栏/整理 agent 可写
-            if (role == AgentRole.ACTIVE) {
-                asToolkit.registerTool(new com.ai.analyzer.graph.GraphReadTool(
-                        com.ai.analyzer.graph.GraphStore.getInstance(), getAgentName()));
-                logInfo("AgentScope GraphReadTool（只读知识图谱）已注册");
-            } else {
-                asToolkit.registerTool(new com.ai.analyzer.graph.GraphTool(
-                        com.ai.analyzer.graph.GraphStore.getInstance(), getAgentName()));
-                ensureNoteBroadcastSubscribed();
-                logInfo("AgentScope GraphTool（资产知识图谱 + 笔记）已注册");
-                if (role == AgentRole.ORGANIZER) {
-                    java.nio.file.Path pocsBase = configuredWorkspacePath();
-                    if (pocsBase == null) {
-                        pocsBase = java.nio.file.Path.of(System.getProperty("user.home"),
-                                "ai-analyzer-workplace");
-                    }
-                    organizerTool = new com.ai.analyzer.agent.organizer.OrganizerTool(api, pocsBase);
-                    asToolkit.registerTool(organizerTool);
-                    logInfo("AgentScope OrganizerTool（Repeater/脚本/决策）已注册");
+            // 知识图谱：主动 agent 也可写（用户 2026-11-17 决定：主动模式要能边测边入图，
+            // 整理 agent 仍在轮末做归并去重，两者按 canonical key 幂等共存）
+            asToolkit.registerTool(new com.ai.analyzer.graph.GraphTool(
+                    com.ai.analyzer.graph.GraphStore.getInstance(), getAgentName()));
+            ensureNoteBroadcastSubscribed();
+            logInfo("AgentScope GraphTool（资产知识图谱 + 笔记，含主动 agent 写入）已注册");
+            if (role == AgentRole.ORGANIZER) {
+                java.nio.file.Path pocsBase = configuredWorkspacePath();
+                if (pocsBase == null) {
+                    pocsBase = java.nio.file.Path.of(System.getProperty("user.home"),
+                            "ai-analyzer-workplace");
                 }
+                organizerTool = new com.ai.analyzer.agent.organizer.OrganizerTool(api, pocsBase);
+                asToolkit.registerTool(organizerTool);
+                logInfo("AgentScope OrganizerTool（Repeater/脚本/决策）已注册");
             }
 
             // HTTP 直发工具（Burp MCP 的 http_send_request 60s 超时/挂死时的可靠备份通道）
@@ -1427,6 +1422,10 @@ public class AgentApiClient {
         return content.toString();
     }
 
+    /** 提示词内容版本：语义变更（如 2026-11 主动 agent 从图谱只读改回可写）时 +1，
+     *  让运行中的旧缓存失效，避免升级后仍拿到上一版提示词。 */
+    private static final int PROMPT_VERSION = 2;
+
     private String buildSystemPrompt() {
         if (role == AgentRole.ORGANIZER) {
             return buildOrganizerPrompt();
@@ -1437,6 +1436,7 @@ public class AgentApiClient {
             configuredWorkspace = java.nio.file.Path.of(workplaceSetting.trim());
         }
         int hash = java.util.Objects.hash(
+                PROMPT_VERSION,
                 config.isEnableSearch(), config.isEnableMcp(),
                 config.isEnableRagMcp(), config.isEnableChromeMcp(),
                 config.isEnableFileSystemAccess(), config.isEnableSkills(),
@@ -1465,7 +1465,6 @@ public class AgentApiClient {
                         fileToolRoot.toAbsolutePath().toString(),
                         System.getProperty("user.name", "burp-user"))
                 .sandboxEnabled(config.isEnableFileSystemSandbox())
-                .graphReadOnly(role == AgentRole.ACTIVE)
                 .build();
         cachedSystemPrompt = cached;
         cachedPromptConfigHash = hash;

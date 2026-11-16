@@ -82,7 +82,8 @@ Relative paths passed to file tools get a **namespace prefix** (`user.name`) inj
 - Coverage follows ARTEX's fact-anchor semantics: a completed passive scan writes an
   `ANALYSIS_FACT` node plus `COVERS --> INTERFACE`; the viewer paints only COVERS-anchored assets
   as “已分析”. Skipped/low-value scans do not anchor. Active/chat analysis also anchors after a
-  normal (non-cancelled, non-throwing) completion via `AgentApiClient.recordActiveAnalysisFact`.
+  normal (non-cancelled, non-throwing) completion (recorded by the passive/organizer sides; the
+  active agent itself no longer auto-anchors, the organizer's `graph_record_analysis_fact` covers it).
   Human-added nodes default to `INFERRED`; ticking “我已验证” creates them as `CONFIRMED`.
 - Viewer (`ui/GraphViewerPanel` + `ui/GraphSidebarPanel` + `ui/GraphNodeDialog`): horizontal split
   (canvas | resizable sidebar), sidebar has node detail (assessment, neighbor counts, parameters)
@@ -105,8 +106,10 @@ lock and consumers:
 
 - **SIDEBAR** (`AIAnalyzerTab.sidebarApiClient`, returned by `getApiClient()`): Burp side panels;
   behavior unchanged; owns long-term memory (shared workspace, `MemoryConfig` hooks enabled).
-- **ACTIVE** (`AIAnalyzerTab.apiClient`): request-analysis tab. Registers `GraphReadTool` (read-only
-  graph), never writes graph facts/notes. `AgentApiClient.analyzeRequestStream` no longer calls
+- **ACTIVE** (`AIAnalyzerTab.apiClient`): request-analysis tab. Registers the full `GraphTool`
+  (read+write, user decision 2026-11-17: the active agent should record findings into the graph while
+  testing; the organizer still merges/dedups at round end — canonical keys make double writes idempotent).
+  `AgentApiClient.analyzeRequestStream` no longer calls
   `recordActiveAnalysisFact`; it records a `CompletedRun` handoff (method/url/prompt/response) and a
   run history entry instead. State lives in `<workspace>/.agents/active` with memory hooks disabled.
 - **ORGANIZER** (`AIAnalyzerTab.organizerClient`): independent context, state in
