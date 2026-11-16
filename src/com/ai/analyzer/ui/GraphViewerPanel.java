@@ -960,7 +960,7 @@ public class GraphViewerPanel extends JPanel {
                         long foldId = foldSeq--;
                         int count = group.size() - shown;
                         Node fold = new Node(foldId, data.rootId(), entry.getKey(),
-                                "…" + count, "fold:" + groupId, FactStatus.DERIVED, 0.0,
+                                "+" + count, "fold:" + groupId, FactStatus.DERIVED, 0.0,
                                 "fold", null,
                                 Map.of("fold", true, "count", count, "groupId", groupId,
                                         "childType", entry.getKey().name()),
@@ -1198,10 +1198,14 @@ public class GraphViewerPanel extends JPanel {
             g.setColor(fg);
             g.setFont(FONT_FOLD);
             FontMetrics fm = g.getFontMetrics();
-            g.drawString("…", (int) s.x - fm.stringWidth("…") / 2, (int) s.y + fm.getAscent() / 2 - 1);
+            // 圆圈里直接画数量（“…”看不出折叠了多少个，密集布局下下方药丸还会被
+            // 子节点行遮挡）；超过两位数退化为 “99+” 保证放得下
+            int rawCount = n.prop("count") instanceof Number num ? num.intValue() : 0;
+            String badge = rawCount <= 0 ? "…" : rawCount > 99 ? "99+" : String.valueOf(rawCount);
+            g.drawString(badge, (int) s.x - fm.stringWidth(badge) / 2, (int) s.y + fm.getAscent() / 2 - 1);
 
-            int count = n.prop("count") instanceof Number num ? num.intValue() : 0;
-            String label = "还有 " + count + " 个" + typeLabel(n.type());
+            int count = rawCount;
+            String label = "+" + count + " " + typeLabel(n.type());
             g.setFont(FONT_LABEL);
             fm = g.getFontMetrics();
             int tw = fm.stringWidth(label);

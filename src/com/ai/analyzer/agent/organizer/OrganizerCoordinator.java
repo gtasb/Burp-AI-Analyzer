@@ -81,6 +81,12 @@ public final class OrganizerCoordinator {
     public void stop() {
         stopped.set(true);
         pendingRun = null;
+        // 真正打断正在运行的整理轮：cancelStreaming 现在会取消 runtime 当前活跃轮
+        // （历史 bug：旧的取消只对已结束的轮次生效，用户按停止后整理轮照样跑完）
+        try {
+            organizerClient.cancelStreaming();
+        } catch (Exception ignored) {
+        }
     }
 
     /** 主动分析正常完成后调用；异步执行，不阻塞 EDT。 */

@@ -88,8 +88,14 @@ public class ChatTimeline extends JPanel {
         return content.getComponentCount() == 0;
     }
 
+    /** 左侧强调条配色：用户=蓝（主题前景），agent=中性，报告=品牌蓝 */
+    private static final Color ACCENT_USER = new Color(0x2a7de1);
+    private static final Color ACCENT_AGENT = new Color(0x8a, 0x93, 0xa2);
+    private static final Color ACCENT_ORGANIZER = new Color(0x7a, 0x9e, 0x7a);
+    private static final Color ACCENT_REPORT = new Color(0x2a7de1);
+
     public void addUser(String text, String target) {
-        Card card = new Card("你", target, new Color(0xF3, 0xF4, 0xF6));
+        Card card = new Card("你", target, ACCENT_USER);
         JTextArea body = new JTextArea(text == null ? "" : text);
         body.setEditable(false);
         body.setLineWrap(true);
@@ -111,7 +117,7 @@ public class ChatTimeline extends JPanel {
 
     /** 开始一条主动分析回复；返回流式句柄。 */
     public AssistantBlock startAssistant(String title) {
-        Card card = new Card(title, null, new Color(0xFA, 0xFB, 0xFC));
+        Card card = new Card(title, null, ACCENT_AGENT);
         AssistantBlock block = new AssistantBlock(card);
         currentAssistant = block;
         append(card);
@@ -125,7 +131,7 @@ public class ChatTimeline extends JPanel {
     /** 整理 agent 的事件行；同一轮共用一个整理块。 */
     public void addOrganizerEvent(String text) {
         if (currentOrganizer == null) {
-            Card card = new Card("整理 agent", null, new Color(0xF7, 0xF8, 0xFA));
+            Card card = new Card("整理 agent", null, ACCENT_ORGANIZER);
             currentOrganizer = new OrganizerBlock(card);
             append(card);
         }
@@ -140,7 +146,7 @@ public class ChatTimeline extends JPanel {
     public void addReport(String markdown, Path file) {
         currentOrganizer = null;
         Card card = new Card("渗透测试报告", file == null ? null : file.getFileName().toString(),
-                new Color(0xF7, 0xF8, 0xFA));
+                ACCENT_REPORT);
         JTextPane body = markdownPane();
         try {
             MarkdownRenderer.renderMarkdown(body, markdown == null ? "" : markdown);
@@ -157,7 +163,7 @@ public class ChatTimeline extends JPanel {
                 + (url == null ? "" : url);
         addSystem("历史记录 · " + (time == null ? "" : time));
         addUser(prompt == null ? "" : prompt, target.trim());
-        Card card = new Card("主动分析", null, new Color(0xFA, 0xFB, 0xFC));
+        Card card = new Card("主动分析", null, ACCENT_AGENT);
         JTextPane body = markdownPane();
         try {
             MarkdownRenderer.renderMarkdown(body, result == null || result.isBlank() ? "(无输出)" : result);
@@ -203,34 +209,36 @@ public class ChatTimeline extends JPanel {
         return pane;
     }
 
-    private static Color themed(Color light) {
+    /** 左侧强调条颜色：暗色主题下略微提亮，避免深色底上消失。 */
+    private static Color themed(Color accent) {
         Color panel = UIManager.getColor("Panel.background");
         if (panel != null) {
             double lum = 0.299 * panel.getRed() + 0.587 * panel.getGreen() + 0.114 * panel.getBlue();
             if (lum < 128) {
-                return panel.brighter();
+                return accent.brighter();
             }
         }
-        return light;
+        return accent;
     }
 
-    /** 消息卡片：标题 + 可选副标题 + 正文。 */
+    /** 消息卡片：标题 + 可选副标题 + 正文。细左边条（CC 风格）取代粗边框盒子。 */
     private static final class Card extends JPanel {
         private final JPanel bodyHolder = new JPanel(new BorderLayout());
         private final JLabel status = new JLabel("");
 
-        Card(String title, String subtitle, Color background) {
-            super(new BorderLayout(0, 4));
-            setOpaque(true);
-            setBackground(themed(background));
+        Card(String title, String subtitle, Color accent) {
+            super(new BorderLayout(4, 4));
+            setOpaque(false);
+            // 左侧 3px 强调条 + 细上分割感的轻量卡片；背景跟随主题（不叠硬编码色块）
+            Color line = themed(accent);
             setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(new Color(0xE3, 0xE6, 0xEA), 1),
-                    new EmptyBorder(5, 8, 5, 8)));
+                    BorderFactory.createMatteBorder(0, 3, 0, 0, line),
+                    new EmptyBorder(4, 8, 4, 6)));
 
             JPanel header = new JPanel(new BorderLayout(8, 0));
             header.setOpaque(false);
             JLabel titleLabel = new JLabel(title == null ? "" : title);
-            UIStyles.setFont(titleLabel, 12f, Font.BOLD);
+            UIStyles.setFont(titleLabel, 11f, Font.BOLD);
             titleLabel.setForeground(UIStyles.textColor());
             header.add(titleLabel, BorderLayout.WEST);
 

@@ -95,6 +95,8 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
 
     private volatile HarnessAgent harnessAgent;
     private final AtomicReference<Subscription> currentSubscription = new AtomicReference<>();
+    /** 当前轮次的 future：chat 开始即登记，结束清除。cancelCurrent() 用它真正打断运行中的轮次 */
+    private final AtomicReference<CompletableFuture<String>> activeChatFuture = new AtomicReference<>();
     /** 串行化 chat：同一 HarnessAgent 不能被并发驱动；用独立锁而不是 synchronized(this)，
      *  使 shutdown/resetSession 不必等待整轮对话结束（否则 EDT 上的设置操作会卡死）。 */
     private final java.util.concurrent.locks.ReentrantLock chatLock = new java.util.concurrent.locks.ReentrantLock();
@@ -161,6 +163,38 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
     }
 
     /**
+     * 取消当前正在运行的一轮（供「停止」按钮/新会话/设置重建使用）。
+     *
+     * <p>历史 bug：chat() 是同步的（内部 blockLast 直到整轮结束才返回），调用方
+     * （AgentApiClient）在 chat 返回后才拿到 session 句柄并赋给 currentSession——
+     * 运行期间它永远是 null，cancelStreaming()/interject() 的「句柄非空」判断
+     * 永远不通过，取消等于空操作。正确做法是在轮次开始时（本方法）直接取消
+     * 运行中的订阅与 future，不依赖调用方持有句柄。
+     *
+     * @return true 表示有正在运行的轮次且已发出取消
+     */
+    public boolean cancelCurrent() {
+        boolean did = false;
+        Subscription sub = currentSubscription.get();
+        if (sub != null) {
+            sub.cancel();
+            did = true;
+        }
+        CompletableFuture<String> f = activeChatFuture.getAndSet(null);
+        if (f != null && !f.isDone()) {
+            f.cancel(true);
+            did = true;
+        }
+        return did;
+    }
+
+    /** 当前是否有一轮 chat 正在运行（future 已登记未结束）。插话据此判定可投递。 */
+    public boolean isChatActive() {
+        CompletableFuture<String> f = activeChatFuture.get();
+        return f != null && !f.isDone();
+    }
+
+    /**
      * 同步执行一轮 agent 会话。
      *
      * <p>用 {@link #chatLock} 串行化：本实现共享单个 {@link HarnessAgent} 与单个
@@ -185,6 +219,18 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
                                      String sessionId,
                                      RuntimeEventListener listener) {
         CompletableFuture<String> future = new CompletableFuture<>();
+        activeChatFuture.set(future);
+        try {
+            return chatLockedInner(messages, sessionId, listener, future);
+        } finally {
+            activeChatFuture.compareAndSet(future, null);
+        }
+    }
+
+    private StreamSession chatLockedInner(List<com.ai.analyzer.agent.runtime.ChatMessage> messages,
+                                          String sessionId,
+                                          RuntimeEventListener listener,
+                                          CompletableFuture<String> future) {
         String userId = System.getProperty("user.name", "burp-user");
         // interject 需要 (userId, sessionId) 定位会话槽位
         currentInterjectSessionId = sessionId;

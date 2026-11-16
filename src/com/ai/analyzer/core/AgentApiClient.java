@@ -944,9 +944,16 @@ public class AgentApiClient {
 
     public void cancelStreaming() {
         streamGeneration.incrementAndGet();
+        // 历史缺陷：currentSession 在同步 chat() 返回后才赋值，运行期间恒为 null，
+        // 旧实现只能在「已结束的轮次」上取消，等于空操作——用户按停止后 agent 仍会把
+        // 本轮跑完（整理轮尤其明显，可能再跑数分钟）。改为直接取消运行时当前活跃轮。
         com.ai.analyzer.agent.runtime.StreamSession sess = currentSession;
         if (sess != null) {
             sess.cancel();
+        }
+        com.ai.analyzer.agent.runtime.AgentScopeAgentRuntime runtime = agentScopeRuntime;
+        if (runtime != null) {
+            runtime.cancelCurrent();
         }
         logInfo("流式输出已取消");
     }
@@ -1072,15 +1079,16 @@ public class AgentApiClient {
         if (!analysisInFlight.get() || text == null || text.isBlank()) {
             return false;
         }
-        // analysisInFlight 在整个 analyzeRequestStream 期间都为真——包括首次运行时构建
-        // （MCP 握手，可能数分钟）。此时 agent 还没开始 chat，interrupt 会落空且
-        // 队列在下一轮开头被清空，消息会被静默丢掉。用 currentSession 是否存在
-        // 判定「chat 已真正开始」，否则如实返回 false，UI 提示插话失败。
-        if (currentSession == null) {
-            return false;
-        }
+        // 初始化窗口（MCP 握手可能数分钟）里 agent 还没开始 chat，interrupt 会落空。
+        // 历史实现用 currentSession != null 判定「chat 已开始」，但 chat() 是同步的，
+        // currentSession 在轮次结束后才赋值——运行期间恒为 null，插话永远失败。
+        // 现在以「chat 的 future 已建立」为准：运行时登记 future 即代表本轮已进入
+        // streamEvents 循环（消息进 pendingInterjections 队列 + interrupt 打断）。
         AgentScopeAgentRuntime runtime = agentScopeRuntime;
         if (runtime == null) return false;
+        if (!runtime.isChatActive() && currentSession == null) {
+            return false;
+        }
         boolean ok = runtime.interject(text);
         if (ok) {
             String preview = text.trim();
@@ -1503,6 +1511,15 @@ public class AgentApiClient {
                 6. 对可复现的 POC：优先用 `organizer_send_to_repeater` 把请求送进 Repeater
                    （Repeater 不会自动发包，人类确认后再发）。需要反复执行的复测脚本用
                    `organizer_save_script` 保存到工作区 pocs/ 目录，不要自动执行。
+
+                # 纪律（必须遵守）
+                - **你不做侦察**。scope/proxy_history/sitemap/scanner/findings 一类的全站枚举
+                  是主动 Agent 的事；你的信息源只有交接文本、知识图谱和图谱笔记。
+                  图谱已经记录的接口/指纹不要通过 Burp 重复枚举。
+                - 工具调用总数控制在必要范围（通常 5~8 次以内）；整理一轮的目标是
+                  「入图 + 决策」，不是重新测一遍目标。
+                - 交接文本里没有的结论不要编造；无法判断的点归入 gaps 交给人类。
+
                 报告要求：只写有证据的结论，区分「已确认 / 待验证 / 建议加固」；包含目标、测试路径、
                 复现步骤、影响与修复建议；不要编造请求、响应或证据。
                 """;

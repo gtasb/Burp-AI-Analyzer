@@ -49,6 +49,10 @@ public class ActiveAnalysisPanel extends JPanel {
     private JComboBox<String> planModeComboBox;
     private JComboBox<com.ai.analyzer.core.AnalysisRunStore.Run> runHistoryCombo;
     private JCheckBox autoContinueCheckBox;
+    /** 折叠开关：收起头部工具区，把整屏让给对话时间线（CC 风格） */
+    private JToggleButton collapseButton;
+    private JPanel headerExpandedPanel;
+    private JPanel statusBar;
     private JLabel targetLabel;
     private JLabel targetDetailLabel;
     private JLabel phaseLabel;
@@ -166,59 +170,113 @@ public class ActiveAnalysisPanel extends JPanel {
     // ================= UI =================
 
     private void buildUi() {
-        setLayout(new BorderLayout(0, 4));
-        setBorder(new EmptyBorder(2, 4, 2, 4));
+        setLayout(new BorderLayout(0, 0));
+        setBorder(new EmptyBorder(0, 0, 0, 0));
 
-        // 单行工具条：目标/阶段/轮次/自动继续/模式/历史压进一行，纵向空间全部留给对话流
-        add(buildToolbar(), BorderLayout.NORTH);
+        // 头部：始终可见一行状态摘要（折叠钮+目标+阶段+轮次+token），
+        // 其下是可折叠的控件行（详情/自动继续/模式/历史/清空）。
+        // 点击折叠钮收起控件行，纵向空间全部让给对话时间线（CC 风格）。
+        add(buildCollapsibleHeader(), BorderLayout.NORTH);
 
         add(timeline, BorderLayout.CENTER);
 
         add(buildComposer(), BorderLayout.SOUTH);
     }
 
-    private JToolBar buildToolbar() {
-        JToolBar bar = new JToolBar();
-        bar.setFloatable(false);
-        bar.setBorder(new EmptyBorder(1, 4, 1, 4));
+    private JComponent buildCollapsibleHeader() {
+        JPanel header = new JPanel(new BorderLayout(0, 0));
+        header.setOpaque(false);
 
+        statusBar = buildStatusBar();
+        header.add(statusBar, BorderLayout.CENTER);
+
+        headerExpandedPanel = buildExpandedPanel();
+        header.add(headerExpandedPanel, BorderLayout.SOUTH);
+        return header;
+    }
+
+    /** 始终可见的一行：折叠钮 + 目标 + 阶段 + 轮次 + token。 */
+    private JPanel buildStatusBar() {
+        JPanel bar = new JPanel(new BorderLayout(6, 0));
+        bar.setOpaque(false);
+        bar.setBorder(new EmptyBorder(2, 4, 2, 4));
+
+        collapseButton = new JToggleButton("▾");
+        collapseButton.setToolTipText("折叠工具区（把整个面板高度让给对话）");
+        collapseButton.setFont(collapseButton.getFont().deriveFont(11f));
+        collapseButton.setMargin(new Insets(0, 2, 0, 2));
+        collapseButton.setFocusable(false);
+        collapseButton.addActionListener(e -> {
+            boolean collapsed = collapseButton.isSelected();
+            collapseButton.setText(collapsed ? "▸" : "▾");
+            collapseButton.setToolTipText(collapsed
+                    ? "展开工具区（目标详情/自动继续/模式/历史）"
+                    : "折叠工具区（把整个面板高度让给对话）");
+            headerExpandedPanel.setVisible(!collapsed);
+            revalidate();
+            repaint();
+        });
+        bar.add(collapseButton, BorderLayout.WEST);
+
+        JPanel info = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        info.setOpaque(false);
         targetLabel = new JLabel("未选择请求 — 自由对话模式");
         UIStyles.setFont(targetLabel, 12f, Font.BOLD);
         targetLabel.setForeground(new Color(0x2a7de1));
-        bar.add(targetLabel);
+        info.add(targetLabel);
+        phaseLabel = new JLabel("阶段：空闲");
+        UIStyles.setFont(phaseLabel, 11f, Font.PLAIN);
+        phaseLabel.setForeground(UIStyles.hintColor());
+        info.add(phaseLabel);
+        roundLabel = new JLabel("轮次：0");
+        UIStyles.setFont(roundLabel, 11f, Font.PLAIN);
+        roundLabel.setForeground(UIStyles.hintColor());
+        info.add(roundLabel);
+        tokenLabel = new JLabel(TokenUsageTracker.instance().snapshot().summary());
+        UIStyles.setFont(tokenLabel, 10f, Font.PLAIN);
+        tokenLabel.setForeground(UIStyles.hintColor());
+        info.add(tokenLabel);
+        bar.add(info, BorderLayout.CENTER);
+        return bar;
+    }
+
+    /** 可折叠的控件行：目标详情 / 自动继续 / 计划模式 / 历史 / 清空。 */
+    private JPanel buildExpandedPanel() {
+        JPanel row = new JPanel();
+        row.setLayout(new BoxLayout(row, BoxLayout.X_AXIS));
+        row.setOpaque(false);
+        row.setBorder(new EmptyBorder(0, 22, 2, 4));
+
         targetDetailLabel = new JLabel("");
         UIStyles.setFont(targetDetailLabel, 11f, Font.PLAIN);
         targetDetailLabel.setForeground(UIStyles.hintColor());
-        bar.add(targetDetailLabel);
-        bar.addSeparator();
-
-        phaseLabel = new JLabel("阶段：空闲");
-        UIStyles.setFont(phaseLabel, 12f, Font.BOLD);
-        phaseLabel.setForeground(new Color(0x2a7de1));
-        bar.add(phaseLabel);
-        roundLabel = new JLabel("轮次：0");
-        UIStyles.setFont(roundLabel, 11f, Font.PLAIN);
-        bar.add(roundLabel);
-        bar.addSeparator();
+        targetDetailLabel.setAlignmentY(Component.CENTER_ALIGNMENT);
+        row.add(targetDetailLabel);
+        row.add(Box.createHorizontalStrut(10));
 
         autoContinueCheckBox = new JCheckBox("自动继续", true);
-        autoContinueCheckBox.setToolTipText("每轮结束后由整理对象判断是否继续；关闭后只整理入图并出报告");
+        autoContinueCheckBox.setToolTipText("每轮结束后由整理 agent 判断是否继续；关闭后只整理入图并出报告");
         autoContinueCheckBox.setFocusable(false);
+        autoContinueCheckBox.setAlignmentY(Component.CENTER_ALIGNMENT);
         UIStyles.setFont(autoContinueCheckBox, 11f, Font.PLAIN);
         autoContinueCheckBox.addActionListener(e -> {
             if (autoContinueSetter != null) autoContinueSetter.accept(autoContinueCheckBox.isSelected());
             updateLoopPolicyLabel();
         });
-        bar.add(autoContinueCheckBox);
+        row.add(autoContinueCheckBox);
+        row.add(Box.createHorizontalStrut(6));
 
         planModeComboBox = new JComboBox<>(new String[]{"普通", "计划模式"});
         planModeComboBox.setToolTipText("计划模式：Agent 先只读调查并写计划，提交 plan_exit 时请求批准");
+        planModeComboBox.setAlignmentY(Component.CENTER_ALIGNMENT);
         planModeComboBox.addActionListener(e -> handlePlanModeChanged());
-        bar.add(planModeComboBox);
-        bar.addSeparator();
+        row.add(planModeComboBox);
+        row.add(Box.createHorizontalStrut(6));
 
         runHistoryCombo = new JComboBox<>();
-        runHistoryCombo.setPreferredSize(new Dimension(240, runHistoryCombo.getPreferredSize().height));
+        runHistoryCombo.setMaximumSize(new Dimension(240, 24));
+        runHistoryCombo.setPreferredSize(new Dimension(240, 24));
+        runHistoryCombo.setAlignmentY(Component.CENTER_ALIGNMENT);
         runHistoryCombo.addActionListener(e -> {
             if (updatingRunHistory) return;
             if (isAnalyzing) {
@@ -232,18 +290,20 @@ public class ActiveAnalysisPanel extends JPanel {
                 exitHistoryView();
             }
         });
-        bar.add(runHistoryCombo);
+        row.add(runHistoryCombo);
+        row.add(Box.createHorizontalStrut(6));
 
         JButton clearHistoryButton = new JButton("清空");
         clearHistoryButton.setToolTipText("清空主动分析历史");
+        clearHistoryButton.setAlignmentY(Component.CENTER_ALIGNMENT);
         UIStyles.styleSecondary(clearHistoryButton);
         clearHistoryButton.addActionListener(e -> {
             com.ai.analyzer.core.AnalysisRunStore.getInstance().clear();
             refreshRunHistory();
         });
-        bar.add(clearHistoryButton);
-
-        return bar;
+        row.add(clearHistoryButton);
+        row.add(Box.createHorizontalGlue());
+        return row;
     }
 
     private JPanel buildComposer() {
@@ -271,18 +331,14 @@ public class ActiveAnalysisPanel extends JPanel {
         panel.add(promptScroll, BorderLayout.CENTER);
 
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        right.setOpaque(false);
         interjectButton = new JButton("插话");
-        interjectButton.setToolTipText("不打断当前分析，向正在运行的 agent 补充一条消息");
+        interjectButton.setToolTipText("不打断当前分析，向正在运行的 agent 补充一条消息（Enter 发送 · Shift+Enter 换行）");
         UIStyles.styleSecondary(interjectButton);
         interjectButton.setEnabled(false);
-        interjectButton.setToolTipText("不打断当前分析，向正在运行的 agent 补充一条消息（Enter 发送 · Shift+Enter 换行）");
         interjectButton.addActionListener(e -> sendFromComposer());
         right.add(interjectButton);
-        tokenLabel = new JLabel(TokenUsageTracker.instance().snapshot().summary());
-        UIStyles.setFont(tokenLabel, 10f, Font.PLAIN);
-        tokenLabel.setForeground(UIStyles.hintColor());
-        right.add(tokenLabel);
-        panel.add(right, BorderLayout.SOUTH);
+        panel.add(right, BorderLayout.EAST);
         return panel;
     }
 
@@ -475,10 +531,18 @@ public class ActiveAnalysisPanel extends JPanel {
                         String result = block.text();
                         recordRunAsync(method, url, userPrompt, result);
                         java.util.function.Consumer<AgentApiClient.CompletedRun> cb = onRunCompleted;
-                        if (cb != null && apiClient != null) {
+                        // 整理 agent 只处理真实渗透测试轮（有绑定请求）；自由对话/
+                        // 提问轮交给它只会触发与用户意图无关的全站侦察，纯属浪费 token。
+                        // hasRequest == false 的轮不交接，整理循环直接跳过。
+                        if (cb != null && apiClient != null && hasRequest) {
                             AgentApiClient.CompletedRun completedRun = apiClient.getLastCompletedRun();
                             if (completedRun != null) {
                                 SwingUtilities.invokeLater(() -> cb.accept(completedRun));
+                            } else if (nextRunAuto) {
+                                // 自动继续轮必然 hasRequest；拿不到交接说明本轮被取消/出错，
+                                // 明确收掉整理循环，避免挂着「整理中」假状态
+                                SwingUtilities.invokeLater(() -> timeline.addSystem(
+                                        "本轮未产生交接信息，自动继续已终止"));
                             }
                         }
                     }
