@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.5.0 - 2026-11-16
+
+### Added
+- **三 agent 架构**：主动扫描、侧栏聊天、证据整理 agent 各自独立运行时/会话/单航班，MCP 共享连接改为引用计数
+- **会话式主动 UI**（Claude Code 风格）：消息卡片时间线、内联工具调用行、阶段/轮次/自动继续状态条、历史分析回看（快照恢复）
+- **运行中插话**：分析进行时按 Enter/插话按钮向 agent 补充指令（AgentScope interrupt 语义实测适配 + 队列补投）
+- **证据整理 agent**（organizer）：轮末整理入图、覆盖检查、自动继续/出报告，POC 送 Repeater、脚本存 pocs/
+- **知识图谱增强**：主动 agent 只读（GraphReadTool），笔记/评估/事实锚点统一归整理 agent 写入；节点详情侧栏（Agent 判断/参数/邻居统计/笔记编辑）
+- **配置快照分发**（AgentConnectionConfig）取代 4 处手抄 setter
+- **缓存管理页**：Agent 记忆/分析历史/报告与 POC 可清理，释放量按实际删除计
+- 右键「发送到AI分析」在扫描未启动时自动启动
+- 被动扫描流量来源可选（Proxy/Repeater/Scanner/Intruder/Extensions）
+- 插件卸载时释放 MCP 连接、审计队列与运行时
+- AgentScope 升级到 2.0.5
+
+### Fixed
+- 大响应指纹探测只取 4KB，防止大文件 OOM（Error 不被 catch 捕获）
+- `graph_record_analysis_fact` 唯一 sid：不再把所有分析挤成同一个节点
+- 人工新增节点边方向与 agent 创建边一致（站点不再被嵌到新节点下）
+- 笔记编辑递增版本并广播，增量读取方能看到更正
+- 旧 Notebook .md 一次性迁移改为「无 root 时延迟重试」
+- host 大小写归一（防同一站点拆成两个 root）
+- 被动批次分析补上 token 预算闸门；startPassiveScan 先起 producer，失败可回滚
+- 自定义 MCP JSON 坏值不再击穿插件加载；Burp MCP 走引用计数并把 token 纳入共享 key；stdio env 真正传给子进程
+- fetch_url 堵住 IPv4-mapped IPv6 内网绕过；BatchFuzzTool JSON 反斜杠转义；ChatPanel 调试日志封顶 300KB；API 档案删除立即落盘
+- DeepSeek：历史轮次 reasoning_content 补空串，长会话不再 400
+
 ## v1.4.0 - 2026-07-19
 
 ### Changed
