@@ -1,5 +1,6 @@
 package com.ai.analyzer.agent.runtime;
 
+import com.ai.analyzer.util.AppLogBuffer;
 import com.ai.analyzer.util.DebugContext;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.event.AgentEvent;
@@ -104,6 +105,8 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
     private volatile RequireConfirmHandler confirmHandler;
     /** 累积 ToolCallDeltaEvent 的部分参数字符串，key=toolCallId，在 ToolCallEndEvent 或 ToolResultStartEvent 时取用 */
     private final java.util.concurrent.ConcurrentHashMap<String, StringBuilder> toolCallArgBuffers = new java.util.concurrent.ConcurrentHashMap<>();
+    /** 已完成的工具参数摘要（key=toolCallId），供 TOOL_END 补参数上下文 */
+    private final java.util.concurrent.ConcurrentHashMap<String, String> pendingToolArgs = new java.util.concurrent.ConcurrentHashMap<>();
     /** 最近一次 interject 是否已被本轮消费（AgentResultEvent INTERRUPTED 收尾） */
     private volatile boolean interjectConsumed;
     /** 当前运行轮的 sessionId（chat 入口设置，interject 需要 slotKey(userId, sessionId) 定位会话槽） */
@@ -566,19 +569,26 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
             // 工具调用参数完成：从 buffer 取出并重置，以便 ToolResultStartEvent 取用
             StringBuilder buf = toolCallArgBuffers.remove(e.getToolCallId());
             String args = buf != null ? buf.toString() : "";
-            if (!args.isEmpty() && !"{}".equals(args)) {
-                String summary = args.length() > 200 ? args.substring(0, 200) + "…" : args;
-                com.ai.analyzer.util.AppLogBuffer.tool("AgentScopeAgentRuntime", e.getToolCallName() + " 参数: " + summary);
-                // 不要把参数摘要作为 textDelta 发给上层：它会混进 assistant 文本，
-                // 污染侧栏摘要（约定“纯文本结论，不含工具轨迹”）与整理 agent 的交接内容
+            // 参数随 TOOL_START 语义一起投递给 UI（模型行为流）：工具行现在要显示
+            // 「在什么时候对什么参数调了什么」。日志仍写 200 字符摘要。
+            if (e.getToolCallName() != null) {
+                String argSummary = args.isBlank() || "{}".equals(args)
+                        ? "" : (args.length() > 400 ? args.substring(0, 400) + "…" : args);
+                if (!argSummary.isEmpty()) {
+                    AppLogBuffer.tool("AgentScopeAgentRuntime", e.getToolCallName() + " 参数: " + argSummary);
+                }
+                pendingToolArgs.put(e.getToolCallId(), argSummary);
+                listener.onEvent(RuntimeEvent.toolStart(e.getToolCallName(), argSummary));
             }
         } else if (event instanceof ToolCallStartEvent e) {
-            com.ai.analyzer.util.AppLogBuffer.tool("AgentScopeAgentRuntime", "调用工具: " + e.getToolCallName());
-            listener.onEvent(RuntimeEvent.toolStart(e.getToolCallName(), null));
+            AppLogBuffer.tool("AgentScopeAgentRuntime", "调用工具: " + e.getToolCallName());
+            // 参数此时通常还在流式累积（ToolCallDeltaEvent），先投递空参数的开始事件，
+            // ToolCallEndEvent 会带完整参数再投一次（UI 端按工具名更新同一行）
+            listener.onEvent(RuntimeEvent.toolStart(e.getToolCallName(), ""));
             DebugContext.log("AgentScopeAgentRuntime", "tool_start", Map.of("tool", e.getToolCallName()));
         } else if (event instanceof ToolResultEndEvent e) {
             boolean failed = e.getState() != ToolResultState.SUCCESS;
-            com.ai.analyzer.util.AppLogBuffer.tool("AgentScopeAgentRuntime",
+            AppLogBuffer.tool("AgentScopeAgentRuntime",
                     e.getToolCallName() + " → " + (failed ? "失败" : "成功") + " (" + e.getState() + ")");
             listener.onEvent(RuntimeEvent.toolEnd(e.getToolCallName(), null, failed, -1));
             DebugContext.log("AgentScopeAgentRuntime", "tool_end", Map.of("tool", e.getToolCallName(), "state", String.valueOf(e.getState())));

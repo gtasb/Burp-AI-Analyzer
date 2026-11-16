@@ -28,6 +28,8 @@ public class AgentConfig {
     
     // ========== MCP 配置 ==========
     private boolean enableMcp = false;
+    /** false = 屏蔽 Burp MCP 发包工具（http_send_request 系列默认不可见） */
+    private boolean enableBurpMcpSendTools = false;
     private String burpMcpUrl = "http://127.0.0.1:9876/";
     private String burpMcpAuthorization = "";
 
@@ -215,6 +217,8 @@ public class AgentConfig {
     public void setMaxTokens(String maxTokens) { this.maxTokens = maxTokens != null ? maxTokens : ""; }
     public boolean isEnableMcp() { return enableMcp; }
     public void setEnableMcp(boolean enableMcp) { this.enableMcp = enableMcp; }
+    public boolean isEnableBurpMcpSendTools() { return enableBurpMcpSendTools; }
+    public void setEnableBurpMcpSendTools(boolean v) { this.enableBurpMcpSendTools = v; }
     public String getBurpMcpUrl() { return burpMcpUrl; }
     public void setBurpMcpUrl(String burpMcpUrl) { this.burpMcpUrl = burpMcpUrl != null ? burpMcpUrl : ""; }
     public boolean isEnableRagMcp() { return enableRagMcp; }

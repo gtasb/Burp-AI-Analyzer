@@ -270,6 +270,7 @@ public class AgentApiClient {
         setGoogleSearchApiKey(snapshot.googleSearchApiKey());
         setGoogleSearchCsi(snapshot.googleSearchCsi());
         setEnableMcp(snapshot.enableMcp());
+        setEnableBurpMcpSendTools(snapshot.enableBurpMcpSendTools());
         setBurpMcpUrl(snapshot.burpMcpUrl());
         setBurpMcpAuthorization(snapshot.burpMcpAuthorization());
         setEnableRagMcp(snapshot.enableRagMcp());
@@ -310,8 +311,15 @@ public class AgentApiClient {
 
     /**
      * 注册模型行为回调（thinking 增量 / 工具调用开始与结束）。
-     * 消息格式 {@code TYPE|detail}：THINKING / TOOL_START / TOOL_END。
-     * 与 {@link #setSystemNoticeConsumer} 一样由 UI 在流式会话期间设置、结束后清除。
+     * 消息格式 {@code TYPE|字段1|字段2|…}（按事件类型字段数不同）：
+     * <ul>
+     *   <li>{@code THINKING|增量文本}</li>
+     *   <li>{@code TOOL_START|工具名|参数摘要}（参数可为空）</li>
+     *   <li>{@code TOOL_END|工具名|failed|ok}（成功）或 {@code TOOL_END|工具名|failed|failed}（失败）</li>
+     * </ul>
+     * 字段内不含 {@code |}：工具名与参数在投递前已剥掉该字符（参数为 JSON 摘要，
+     * 替换为 {\@literal /}）。与 {@link #setSystemNoticeConsumer} 一样由 UI 在流式
+     * 会话期间设置、结束后清除。
      */
     public void setModelBehaviorConsumer(Consumer<String> modelBehaviorConsumer) {
         modelBehaviorConsumers.clear();
@@ -332,11 +340,16 @@ public class AgentApiClient {
         modelBehaviorConsumers.remove(consumer);
     }
 
-    private void emitModelBehavior(String type, String detail) {
-        if (detail == null) return;
+    private void emitModelBehavior(String type, String... fields) {
+        if (fields == null || fields.length == 0) return;
+        StringBuilder sb = new StringBuilder(type);
+        for (String f : fields) {
+            sb.append('|').append(f == null ? "" : f.replace('|', '/'));
+        }
+        String message = sb.toString();
         for (Consumer<String> consumer : modelBehaviorConsumers) {
             try {
-                consumer.accept(type + "|" + detail);
+                consumer.accept(message);
             } catch (Exception e) {
                 logDebug("模型行为回调失败: " + e.getMessage());
             }
@@ -470,6 +483,15 @@ public class AgentApiClient {
             config.setEnableMcp(enableMcp);
             invalidateAgentScopeRuntime();
             logInfo("MCP 工具调用已" + (enableMcp ? "启用" : "禁用"));
+        }
+    }
+
+    /** false = 屏蔽 Burp MCP 发包工具（http_send_request 系列经常 60s 超时）。 */
+    public void setEnableBurpMcpSendTools(boolean enableBurpMcpSendTools) {
+        if (config.isEnableBurpMcpSendTools() != enableBurpMcpSendTools) {
+            config.setEnableBurpMcpSendTools(enableBurpMcpSendTools);
+            invalidateAgentScopeRuntime();
+            logInfo("Burp MCP 发包工具已" + (enableBurpMcpSendTools ? "放行" : "屏蔽"));
         }
     }
 
@@ -800,7 +822,11 @@ public class AgentApiClient {
             if (config.hasAnyMcpEnabled()) {
                 // Burp MCP
                 if (config.isEnableMcp() && config.getBurpMcpUrl() != null && !config.getBurpMcpUrl().trim().isEmpty()) {
-                    AgentScopeMcpManager.registerBurpMcp(asToolkit, config.getBurpMcpUrl(), config.getBurpMcpAuthorization(), "active-mcp");
+                    // 发包工具黑名单：enableBurpMcpSendTools=false（默认）时屏蔽 http_send_request 等系列
+                    AgentScopeMcpManager.registerBurpMcp(asToolkit, config.getBurpMcpUrl(),
+                            config.getBurpMcpAuthorization(), "active-mcp",
+                            config.isEnableBurpMcpSendTools() ? java.util.Set.of()
+                                    : AgentScopeMcpManager.BURP_SEND_TOOLS);
                 }
                 // RAG MCP
                 if (config.isEnableRagMcp()) {
@@ -1279,13 +1305,10 @@ public class AgentApiClient {
                                 AppLogBuffer.tool("AgentApiClient", event.toolName() != null ? event.toolName() : "");
                                 String toolName = event.toolName();
                                 if (toolName != null && !toolName.isEmpty()) {
-                                    // 工具可视化唯一通道是 emitModelBehavior（TOOL_START 事件）：
-                                    // 主动面板渲染成内联工具行，ChatPanel 渲染进调试日志。
-                                    // 历史上同时往文本流塞 [TOOL_BLOCK] 标记是旧「模型行为可视化」
-                                    // 的残留——AssistantBlock 流式期间是纯文本追加，标记只会在
-                                    // 收尾重渲染时变成不可解析的乱码块，且污染 run 历史与
-                                    // 整理 agent 的交接文本。已删除。
-                                    emitModelBehavior("TOOL_START", toolName);
+                                    // 工具可视化唯一通道：TOOL_START 事件（含参数摘要）。
+                                    // 主动面板渲染成带参数的工具行，ChatPanel 渲染进调试日志。
+                                    emitModelBehavior("TOOL_START", toolName,
+                                            event.toolArgs() == null ? "" : event.toolArgs());
                                 }
                                 DebugContext.log("AgentApiClient", "tool_start",
                                         java.util.Map.of("tool", toolName != null ? toolName : "null"));
@@ -1298,8 +1321,8 @@ public class AgentApiClient {
                                 if (toolFailed) {
                                     onChunk.accept("\n⚠️ 工具执行失败: " + escapeHtml(toolName != null ? toolName : "unknown") + "\n");
                                 }
-                                emitModelBehavior("TOOL_END", (toolName != null ? toolName : "unknown")
-                                        + (toolFailed ? "|failed" : "|ok"));
+                                emitModelBehavior("TOOL_END", toolName != null ? toolName : "unknown",
+                                        "failed", String.valueOf(toolFailed));
                                 DebugContext.log("AgentApiClient", "tool_end",
                                         java.util.Map.of("tool", toolName != null ? toolName : "null", "failed", String.valueOf(toolFailed)));
                             }

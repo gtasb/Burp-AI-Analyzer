@@ -44,6 +44,8 @@ public class PluginSettings implements Serializable {
     private String userPrompt;
     private boolean enableSearch = true; // 默认启用搜索
     private boolean enableMcp = false; // 默认禁用 Burp MCP 工具调用
+    /** false = 屏蔽 Burp MCP 发包工具（http_send_request 等经常 60s 超时挂死） */
+    private boolean enableBurpMcpSendTools = false;
     private String BurpMcpUrl = "http://127.0.0.1:9876/"; // Burp MCP 服务器地址
     private String burpMcpAuthorization = "";
     private boolean enableRagMcp = false; // 默认禁用 RAG MCP 工具调用
@@ -472,6 +474,8 @@ public class PluginSettings implements Serializable {
     public void setEnableMcp(boolean enableMcp) {
         this.enableMcp = enableMcp;
     }
+    public boolean isEnableBurpMcpSendTools() { return enableBurpMcpSendTools; }
+    public void setEnableBurpMcpSendTools(boolean v) { this.enableBurpMcpSendTools = v; }
     
     public String getMcpUrl() {
         return BurpMcpUrl;

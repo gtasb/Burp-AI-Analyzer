@@ -58,6 +58,7 @@ public class SettingsPanel {
     private final List<PluginSettings.ApiProfile> apiProfiles = new ArrayList<>();
     private JCheckBox enableSearchCheckBox;
     private JCheckBox enableMcpCheckBox;
+    private JCheckBox enableBurpMcpSendToolsCheckBox;
     private JTextField BurpMcpUrlField;
     private JTextField burpMcpAuthorizationField;
     private JCheckBox enableRagMcpCheckBox;
@@ -539,6 +540,7 @@ public class SettingsPanel {
     }
     public boolean isSearchEnabled() { return enableSearchCheckBox.isSelected(); }
     public boolean isMcpEnabled() { return enableMcpCheckBox.isSelected(); }
+    public boolean isBurpMcpSendToolsEnabled() { return enableBurpMcpSendToolsCheckBox != null && enableBurpMcpSendToolsCheckBox.isSelected(); }
     public String getBurpMcpUrl() { return BurpMcpUrlField.getText().trim(); }
     public String getBurpMcpAuthorization() { return burpMcpAuthorizationField != null ? burpMcpAuthorizationField.getText().trim() : ""; }
     public boolean isRagMcpEnabled() { return enableRagMcpCheckBox.isSelected(); }
@@ -1461,6 +1463,21 @@ public class SettingsPanel {
         panel.add(enableMcpCheckBox, gbc);
 
         row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 1;
+        gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("发包工具:"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        enableBurpMcpSendToolsCheckBox = new JCheckBox("允许 agent 使用 http_send_request 等发包工具", false);
+        enableBurpMcpSendToolsCheckBox.setToolTipText(
+                "<html>默认<b>不勾选 = 屏蔽</b>：http_send_request / http_send_requests_parallel / http_race<br>"
+                        + "等 Burp MCP 发包工具经常 60 秒超时挂死。屏蔽后 agent 改用 curl_send_request<br>"
+                        + "或 execute+curl 等可靠通道发请求（日志与 Repeater 等只读工具不受影响）。</html>");
+        enableBurpMcpSendToolsCheckBox.addActionListener(e -> {
+            apiClient.setEnableBurpMcpSendTools(enableBurpMcpSendToolsCheckBox.isSelected());
+        });
+        panel.add(enableBurpMcpSendToolsCheckBox, gbc);
+
+        row++;
         gbc.gridx = 0; gbc.gridy = row; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
         panel.add(new JLabel("MCP 地址:"), gbc);
         gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
@@ -2250,8 +2267,11 @@ public class SettingsPanel {
             // 设置直接查找知识库选项
             settings.setEnableFileSystemAccess(enableFileSystemAccessCheckBox.isSelected());
 
-            // 设置前置扫描器选项
+            // 前置扫描器选项
             settings.setEnablePreScanFilter(enablePreScanCheckbox != null && enablePreScanCheckbox.isSelected());
+
+            // Burp MCP 发包工具开关（false = 屏蔽 http_send_request 系列）
+            settings.setEnableBurpMcpSendTools(isBurpMcpSendToolsEnabled());
 
             // 证据整理 / 自动继续
             settings.setOrganizerAutoContinue(isOrganizerAutoContinue());
@@ -2584,6 +2604,10 @@ public class SettingsPanel {
         if (burpMcpAuthorizationField != null) {
             burpMcpAuthorizationField.setText(settings.getBurpMcpAuthorization());
             burpMcpAuthorizationField.setEnabled(settings.isEnableMcp());
+        }
+        if (enableBurpMcpSendToolsCheckBox != null) {
+            enableBurpMcpSendToolsCheckBox.setSelected(settings.isEnableBurpMcpSendTools());
+            apiClient.setEnableBurpMcpSendTools(settings.isEnableBurpMcpSendTools());
         }
 
         // RAG MCP 配置

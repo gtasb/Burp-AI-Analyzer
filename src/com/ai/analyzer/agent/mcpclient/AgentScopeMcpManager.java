@@ -394,8 +394,25 @@ public class AgentScopeMcpManager {
         return registerBurpMcp(toolkit, burpMcpUrl, authorization, "burp-mcp");
     }
 
+    /**
+     * Burp MCP 的发包工具黑名单（可经 blockedTools 参数清空）：
+     * http_send_request / http_send_requests_parallel / http_race 经常性 60 秒
+     * 超时挂死（Reactor 无 fallback），屏蔽后 agent 改走 curl_send_request /
+     * execute+curl 等可靠通道。
+     */
+    public static final java.util.Set<String> BURP_SEND_TOOLS = java.util.Set.of(
+            "http_send_request", "http_send_requests_parallel", "http_race",
+            "http_send_request_chain", "http_send_raw_bytes");
+
     public static List<McpClientWrapper> registerBurpMcp(
             Toolkit toolkit, String burpMcpUrl, String authorization, String logSource) {
+        return registerBurpMcp(toolkit, burpMcpUrl, authorization, logSource, BURP_SEND_TOOLS);
+    }
+
+    /** 带发包工具黑名单的注册：blockedTools 为空集合 = 全部放行。 */
+    public static List<McpClientWrapper> registerBurpMcp(
+            Toolkit toolkit, String burpMcpUrl, String authorization, String logSource,
+            java.util.Set<String> blockedTools) {
 
         List<McpClientWrapper> clients = new ArrayList<>();
         if (burpMcpUrl == null || burpMcpUrl.trim().isEmpty()) return clients;
@@ -422,7 +439,11 @@ public class AgentScopeMcpManager {
             }
             boolean registered = false;
             try {
-                toolkit.registerMcpClient(new LoggingMcpClientWrapper(logSource, client)).block();
+                // 发包工具黑名单（BURP_SEND_TOOLS）：默认屏蔽经常 60s 超时的
+                // http_send_request 系列，迫使 agent 走 curl_send_request 等可靠通道
+                McpClientWrapper wrapped = (blockedTools != null && !blockedTools.isEmpty())
+                        ? new ToolFilteringWrapper(client, blockedTools) : client;
+                toolkit.registerMcpClient(new LoggingMcpClientWrapper(logSource, wrapped)).block();
                 registered = true;
             } finally {
                 if (!registered) {

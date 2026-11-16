@@ -277,6 +277,75 @@ public class ChatTimeline extends JPanel {
 
     /** 主动分析消息：流式 Markdown + 思考行 + 工具调用行。 */
     public static final class AssistantBlock {
+
+        /**
+         * 单次工具调用的行：状态 + 工具名 + 参数摘要 + 结束时间。
+         * 全部纯文本（无 ✓/▸ 等符号字形——部分字体缺字渲染成方框），
+         * 参数长文换行显示。
+         */
+        private static final class ToolRow extends JPanel {
+            final String toolName;
+            private final JLabel status = new JLabel();
+            private final JLabel name = new JLabel();
+            private final JTextArea argsArea = new JTextArea();
+            private final JLabel time = new JLabel();
+
+            ToolRow(String toolName) {
+                super(new BorderLayout(4, 0));
+                this.toolName = toolName;
+                setOpaque(false);
+                setBorder(new EmptyBorder(1, 6, 1, 2));
+
+                JPanel head = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+                head.setOpaque(false);
+                status.setFont(new Font("Microsoft YaHei", Font.BOLD, 11));
+                name.setFont(new Font("Microsoft YaHei", Font.BOLD, 11));
+                UIStyles.setFont(name, 11f, Font.BOLD);
+                name.setText(toolName);
+                head.add(status);
+                head.add(name);
+
+                argsArea.setEditable(false);
+                argsArea.setLineWrap(true);
+                argsArea.setWrapStyleWord(true);
+                argsArea.setOpaque(false);
+                UIStyles.setFont(argsArea, 11f, Font.PLAIN);
+                argsArea.setForeground(UIStyles.hintColor());
+                argsArea.setBorder(new EmptyBorder(0, 2, 0, 0));
+
+                time.setFont(new Font("Microsoft YaHei", Font.PLAIN, 10));
+                time.setForeground(UIStyles.hintColor());
+
+                JPanel top = new JPanel(new BorderLayout(4, 0));
+                top.setOpaque(false);
+                top.add(head, BorderLayout.WEST);
+                top.add(time, BorderLayout.EAST);
+
+                setLayout(new javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS));
+                top.setAlignmentX(Component.LEFT_ALIGNMENT);
+                argsArea.setAlignmentX(Component.LEFT_ALIGNMENT);
+                add(top);
+                add(argsArea);
+            }
+
+            void update(String args, boolean running, boolean failed) {
+                status.setText(running ? "调用中" : failed ? "失败" : "完成");
+                status.setForeground(failed ? UIStyles.DANGER : running ? UIStyles.hintColor() : UIStyles.textColor());
+                name.setForeground(failed ? UIStyles.DANGER : UIStyles.textColor());
+                if (args != null && !args.isBlank()) {
+                    String compact = args.trim();
+                    if (compact.length() > 600) compact = compact.substring(0, 599) + "…";
+                    argsArea.setText(compact);
+                    argsArea.setVisible(true);
+                }
+                if (!running) {
+                    time.setText(LocalTime.now().format(TIME));
+                }
+                revalidate();
+                repaint();
+            }
+        }
+
         private final Card card;
         private final JTextPane body = markdownPane();
         private final JLabel thinking = new JLabel(" ");
@@ -342,13 +411,31 @@ public class ChatTimeline extends JPanel {
             thinking.setText(compact.isEmpty() ? " " : "思考：" + compact);
         }
 
-        public void addTool(String name, boolean running) {
-            String label = (running ? "▸ " : "✓ ") + (name == null ? "tool" : name);
-            JLabel row = new JLabel(label);
-            UIStyles.setFont(row, 11f, Font.PLAIN);
-            row.setForeground(running ? UIStyles.hintColor() : UIStyles.textColor());
-            row.setBorder(new EmptyBorder(1, 4, 1, 4));
-            tools.add(row);
+        /**
+         * 工具调用行：纯文本标记（运行中/完成/失败），同一次调用的 START（含参数）
+         * 与 END 更新同一行，参数摘要跟在工具名后面，长参数换行截断。
+         */
+        public void addTool(String name, String args, boolean running) {
+            addTool(name, args, running, false);
+        }
+
+        public void addTool(String name, String args, boolean running, boolean failed) {
+            String tool = name == null || name.isBlank() ? "tool" : name;
+            // 同名工具先复用已有行（一次调用的 START/END 同行更新）；
+            // 并行多次同名调用时退化为追加新行
+            ToolRow row = null;
+            for (int i = tools.getComponentCount() - 1; i >= 0; i--) {
+                java.awt.Component c = tools.getComponent(i);
+                if (c instanceof ToolRow tr && tr.toolName.equals(tool)) {
+                    row = tr;
+                    break;
+                }
+            }
+            if (row == null) {
+                row = new ToolRow(tool);
+                tools.add(row);
+            }
+            row.update(args, running, failed);
             tools.revalidate();
             tools.repaint();
         }

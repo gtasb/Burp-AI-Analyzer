@@ -331,13 +331,13 @@ public class ChatPanel extends JPanel {
     }
 
     /**
-     * 模型行为流：TYPE|detail（THINKING / TOOL_START / TOOL_END）
+     * 模型行为流：TYPE|字段…（THINKING / TOOL_START|名|参数 / TOOL_END|名|failed|布尔）
      */
     private void handleModelBehavior(String message) {
         if (message == null || message.isEmpty()) return;
-        int sep = message.indexOf('|');
-        String type = sep >= 0 ? message.substring(0, sep) : "OTHER";
-        String detail = sep >= 0 ? message.substring(sep + 1) : message;
+        String[] parts = message.split("\\|", -1);
+        String type = parts[0];
+        String detail = parts.length > 1 ? parts[1] : "";
         String timestamp = java.time.LocalDateTime.now().format(
                 java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
         switch (type) {
@@ -357,19 +357,25 @@ public class ChatPanel extends JPanel {
             }
             case "TOOL_START" -> {
                 flushThinking();
-                debugLog(timestamp, "🔧 调用工具: " + detail);
+                String args = parts.length > 2 ? parts[2] : "";
+                debugLog(timestamp, "调用工具: " + detail
+                        + (args.isBlank() ? "" : "  参数: " + abbreviateForLog(args)));
             }
             case "TOOL_END" -> {
                 flushThinking();
-                boolean failed = detail.endsWith("|failed");
-                String tool = failed ? detail.substring(0, detail.length() - 7) : detail;
-                debugLog(timestamp, (failed ? "⚠️ 工具失败: " : "✅ 工具完成: ") + tool);
+                boolean failed = parts.length > 3 && Boolean.parseBoolean(parts[3]);
+                debugLog(timestamp, (failed ? "工具失败: " : "工具完成: ") + detail);
             }
             default -> {
                 flushThinking();
                 debugLog(timestamp, detail);
             }
         }
+    }
+
+    private static String abbreviateForLog(String s) {
+        if (s == null) return "";
+        return s.length() <= 300 ? s : s.substring(0, 299) + "…";
     }
 
     /** 把累积的思考缓冲渲染为一行（首次追加，后续整行重写），不刷 Burp Output */

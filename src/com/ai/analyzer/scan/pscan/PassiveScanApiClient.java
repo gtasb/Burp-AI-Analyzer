@@ -78,6 +78,7 @@ public class PassiveScanApiClient {
     private String googleSearchCsi = "";
     @Getter
     private boolean enableMcp = false;
+    private boolean enableBurpMcpSendTools = false;
     @Getter
     private String BurpMcpUrl = "http://127.0.0.1:9876/";
     @Getter
@@ -208,6 +209,7 @@ public class PassiveScanApiClient {
         setGoogleSearchApiKey(snapshot.googleSearchApiKey());
         setGoogleSearchCsi(snapshot.googleSearchCsi());
         setEnableMcp(snapshot.enableMcp());
+        setEnableBurpMcpSendTools(snapshot.enableBurpMcpSendTools());
         setBurpMcpUrl(snapshot.burpMcpUrl());
         setBurpMcpAuthorization(snapshot.burpMcpAuthorization());
         setEnableRagMcp(snapshot.enableRagMcp());
@@ -300,6 +302,10 @@ public class PassiveScanApiClient {
 
     public void setEnableMcp(boolean v) {
         if (v != this.enableMcp) { this.enableMcp = v; invalidateAgentScopeRuntime(); }
+    }
+
+    public void setEnableBurpMcpSendTools(boolean v) {
+        if (v != this.enableBurpMcpSendTools) { this.enableBurpMcpSendTools = v; invalidateAgentScopeRuntime(); }
     }
 
     public void setBurpMcpUrl(String v) {
@@ -521,7 +527,9 @@ public class PassiveScanApiClient {
             // 3. 注册 MCP 客户端
             if (hasAnyMcpEnabled()) {
                 if (enableMcp && BurpMcpUrl != null && !BurpMcpUrl.trim().isEmpty()) {
-                    AgentScopeMcpManager.registerBurpMcp(asToolkit, BurpMcpUrl, burpMcpAuthorization, "passive-mcp");
+                    // 发包工具黑名单：默认屏蔽经常 60s 超时的 http_send_request 系列
+                    AgentScopeMcpManager.registerBurpMcp(asToolkit, BurpMcpUrl, burpMcpAuthorization, "passive-mcp",
+                            enableBurpMcpSendTools ? java.util.Set.of() : AgentScopeMcpManager.BURP_SEND_TOOLS);
                 }
                 if (enableRagMcp) {
                     AgentScopeMcpManager.registerRagMcp(asToolkit, ragMcpUrl, "passive-mcp");
@@ -666,6 +674,7 @@ public class PassiveScanApiClient {
         this.googleSearchApiKey = settings.getGoogleSearchApiKey();
         this.googleSearchCsi = settings.getGoogleSearchCsi();
         this.enableMcp = settings.isEnableMcp();
+        this.enableBurpMcpSendTools = settings.isEnableBurpMcpSendTools();
         this.BurpMcpUrl = settings.getMcpUrl();
         this.burpMcpAuthorization = settings.getBurpMcpAuthorization();
         this.enableRagMcp = settings.isEnableRagMcp();

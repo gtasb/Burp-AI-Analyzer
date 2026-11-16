@@ -148,14 +148,20 @@ public final class OrganizerCoordinator {
         StringBuilder organizerText = new StringBuilder();
         java.util.function.Consumer<String> behavior = msg -> {
             if (msg == null) return;
-            int sep = msg.indexOf('|');
-            String type = sep >= 0 ? msg.substring(0, sep) : "OTHER";
-            String detail = sep >= 0 ? msg.substring(sep + 1) : msg;
+            String[] parts = msg.split("\\|", -1);
+            String type = parts[0];
             switch (type) {
-                case "TOOL_START" -> eventSink.accept("调用工具: " + detail);
-                case "TOOL_END" -> eventSink.accept(
-                        (detail.endsWith("|failed") ? "工具失败: " : "工具完成: ")
-                                + detail.replace("|failed", ""));
+                case "TOOL_START" -> {
+                    String startTool = parts.length > 1 ? parts[1] : "";
+                    String args = parts.length > 2 ? parts[2] : "";
+                    eventSink.accept("调用工具: " + startTool
+                            + (args.isBlank() ? "" : " " + truncate(args, 200)));
+                }
+                case "TOOL_END" -> {
+                    String endTool = parts.length > 1 ? parts[1] : "";
+                    boolean failed = parts.length > 3 && Boolean.parseBoolean(parts[3]);
+                    eventSink.accept((failed ? "工具失败: " : "工具完成: ") + endTool);
+                }
                 default -> { }
             }
         };

@@ -59,7 +59,6 @@ public class ActiveAnalysisPanel extends JPanel {
     private JLabel roundLabel;
     private JLabel loopPolicyLabel;
     private JLabel tokenLabel;
-    private JButton interjectButton;
     private boolean updatingSessionCombo;
     /** 当前会话 id（= AgentApiClient 的 sessionId；null = 尚未开过会话） */
     private volatile String currentSessionId;
@@ -354,15 +353,9 @@ public class ActiveAnalysisPanel extends JPanel {
         promptScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         panel.add(promptScroll, BorderLayout.CENTER);
 
-        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
-        right.setOpaque(false);
-        interjectButton = new JButton("插话");
-        interjectButton.setToolTipText("不打断当前分析，向正在运行的 agent 补充一条消息（Enter 发送 · Shift+Enter 换行）");
-        UIStyles.styleSecondary(interjectButton);
-        interjectButton.setEnabled(false);
-        interjectButton.addActionListener(e -> sendFromComposer());
-        right.add(interjectButton);
-        panel.add(right, BorderLayout.EAST);
+        // 无独立「插话」按钮（用户决定）：运行中 Enter 即插话（见 sendFromComposer），
+        // 提示语放进输入框 tooltip
+        activeModePromptArea.setToolTipText("Enter 发送 / 运行中 Enter 插话（不打断当前分析）· Shift+Enter 换行");
         return panel;
     }
 
@@ -904,11 +897,12 @@ public class ActiveAnalysisPanel extends JPanel {
 
     private void handleModelBehavior(String message) {
         if (message == null || message.isEmpty() || currentAssistant == null) return;
-        int sep = message.indexOf('|');
-        String type = sep >= 0 ? message.substring(0, sep) : "OTHER";
-        String detail = sep >= 0 ? message.substring(sep + 1) : message;
+        // 消息格式 TYPE|字段…（字段内不含 |，AgentApiClient 已保证）
+        String[] parts = message.split("\\|", -1);
+        String type = parts[0];
         switch (type) {
             case "THINKING" -> {
+                String detail = parts.length > 1 ? parts[1] : "";
                 if (detail == null || detail.isEmpty()) return;
                 currentThinking.append(detail);
                 if (currentThinking.length() > MAX_THINKING_CHARS) {
@@ -920,20 +914,23 @@ public class ActiveAnalysisPanel extends JPanel {
                     currentAssistant.setThinking(currentThinking.toString());
                 }
             }
-            case "TOOL_START" -> currentAssistant.addTool(detail, true);
+            case "TOOL_START" -> {
+                // TOOL_START|工具名|参数摘要
+                String tool = parts.length > 1 ? parts[1] : "";
+                String args = parts.length > 2 ? parts[2] : "";
+                currentAssistant.addTool(tool, args, true);
+            }
             case "TOOL_END" -> {
-                boolean failed = detail.endsWith("|failed");
-                String tool = failed ? detail.substring(0, detail.length() - 7) : detail;
-                currentAssistant.addTool(tool, false);
+                // TOOL_END|工具名|failed|true|false
+                String tool = parts.length > 1 ? parts[1] : "";
+                boolean failed = parts.length > 3 && Boolean.parseBoolean(parts[3]);
+                currentAssistant.addTool(tool, "", false, failed);
             }
             default -> { }
         }
     }
 
     private void notifyStateChanged() {
-        if (interjectButton != null) {
-            interjectButton.setEnabled(isAnalyzing);
-        }
         if (stateListener != null) {
             stateListener.onAnalysisStateChanged(isAnalyzing);
         }

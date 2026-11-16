@@ -183,6 +183,24 @@ bugs in them. Adding a config field = add to the record + both `applySnapshot` i
 `from()`. UI→primary-client writes (`updateApiClientConfigForAnalysis`) stay explicit and then
 fan out via snapshot.
 
+## Tool-call visualization & Burp MCP send-tool blocklist
+
+- Model-behavior message format is now `TYPE|字段…` (multi-field, `|` stripped from field
+  content): `TOOL_START|工具名|参数摘要`, `TOOL_END|工具名|failed|true/false`. The old
+  `TOOL_END|name|ok` single-detail format caused `✓ execute|ok` to display verbatim
+  (the `|ok` suffix was never stripped — split() only cut the first `|`).
+- Tool rows in ChatTimeline are pure-text (`调用中/完成/失败` + name + wrapped args + time),
+  no ✓/▸ glyphs (missing glyphs render as boxes), START (with args) and END update the SAME row.
+- `AgentScopeMcpManager.BURP_SEND_TOOLS` = {http_send_request, http_send_requests_parallel,
+  http_race, http_send_request_chain, http_send_raw_bytes}. `ToolFilteringWrapper` removes them
+  from listTools/getCachedTool at registration. Toggle `enableBurpMcpSendTools` (default false =
+  blocked) in MCP 配置 tab; wired through PluginSettings/AgentConfig/AgentConnectionConfig and
+  both clients (passive mirrors the active value). Rationale: these tools regularly hang 60s
+  with no Reactor fallback; agents should prefer the command line (`execute` + curl) for sending
+  requests — NOT curl_send_request (no prompt guidance steers there; CLI is the preferred path).
+- No interject button anymore (user 2026-11-17): Enter while analyzing = interject; the
+  composer tooltip says so.
+
 ## Session switcher (会话下拉)
 
 `core/SessionStore`（`<workplace>/analysis-runs/sessions.json`，最多 30 会话/会话内 200 轮）
