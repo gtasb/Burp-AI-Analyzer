@@ -166,79 +166,59 @@ public class ActiveAnalysisPanel extends JPanel {
     // ================= UI =================
 
     private void buildUi() {
-        setLayout(new BorderLayout(0, 6));
-        setBorder(new EmptyBorder(4, 6, 4, 6));
+        setLayout(new BorderLayout(0, 4));
+        setBorder(new EmptyBorder(2, 4, 2, 4));
 
-        JPanel header = new JPanel();
-        header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
-        header.add(buildTargetRow());
-        header.add(buildControlRow());
-        add(header, BorderLayout.NORTH);
+        // 单行工具条：目标/阶段/轮次/自动继续/模式/历史压进一行，纵向空间全部留给对话流
+        add(buildToolbar(), BorderLayout.NORTH);
 
         add(timeline, BorderLayout.CENTER);
-        add(buildComposer(), BorderLayout.SOUTH);
 
+        add(buildComposer(), BorderLayout.SOUTH);
     }
 
-    private JPanel buildTargetRow() {
-        JPanel row = new JPanel(new BorderLayout(10, 0));
-        row.setBorder(new EmptyBorder(2, 2, 2, 2));
+    private JToolBar buildToolbar() {
+        JToolBar bar = new JToolBar();
+        bar.setFloatable(false);
+        bar.setBorder(new EmptyBorder(1, 4, 1, 4));
 
-        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
-        JLabel title = new JLabel("主动分析");
-        UIStyles.setFont(title, 14f, Font.BOLD);
-        left.add(title);
         targetLabel = new JLabel("未选择请求 — 自由对话模式");
         UIStyles.setFont(targetLabel, 12f, Font.BOLD);
         targetLabel.setForeground(new Color(0x2a7de1));
+        bar.add(targetLabel);
         targetDetailLabel = new JLabel("");
         UIStyles.setFont(targetDetailLabel, 11f, Font.PLAIN);
         targetDetailLabel.setForeground(UIStyles.hintColor());
-        left.add(targetLabel);
-        left.add(targetDetailLabel);
-        row.add(left, BorderLayout.WEST);
+        bar.add(targetDetailLabel);
+        bar.addSeparator();
 
-        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 2));
         phaseLabel = new JLabel("阶段：空闲");
         UIStyles.setFont(phaseLabel, 12f, Font.BOLD);
         phaseLabel.setForeground(new Color(0x2a7de1));
+        bar.add(phaseLabel);
         roundLabel = new JLabel("轮次：0");
-        UIStyles.setFont(roundLabel, 12f, Font.PLAIN);
-        loopPolicyLabel = new JLabel("自动继续：开");
-        UIStyles.setFont(loopPolicyLabel, 12f, Font.PLAIN);
-        right.add(phaseLabel);
-        right.add(roundLabel);
-        right.add(loopPolicyLabel);
-        row.add(right, BorderLayout.EAST);
-        return row;
-    }
+        UIStyles.setFont(roundLabel, 11f, Font.PLAIN);
+        bar.add(roundLabel);
+        bar.addSeparator();
 
-    private JPanel buildControlRow() {
-        JPanel row = new JPanel(new BorderLayout(10, 0));
-
-        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
         autoContinueCheckBox = new JCheckBox("自动继续", true);
-        autoContinueCheckBox.setToolTipText("每轮结束后由整理 agent 判断是否继续；关闭后只整理入图并出报告");
+        autoContinueCheckBox.setToolTipText("每轮结束后由整理对象判断是否继续；关闭后只整理入图并出报告");
         autoContinueCheckBox.setFocusable(false);
-        UIStyles.setFont(autoContinueCheckBox, 12f, Font.PLAIN);
+        UIStyles.setFont(autoContinueCheckBox, 11f, Font.PLAIN);
         autoContinueCheckBox.addActionListener(e -> {
             if (autoContinueSetter != null) autoContinueSetter.accept(autoContinueCheckBox.isSelected());
             updateLoopPolicyLabel();
         });
-        left.add(autoContinueCheckBox);
+        bar.add(autoContinueCheckBox);
 
-        planModeComboBox = new JComboBox<>(new String[]{"普通模式", "计划模式(Plan Mode)"});
+        planModeComboBox = new JComboBox<>(new String[]{"普通", "计划模式"});
         planModeComboBox.setToolTipText("计划模式：Agent 先只读调查并写计划，提交 plan_exit 时请求批准");
         planModeComboBox.addActionListener(e -> handlePlanModeChanged());
-        left.add(planModeComboBox);
-        row.add(left, BorderLayout.WEST);
+        bar.add(planModeComboBox);
+        bar.addSeparator();
 
-        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 2));
-        JLabel historyLabel = new JLabel("历史分析:");
-        UIStyles.setFont(historyLabel, 11f, Font.PLAIN);
-        right.add(historyLabel);
         runHistoryCombo = new JComboBox<>();
-        runHistoryCombo.setPreferredSize(new Dimension(320, runHistoryCombo.getPreferredSize().height));
+        runHistoryCombo.setPreferredSize(new Dimension(240, runHistoryCombo.getPreferredSize().height));
         runHistoryCombo.addActionListener(e -> {
             if (updatingRunHistory) return;
             if (isAnalyzing) {
@@ -249,27 +229,28 @@ public class ActiveAnalysisPanel extends JPanel {
             if (selected instanceof com.ai.analyzer.core.AnalysisRunStore.Run run) {
                 showHistoricalRun(run);
             } else {
-                // 取消选择：从历史回看返回当前会话
                 exitHistoryView();
             }
         });
-        right.add(runHistoryCombo);
-        JButton clearHistoryButton = new JButton("清空历史");
+        bar.add(runHistoryCombo);
+
+        JButton clearHistoryButton = new JButton("清空");
+        clearHistoryButton.setToolTipText("清空主动分析历史");
         UIStyles.styleSecondary(clearHistoryButton);
         clearHistoryButton.addActionListener(e -> {
             com.ai.analyzer.core.AnalysisRunStore.getInstance().clear();
             refreshRunHistory();
         });
-        right.add(clearHistoryButton);
-        row.add(right, BorderLayout.EAST);
-        return row;
+        bar.add(clearHistoryButton);
+
+        return bar;
     }
 
     private JPanel buildComposer() {
-        JPanel panel = new JPanel(new BorderLayout(6, 4));
-        panel.setBorder(UIStyles.titledBorder("输入"));
+        JPanel panel = new JPanel(new BorderLayout(4, 2));
+        panel.setBorder(UIStyles.scrollBorder());
 
-        activeModePromptArea = new JTextArea(4, 60);
+        activeModePromptArea = new JTextArea(2, 60);
         activeModePromptArea.setLineWrap(true);
         activeModePromptArea.setWrapStyleWord(true);
         UIStyles.setFont(activeModePromptArea, 13f, Font.PLAIN);
@@ -289,25 +270,19 @@ public class ActiveAnalysisPanel extends JPanel {
         promptScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         panel.add(promptScroll, BorderLayout.CENTER);
 
-        JPanel bottom = new JPanel(new BorderLayout(8, 0));
-        JLabel hint = new JLabel("Enter 发送 · 运行中 Enter 插话 · Shift+Enter 换行");
-        UIStyles.setFont(hint, 11f, Font.PLAIN);
-        hint.setForeground(UIStyles.hintColor());
-        bottom.add(hint, BorderLayout.WEST);
-
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         interjectButton = new JButton("插话");
         interjectButton.setToolTipText("不打断当前分析，向正在运行的 agent 补充一条消息");
         UIStyles.styleSecondary(interjectButton);
         interjectButton.setEnabled(false);
+        interjectButton.setToolTipText("不打断当前分析，向正在运行的 agent 补充一条消息（Enter 发送 · Shift+Enter 换行）");
         interjectButton.addActionListener(e -> sendFromComposer());
         right.add(interjectButton);
         tokenLabel = new JLabel(TokenUsageTracker.instance().snapshot().summary());
-        UIStyles.setFont(tokenLabel, 11f, Font.PLAIN);
+        UIStyles.setFont(tokenLabel, 10f, Font.PLAIN);
         tokenLabel.setForeground(UIStyles.hintColor());
         right.add(tokenLabel);
-        bottom.add(right, BorderLayout.EAST);
-        panel.add(bottom, BorderLayout.SOUTH);
+        panel.add(right, BorderLayout.SOUTH);
         return panel;
     }
 

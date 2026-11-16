@@ -28,7 +28,7 @@ public class ChatTimeline extends JPanel {
     public ChatTimeline() {
         super(new BorderLayout());
         content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
-        content.setBorder(new EmptyBorder(10, 12, 12, 12));
+        content.setBorder(new EmptyBorder(4, 6, 4, 6));
         scroll = new JScrollPane(content);
         scroll.setBorder(null);
         scroll.getVerticalScrollBar().setUnitIncrement(18);
@@ -177,7 +177,7 @@ public class ChatTimeline extends JPanel {
     private void appendWithGap(JComponent component) {
         boolean pinned = isAtBottom();
         if (content.getComponentCount() > 0) {
-            content.add(Box.createVerticalStrut(8));
+            content.add(Box.createVerticalStrut(6));
         }
         component.setAlignmentX(Component.LEFT_ALIGNMENT);
         content.add(component);
@@ -225,7 +225,7 @@ public class ChatTimeline extends JPanel {
             setBackground(themed(background));
             setBorder(BorderFactory.createCompoundBorder(
                     BorderFactory.createLineBorder(new Color(0xE3, 0xE6, 0xEA), 1),
-                    new EmptyBorder(8, 10, 8, 10)));
+                    new EmptyBorder(5, 8, 5, 8)));
 
             JPanel header = new JPanel(new BorderLayout(8, 0));
             header.setOpaque(false);
