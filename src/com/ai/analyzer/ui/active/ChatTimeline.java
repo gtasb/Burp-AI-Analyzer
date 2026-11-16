@@ -275,7 +275,7 @@ public class ChatTimeline extends JPanel {
         }
     }
 
-    /** 主动分析消息：流式 Markdown + 思考行 + 工具调用行。 */
+    /** 主动分析消息：文本段与工具行按到达顺序交错（CC 风格），收尾逐段渲染 Markdown。 */
     public static final class AssistantBlock {
 
         /**
@@ -291,15 +291,15 @@ public class ChatTimeline extends JPanel {
             private final JLabel time = new JLabel();
 
             ToolRow(String toolName) {
-                super(new BorderLayout(4, 0));
                 this.toolName = toolName;
                 setOpaque(false);
-                setBorder(new EmptyBorder(1, 6, 1, 2));
+                // 上下留 4px：工具行与前后文本段拉开呼吸感（CC 风格）
+                setBorder(new EmptyBorder(4, 6, 4, 2));
+                setAlignmentX(Component.LEFT_ALIGNMENT);
 
                 JPanel head = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
                 head.setOpaque(false);
                 status.setFont(new Font("Microsoft YaHei", Font.BOLD, 11));
-                name.setFont(new Font("Microsoft YaHei", Font.BOLD, 11));
                 UIStyles.setFont(name, 11f, Font.BOLD);
                 name.setText(toolName);
                 head.add(status);
@@ -312,6 +312,7 @@ public class ChatTimeline extends JPanel {
                 UIStyles.setFont(argsArea, 11f, Font.PLAIN);
                 argsArea.setForeground(UIStyles.hintColor());
                 argsArea.setBorder(new EmptyBorder(0, 2, 0, 0));
+                argsArea.setVisible(false);
 
                 time.setFont(new Font("Microsoft YaHei", Font.PLAIN, 10));
                 time.setForeground(UIStyles.hintColor());
@@ -346,36 +347,81 @@ public class ChatTimeline extends JPanel {
             }
         }
 
+        /** 一个文本段：流式期间纯文本追加，finish() 时整段 Markdown 重渲染。 */
+        private static final class TextSection extends JTextPane {
+            private int streamedChars;
+
+            TextSection() {
+                setEditable(false);
+                setOpaque(false);
+                setContentType("text/plain");
+                setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+                setAlignmentX(Component.LEFT_ALIGNMENT);
+                setBorder(new EmptyBorder(0, 2, 0, 2));
+            }
+
+            void appendDelta(String delta) {
+                try {
+                    getDocument().insertString(getDocument().getLength(), delta, null);
+                    streamedChars += delta.length();
+                } catch (Exception ignored) {
+                }
+            }
+
+            int streamedChars() {
+                return streamedChars;
+            }
+
+            /** 收尾：整段按 Markdown 重渲染（表格/代码块此时才成型）。异常记录而不是吞掉。 */
+            void renderFinalMarkdown() {
+                String text = getText();
+                if (text.isBlank()) return;
+                try {
+                    setText("");
+                    streamedChars = 0;
+                    MarkdownRenderer.renderMarkdown(this, text);
+                } catch (Exception e) {
+                    // 渲染失败退回纯文本并记录（此前 catch(Exception ignored) 把失败静默吞掉，
+                    // 用户看到的是「Markdown 完全没渲染」却无任何线索）
+                    setText(text);
+                    com.ai.analyzer.util.AppLogBuffer.error("ChatTimeline",
+                            "Markdown 渲染失败，已退回纯文本: " + e, e);
+                }
+            }
+        }
+
         private final Card card;
-        private final JTextPane body = markdownPane();
+        /** 交错容器：TextSection 与 ToolRow 按到达顺序排列 */
+        private final JPanel flow = new JPanel();
         private final JLabel thinking = new JLabel(" ");
-        private final JPanel tools = new JPanel();
+        /** 当前正在流式追加的文本段（工具行插入时冻结并开新段） */
+        private TextSection currentText;
+        /** 当前文本段对应 buffer 中的起点（工具行插入时冻结到当前长度） */
+        private int sectionBaseOffset;
         private final StringBuilder buffer = new StringBuilder();
         private final javax.swing.Timer renderTimer;
         private volatile boolean dirty;
-        /** 已写入纯文本流式区的字符数：流式期间只追加增量（O(1)/帧），避免整段重渲染 */
-        private int streamedChars;
+        private boolean finished;
 
         AssistantBlock(Card card) {
             this.card = card;
-            for (JComponent c : List.of(body, thinking, tools)) {
-                c.setOpaque(false);
-            }
+            flow.setLayout(new BoxLayout(flow, BoxLayout.Y_AXIS));
+            flow.setOpaque(false);
+            currentText = new TextSection();
+            flow.add(currentText);
+
             UIStyles.setFont(thinking, 11f, Font.PLAIN);
             thinking.setForeground(UIStyles.hintColor());
             thinking.setBorder(new EmptyBorder(2, 0, 2, 0));
-            tools.setLayout(new BoxLayout(tools, BoxLayout.Y_AXIS));
-            tools.setBorder(new EmptyBorder(2, 0, 0, 0));
 
+            // 结构：思考行（顶部，收尾清空）+ 交错的正文/工具流
+            thinking.setAlignmentX(Component.LEFT_ALIGNMENT);
+            flow.setAlignmentX(Component.LEFT_ALIGNMENT);
             JPanel stack = new JPanel();
             stack.setLayout(new BoxLayout(stack, BoxLayout.Y_AXIS));
             stack.setOpaque(false);
-            body.setAlignmentX(Component.LEFT_ALIGNMENT);
-            thinking.setAlignmentX(Component.LEFT_ALIGNMENT);
-            tools.setAlignmentX(Component.LEFT_ALIGNMENT);
-            stack.add(body);
             stack.add(thinking);
-            stack.add(tools);
+            stack.add(flow);
             card.setBody(stack);
             card.setStatus("生成中…");
 
@@ -397,7 +443,7 @@ public class ChatTimeline extends JPanel {
             dirty = true;
         }
 
-        /** 已累积的完整文本（用于 run 历史持久化）。 */
+        /** 已累积的完整文本（用于会话历史持久化）。 */
         public String text() {
             synchronized (buffer) {
                 return buffer.toString();
@@ -412,8 +458,9 @@ public class ChatTimeline extends JPanel {
         }
 
         /**
-         * 工具调用行：纯文本标记（运行中/完成/失败），同一次调用的 START（含参数）
-         * 与 END 更新同一行，参数摘要跟在工具名后面，长参数换行截断。
+         * 工具调用行：冻结当前文本段（让它与工具行在时间顺序上各归各位），
+         * 插入/更新工具行，随后新开一个文本段接收后续文字。
+         * 同名工具的 START（含参数）与 END 更新同一行。
          */
         public void addTool(String name, String args, boolean running) {
             addTool(name, args, running, false);
@@ -421,62 +468,68 @@ public class ChatTimeline extends JPanel {
 
         public void addTool(String name, String args, boolean running, boolean failed) {
             String tool = name == null || name.isBlank() ? "tool" : name;
-            // 同名工具先复用已有行（一次调用的 START/END 同行更新）；
-            // 并行多次同名调用时退化为追加新行
+            // 先把当前段的挂起文本冲出来（冻结的段必须是完整的）
+            dirty = false;
+            render();
+            // 复用规则：从后往前找同名 ToolRow，且它与末尾之间只有「空文本段」
+            // （START 后 END 事件通常紧跟，中间不会出现新正文）——则 END 更新那一行；
+            // 否则一律新建（同名工具的第二次调用是新调用，必须有自己的行 + 新文本段）
             ToolRow row = null;
-            for (int i = tools.getComponentCount() - 1; i >= 0; i--) {
-                java.awt.Component c = tools.getComponent(i);
+            for (int i = flow.getComponentCount() - 1; i >= 0; i--) {
+                java.awt.Component c = flow.getComponent(i);
+                if (c instanceof TextSection ts && ts.getText().isBlank()) {
+                    continue; // 空段不阻断配对
+                }
                 if (c instanceof ToolRow tr && tr.toolName.equals(tool)) {
                     row = tr;
-                    break;
                 }
+                break; // 遇到非空文本段或不同工具行：配对终止
             }
             if (row == null) {
                 row = new ToolRow(tool);
-                tools.add(row);
+                flow.add(row);
+                // 工具行之后新开文本段：后续文本插到工具行下面而不是上面
+                synchronized (buffer) {
+                    sectionBaseOffset = buffer.length();
+                }
+                currentText = new TextSection();
+                flow.add(currentText);
             }
             row.update(args, running, failed);
-            tools.revalidate();
-            tools.repaint();
+            flow.revalidate();
+            flow.repaint();
         }
 
         public void finish() {
             dirty = true;
-            renderFinal();
+            render();
             renderTimer.stop();
             thinking.setText(" ");
+            finished = true;
+            // 每个文本段分别做 Markdown 渲染（分段后每段独立解析，跨工具行的
+            // 表格/代码块各自完整，不会因工具行插入被拆断）
+            for (int i = 0; i < flow.getComponentCount(); i++) {
+                java.awt.Component c = flow.getComponent(i);
+                if (c instanceof TextSection section) {
+                    section.renderFinalMarkdown();
+                }
+            }
             card.setStatus("完成");
         }
 
-        /** 流式帧：只把新增字符以纯文本追加（Markdown 表格/代码块跨片段无法正确解析，流式期不做全量解析）。 */
+        /** 流式帧：把 buffer 中本段起点之后的新增字符以纯文本追加到当前文本段。 */
         private void render() {
             String snapshot;
             synchronized (buffer) {
                 snapshot = buffer.toString();
             }
-            if (snapshot.length() <= streamedChars) return;
-            String delta = snapshot.substring(streamedChars);
-            streamedChars = snapshot.length();
-            try {
-                body.getDocument().insertString(body.getDocument().getLength(), delta, null);
-            } catch (Exception ignored) {
+            if (snapshot.isEmpty()) return;
+            String expected = snapshot.substring(Math.min(sectionBaseOffset, snapshot.length()));
+            int have = currentText.streamedChars();
+            if (expected.length() > have) {
+                currentText.appendDelta(expected.substring(have));
             }
             card.setStatus("生成中… " + snapshot.length() + " 字符");
-        }
-
-        /** 收尾：整段按 Markdown 重渲染一次（表格/代码块此时才成型）。 */
-        private void renderFinal() {
-            String snapshot;
-            synchronized (buffer) {
-                snapshot = buffer.toString();
-            }
-            if (snapshot.isEmpty()) return;
-            try {
-                body.setText("");
-                streamedChars = 0;
-                MarkdownRenderer.renderMarkdown(body, snapshot);
-            } catch (Exception ignored) {
-            }
         }
     }
 

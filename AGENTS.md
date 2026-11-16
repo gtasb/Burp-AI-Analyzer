@@ -212,6 +212,22 @@ fan out via snapshot.
 新会话不再销毁旧会话状态，只是换 id。`beginTrackedSession` 建会话记录并与
 currentSessionId 同步。`AnalysisRunStore` 仍在（被动侧与既有测试依赖），但主动 UI 不再读它。
 
+## AssistantBlock interleaved layout (文本/工具交错)
+
+`AssistantBlock` is a vertical flow of `TextSection` (JTextPane) and `ToolRow` components in
+**arrival order** — a line of analysis, then its tool rows, then the next analysis line (CC
+style). `append` streams into `currentText`; `addTool` flushes pending text, inserts the row,
+then opens a new TextSection (`sectionBaseOffset` = buffer length at that moment, so each
+section renders only its own slice). START→END pairing rule: scan back for a same-named
+ToolRow skipping only *blank* TextSections between; anything else (new text) terminates the
+pair → new call gets a new row. `finish()` renders **each section independently** as Markdown
+(failures fall back to plain text and are logged to AppLogBuffer — previously swallowed
+silently, which is why "Markdown 完全没渲染" was invisible). `text()` still returns the
+concatenated full buffer for session persistence. Covered by `ChatTimelineInterleaveTest`.
+MarkdownRenderer paragraph/list spacing: blank line between paragraphs and after lists,
+blank line before headings (was single 
+ — the "分析都没有换行" complaint).
+
 ## Active-mode rendering contract
 
 `ActiveAnalysisPanel` renders into its own `ChatTimeline`; there is **no shared result pane
