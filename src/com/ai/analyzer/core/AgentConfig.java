@@ -53,7 +53,6 @@ public class AgentConfig {
     private boolean enableFileSystemAccess = false;
     private boolean enableSkills = false;
     private String skillsDirectoryPath = "";
-    private boolean enablePythonScript = false;
     private boolean enableCliTool = false;
     private String cliWhitelist = "";
     private String cliToolPrompt = "";
@@ -246,8 +245,6 @@ public class AgentConfig {
     public void setEnableSkills(boolean enableSkills) { this.enableSkills = enableSkills; }
     public String getSkillsDirectoryPath() { return skillsDirectoryPath != null ? skillsDirectoryPath : ""; }
     public void setSkillsDirectoryPath(String skillsDirectoryPath) { this.skillsDirectoryPath = skillsDirectoryPath != null ? skillsDirectoryPath : ""; }
-    public boolean isEnablePythonScript() { return enablePythonScript; }
-    public void setEnablePythonScript(boolean enablePythonScript) { this.enablePythonScript = enablePythonScript; }
     public boolean isEnableCliTool() { return enableCliTool; }
     public void setEnableCliTool(boolean enableCliTool) { this.enableCliTool = enableCliTool; }
 
@@ -282,7 +279,6 @@ public class AgentConfig {
                 ", enableChromeMcp=" + enableChromeMcp +
                 ", enableFileSystemAccess=" + enableFileSystemAccess +
                 ", enableSkills=" + enableSkills +
-                ", enablePythonScript=" + enablePythonScript +
                 '}';
     }
 }

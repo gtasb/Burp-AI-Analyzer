@@ -69,7 +69,6 @@ public class SettingsPanel {
 
     // 前置扫描器组件
     private JCheckBox enablePreScanCheckbox;
-    private JCheckBox enablePythonScriptCheckbox;
     // CLI 标签页组件
     private JCheckBox enableCliToolCheckBox;
     private JCheckBox enableFileSystemSandboxCheckBox;
@@ -548,7 +547,6 @@ public class SettingsPanel {
     public boolean isChromeMcpEnabled() { return enableChromeMcpCheckBox != null && enableChromeMcpCheckBox.isSelected(); }
     public String getChromeMcpUrl() { return chromeMcpUrlField != null ? chromeMcpUrlField.getText().trim() : ""; }
     public boolean isPreScanEnabled() { return enablePreScanCheckbox != null && enablePreScanCheckbox.isSelected(); }
-    public boolean isPythonScriptEnabled() { return enablePythonScriptCheckbox != null && enablePythonScriptCheckbox.isSelected(); }
     public boolean isCliToolEnabled() { return enableCliToolCheckBox != null && enableCliToolCheckBox.isSelected(); }
     public String getCliWhitelist() { return cliWhitelistArea != null ? cliWhitelistArea.getText() : ""; }
     public String getCliToolPrompt() { return cliToolPromptArea != null ? cliToolPromptArea.getText() : ""; }
@@ -1377,15 +1375,6 @@ public class SettingsPanel {
         panel.add(enablePreScanCheckbox, gbc);
 
         // Python
-        row++;
-        gbc.gridy = row;
-        enablePythonScriptCheckbox = new JCheckBox("启用 Python 脚本执行", false);
-        enablePythonScriptCheckbox.setToolTipText("<html>让 AI 在本地执行 Python 代码（需本机安装 Python）</html>");
-        enablePythonScriptCheckbox.addActionListener(e -> {
-            apiClient.setEnablePythonScript(enablePythonScriptCheckbox.isSelected());
-        });
-        panel.add(enablePythonScriptCheckbox, gbc);
-
         // 证据整理 / 自动继续
         row++;
         gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2;
@@ -2264,9 +2253,6 @@ public class SettingsPanel {
             // 设置前置扫描器选项
             settings.setEnablePreScanFilter(enablePreScanCheckbox != null && enablePreScanCheckbox.isSelected());
 
-            // 设置 Python 脚本执行选项
-            settings.setEnablePythonScript(enablePythonScriptCheckbox != null && enablePythonScriptCheckbox.isSelected());
-
             // 证据整理 / 自动继续
             settings.setOrganizerAutoContinue(isOrganizerAutoContinue());
             settings.setOrganizerMaxRounds(getOrganizerMaxRounds());
@@ -2676,11 +2662,6 @@ public class SettingsPanel {
             }
         }
 
-        // Python 脚本执行配置
-        if (enablePythonScriptCheckbox != null) {
-            enablePythonScriptCheckbox.setSelected(settings.isEnablePythonScript());
-            apiClient.setEnablePythonScript(settings.isEnablePythonScript());
-        }
         if (organizerAutoContinueCheckBox != null) {
             organizerAutoContinueCheckBox.setSelected(settings.isOrganizerAutoContinue());
         }

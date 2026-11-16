@@ -195,7 +195,7 @@ every-tick full re-parse was O(n²).
 - **Every checkbox action listener MUST call `apiClient.setXxx()`** — not just toggle UI state. `enableCustomMcpCheckBox` was missing this (fixed), check new additions
 - **`applySettings()` must mirror `saveSettings()`** — `tokenBudgetTokens` and `enablePlanMode` were saved to file but never restored to runtime (fixed). Any new PluginSettings field needs entries in both methods
 - **Windows shell paths**: `SkillToolExecutor.tokenizeArgs()` used to eat backslashes (fixed). Backslash only escapes before `"`, `\`, `'`
-- **Shell/Python toggle conflation**: `disableShellTool()` was gated on `!enableCliTool && !enablePythonScript` (fixed to `!enableCliTool`)
+- **Shell/Python toggle conflation**: `disableShellTool()` was once gated on `!enableCliTool && !enablePythonScript` (fixed to `!enableCliTool`); `enablePythonScript` + `PythonScriptTool` + its UI checkbox were later deleted entirely — the switch controlled nothing (the tool was never registered)
 - **PassiveScanApiClient**: `enableThinking` was a dead field (deleted). System prompt cache hash was missing MCP/filesystem toggles (fixed). `apiProvider` was not restored from settings (fixed)
 - **Settings file** (`ai_analyzer_settings.dat` + `~/.burp_ai_analyzer_settings`) is **JSON** via
   `PluginSettings.saveTo()` / `loadCompat()`. Adding/removing fields is safe: Gson invokes the no-arg
@@ -281,7 +281,7 @@ every-tick full re-parse was O(n²).
   `startPassiveScan` starts the producer before `isRunning`, and config sync runs inside the try (half-started
   checkbox states). `analyzeBatch` checks the token budget (was the only spend site without the gate).
   ActiveAuditManager/runtime disposal wired to extension unload (`disposeForUnload`). API-profile delete persists
-  immediately. BatchFuzzTool JSON-string branch escapes backslashes before quotes. Google CSE parsing has
+  immediately. (BatchFuzzTool was deleted 2026-11-17 on user request — fuzzing is better done via agent-written scripts; curl_get/curl_post thin wrappers also removed, keeping only `curl_send_request` as the Burp-MCP fallback.) Google CSE parsing has
   isJsonNull guards. ChatPanel debugLogArea capped at 300KB. Organizer gets an auto-approve confirm handler
   (plan_exit was silently DENIED for it — with Plan Mode saved on, the organizer could never reach
   organizer_finish). Digest injection skips auto-continue rounds (was re-prepended every round, N copies in

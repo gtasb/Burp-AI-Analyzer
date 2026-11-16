@@ -289,6 +289,11 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
                     while ((queued = pendingInterjections.poll()) != null) {
                         combined.append("\n\n").append(queued);
                     }
+                    // 在途工具（如 300s curl）会继续跑到自身超时/完成，interrupt 只能收尾本轮
+                    // 模型循环——补投轮要等它们释放。明确告知监听者，避免「插话后像死了一样」
+                    // 的静默窗口（实测：插话打断长工具后 1~2 分钟才进入补投轮）。
+                    listener.onEvent(RuntimeEvent.textDelta(
+                            "\n[已收到插话，等待在途工具释放后作为下一轮输入…]\n"));
                     currentMessages = List.of(Msg.builder()
                             .name("user")
                             .role(MsgRole.USER)

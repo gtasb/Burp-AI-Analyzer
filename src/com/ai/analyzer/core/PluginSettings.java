@@ -60,7 +60,6 @@ public class PluginSettings implements Serializable {
     private boolean enablePreScanFilter = false; // 默认禁用前置扫描器（快速规则匹配）
     
     // Python 脚本执行配置
-    private boolean enablePythonScript = false;
 
     // Skills 配置
     private boolean enableSkills = false; // 默认禁用 Skills
@@ -618,15 +617,6 @@ public class PluginSettings implements Serializable {
     
     public void setEnabledSkillNames(List<String> enabledSkillNames) {
         this.enabledSkillNames = enabledSkillNames != null ? enabledSkillNames : new ArrayList<>();
-    }
-    
-    // Python 脚本执行配置
-    public boolean isEnablePythonScript() {
-        return enablePythonScript;
-    }
-    
-    public void setEnablePythonScript(boolean enablePythonScript) {
-        this.enablePythonScript = enablePythonScript;
     }
 
     // CLI 工具配置

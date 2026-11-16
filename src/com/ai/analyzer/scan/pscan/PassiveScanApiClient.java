@@ -3,7 +3,6 @@ package com.ai.analyzer.scan.pscan;
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.http.message.HttpRequestResponse;
 import com.ai.analyzer.core.AgentConfig.ApiProvider;
-import com.ai.analyzer.tools.BatchFuzzTool;
 import com.ai.analyzer.tools.CurlTools;
 import com.ai.analyzer.tools.WebSearchTools;
 import com.ai.analyzer.agent.mcpclient.CustomMcpConfig;
@@ -95,8 +94,6 @@ public class PassiveScanApiClient {
     private String chromeMcpUrl = "";
     @Getter
     private boolean enableFileSystemAccess = false;
-    @Getter
-    private boolean enablePythonScript = false;
     @Getter
     private boolean enableCliTool = false;
     /** 镜像自主动端的文件沙箱开关（ReActAgent 无 Harness 文件系统，此处不改变行为） */
@@ -220,7 +217,6 @@ public class PassiveScanApiClient {
         setChromeMcpUrl(snapshot.chromeMcpUrl());
         setEnableFileSystemAccess(snapshot.enableFileSystemAccess());
         setCustomMcpConfigJson(snapshot.customMcpConfigJson());
-        setEnablePythonScript(snapshot.enablePythonScript());
         setEnableCliTool(snapshot.enableCliTool());
         setEnableFileSystemSandbox(snapshot.enableFileSystemSandbox());
         setCliWhitelist(snapshot.cliWhitelist());
@@ -341,10 +337,6 @@ public class PassiveScanApiClient {
 
     public void setEnableFileSystemAccess(boolean v) {
         if (v != this.enableFileSystemAccess) { this.enableFileSystemAccess = v; invalidateAgentScopeRuntime(); }
-    }
-
-    public void setEnablePythonScript(boolean v) {
-        if (v != this.enablePythonScript) { this.enablePythonScript = v; invalidateAgentScopeRuntime(); }
     }
 
     public void setEnableCliTool(boolean v) {
@@ -522,9 +514,8 @@ public class PassiveScanApiClient {
 
             // 注册 Burp 扩展工具（Intruder 发送 + 批量爆破）
             if (api != null) {
-                asToolkit.registerTool(new BatchFuzzTool(api));
                 asToolkit.registerTool(new CurlTools(api));
-                logInfo("AgentScope BatchFuzzTool + CurlTools 已注册");
+                logInfo("AgentScope CurlTools 已注册");
             }
 
             // 3. 注册 MCP 客户端
@@ -683,7 +674,6 @@ public class PassiveScanApiClient {
         this.enableChromeMcp = settings.isEnableChromeMcp();
         this.chromeMcpUrl = settings.getChromeMcpUrl();
         this.enableFileSystemAccess = settings.isEnableFileSystemAccess();
-        this.enablePythonScript = settings.isEnablePythonScript();
         this.enableCliTool = settings.isEnableCliTool();
         this.enableFileSystemSandbox = settings.isEnableFileSystemSandbox();
         this.passiveMaxIters = settings.getPassiveMaxIters();
@@ -879,9 +869,9 @@ public class PassiveScanApiClient {
                                     String toolName = event.toolName();
                                     if (toolName != null && !toolName.isEmpty()) {
                                         AppLogBuffer.tool("PassiveScanApiClient", toolName);
-                                        if (onChunk != null) {
-                                            onChunk.accept("\n[TOOL_BLOCK]" + escapeHtml(toolName) + "[/TOOL_BLOCK]\n");
-                                        }
+                                        // 工具可视化不再往文本流塞 [TOOL_BLOCK] 标记（旧「模型行为
+                                        // 可视化」残留：流式纯文本期无法解析，收尾重渲染成乱码，
+                                        // 还污染被动扫描结果与风险评级文本）
                                     }
                                 }
                                 case TOOL_END -> {

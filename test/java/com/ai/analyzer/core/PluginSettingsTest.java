@@ -143,9 +143,6 @@ class PluginSettingsTest {
             settings.setEnablePreScanFilter(true);
             assertThat(settings.isEnablePreScanFilter()).isTrue();
 
-            settings.setEnablePythonScript(true);
-            assertThat(settings.isEnablePythonScript()).isTrue();
-
             settings.setEnableSkills(true);
             assertThat(settings.isEnableSkills()).isTrue();
         }

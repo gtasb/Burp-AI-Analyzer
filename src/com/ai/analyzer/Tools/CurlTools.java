@@ -200,29 +200,6 @@ public class CurlTools {
         }
     }
     
-    /**
-     * 发送 GET 请求（简化版）
-     */
-    @Tool(name = "curl_get", description = "发送 GET 请求（简化版，只需 URL 和 headers）。适用于简单的 GET 请求场景。")
-    public String get(
-            @ToolParam(name = "url", description = "完整的请求 URL（必须包含协议）") String url,
-            @ToolParam(name = "headers", description = "请求头列表，格式：[\"Header-Name: value\", ...]，可选") List<String> headers
-    ) {
-        return sendRequest(url, "GET", headers, null, DEFAULT_TIMEOUT_SECONDS);
-    }
-    
-    /**
-     * 发送 POST 请求（简化版）
-     */
-    @Tool(name = "curl_post", description = "发送 POST 请求（简化版）。适用于简单的 POST 请求场景。")
-    public String post(
-            @ToolParam(name = "url", description = "完整的请求 URL（必须包含协议）") String url,
-            @ToolParam(name = "body", description = "请求体内容") String body,
-            @ToolParam(name = "headers", description = "请求头列表，格式：[\"Header-Name: value\", ...]，可选") List<String> headers
-    ) {
-        return sendRequest(url, "POST", headers, body, DEFAULT_TIMEOUT_SECONDS);
-    }
-    
     // ==================== 私有辅助方法 ====================
     
     /**

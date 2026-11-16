@@ -21,7 +21,6 @@ import com.google.gson.JsonObject;
 import com.ai.analyzer.core.PluginSettings;
 
 import burp.api.montoya.MontoyaApi;
-import com.ai.analyzer.tools.BatchFuzzTool;
 import com.ai.analyzer.tools.CurlTools;
 import com.ai.analyzer.tools.WebSearchTools;
 import com.ai.analyzer.util.AppLogBuffer;
@@ -280,7 +279,6 @@ public class AgentApiClient {
         setChromeMcpUrl(snapshot.chromeMcpUrl());
         setEnableFileSystemAccess(snapshot.enableFileSystemAccess());
         setCustomMcpConfigJson(snapshot.customMcpConfigJson());
-        setEnablePythonScript(snapshot.enablePythonScript());
         setEnableCliTool(snapshot.enableCliTool());
         setEnableFileSystemSandbox(snapshot.enableFileSystemSandbox());
         setCliWhitelist(snapshot.cliWhitelist());
@@ -360,7 +358,6 @@ public class AgentApiClient {
     public String getChromeMcpUrl() { return config.getChromeMcpUrl(); }
     public boolean isEnableFileSystemAccess() { return config.isEnableFileSystemAccess(); }
     public boolean isEnableSkills() { return config.isEnableSkills(); }
-    public boolean isEnablePythonScript() { return config.isEnablePythonScript(); }
     public String getCustomParameters() { return config.getCustomParameters(); }
     public String getMaxTokens() { return config.getMaxTokens(); }
 
@@ -604,14 +601,6 @@ public class AgentApiClient {
         return config.getSkillsDirectoryPath();
     }
 
-    public void setEnablePythonScript(boolean enablePythonScript) {
-        if (config.isEnablePythonScript() != enablePythonScript) {
-            config.setEnablePythonScript(enablePythonScript);
-            invalidateAgentScopeRuntime();
-            logInfo("Python 脚本执行已" + (enablePythonScript ? "启用" : "禁用"));
-        }
-    }
-
     public void setEnableCliTool(boolean enableCliTool) {
         if (config.isEnableCliTool() != enableCliTool) {
             config.setEnableCliTool(enableCliTool);
@@ -805,11 +794,10 @@ public class AgentApiClient {
                 }
             }
 
-            // 注册 Burp 扩展工具（Intruder 发送等基础功能）
+            // HTTP 直发工具（Burp MCP 的 http_send_request 60s 超时/挂死时的可靠备份通道）
             if (api != null) {
-                asToolkit.registerTool(new BatchFuzzTool(api));
                 asToolkit.registerTool(new CurlTools(api));
-                logInfo("AgentScope BatchFuzzTool + CurlTools 已注册");
+                logInfo("AgentScope CurlTools 已注册");
             }
 
             // 3. 注册 MCP 客户端
@@ -1039,7 +1027,6 @@ public class AgentApiClient {
         }
         config.setEnableSkills(settings.isEnableSkills());
         config.setSkillsDirectoryPath(settings.getSkillsDirectoryPath());
-        config.setEnablePythonScript(settings.isEnablePythonScript());
         config.setEnableFileSystemAccess(settings.isEnableFileSystemAccess());
         config.setEnableRagMcp(settings.isEnableRagMcp());
         config.setEnableChromeMcp(settings.isEnableChromeMcp());
@@ -1256,7 +1243,12 @@ public class AgentApiClient {
                                 AppLogBuffer.tool("AgentApiClient", event.toolName() != null ? event.toolName() : "");
                                 String toolName = event.toolName();
                                 if (toolName != null && !toolName.isEmpty()) {
-                                    onChunk.accept("\n[TOOL_BLOCK]" + escapeHtml(toolName) + "[/TOOL_BLOCK]\n");
+                                    // 工具可视化唯一通道是 emitModelBehavior（TOOL_START 事件）：
+                                    // 主动面板渲染成内联工具行，ChatPanel 渲染进调试日志。
+                                    // 历史上同时往文本流塞 [TOOL_BLOCK] 标记是旧「模型行为可视化」
+                                    // 的残留——AssistantBlock 流式期间是纯文本追加，标记只会在
+                                    // 收尾重渲染时变成不可解析的乱码块，且污染 run 历史与
+                                    // 整理 agent 的交接文本。已删除。
                                     emitModelBehavior("TOOL_START", toolName);
                                 }
                                 DebugContext.log("AgentApiClient", "tool_start",

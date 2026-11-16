@@ -1,5 +1,11 @@
 package com.ai.analyzer.util;
 
+import java.io.IOException;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -7,15 +13,70 @@ import java.util.List;
 
 /**
  * Small in-memory log buffer for the plugin UI debug tab.
+ *
+ * <p>同时镜像一份到磁盘（{@code <user.home>/ai-analyzer-logs/plugin.log}，按日轮转），
+ * 便于离线排查：用户报告问题时直接读日志文件，而不是人工复制 UI 里的环形缓冲。
+ * 磁盘写入失败静默降级（不影响内存缓冲）。
  */
 public final class AppLogBuffer {
     private static final int MAX_LINES = 1_000;
     private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("HH:mm:ss");
+    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("yyyyMMdd");
     private static final List<String> LINES = new ArrayList<>();
     private static final List<String> MCP_TRAFFIC_LINES = new ArrayList<>();
     private static final List<McpTrafficEntry> MCP_TRAFFIC_ENTRIES = new ArrayList<>();
+    /** 磁盘镜像：默认开（-Dburp.ai.fileLog=false 关闭，测试用） */
+    private static final boolean FILE_LOG = !"false".equalsIgnoreCase(
+            System.getProperty("burp.ai.fileLog", "true"));
+    private static volatile String currentLogDay = "";
+    private static Writer fileWriter;
 
     private AppLogBuffer() {
+    }
+
+    /** 当前磁盘日志文件路径（供 UI 展示位置）。 */
+    public static Path currentLogFile() {
+        return logDir().resolve("plugin-" + LocalDateTime.now().format(DAY) + ".log");
+    }
+
+    private static Path logDir() {
+        return Path.of(System.getProperty("user.home"), "ai-analyzer-logs");
+    }
+
+    /** 磁盘镜像：同步写，行级 append；按日切换文件。失败静默（内存缓冲不受影响）。 */
+    private static void mirrorToDisk(String formattedLine) {
+        if (!FILE_LOG) return;
+        try {
+            String today = LocalDateTime.now().format(DAY);
+            synchronized (AppLogBuffer.class) {
+                if (!today.equals(currentLogDay)) {
+                    closeQuietly();
+                    Files.createDirectories(logDir());
+                    fileWriter = Files.newBufferedWriter(currentLogFile(), StandardCharsets.UTF_8,
+                            StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+                    currentLogDay = today;
+                }
+                if (fileWriter != null) {
+                    fileWriter.write(formattedLine);
+                    fileWriter.write('\n');
+                    fileWriter.flush();
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            // 磁盘写不进去（只读盘/权限/路径占用）：降级为仅内存，不再尝试也行
+            // （下次调用还会重试；重试失败依旧静默）
+        }
+    }
+
+    private static void closeQuietly() {
+        Writer w = fileWriter;
+        fileWriter = null;
+        if (w != null) {
+            try {
+                w.close();
+            } catch (IOException ignored) {
+            }
+        }
     }
 
     public static void debug(String source, String message) {
@@ -181,6 +242,7 @@ public final class AppLogBuffer {
                 source == null ? "unknown" : source,
                 message == null ? "" : message
         );
+        mirrorToDisk(line);
         synchronized (target) {
             target.add(line);
             if (target.size() > MAX_LINES) {
