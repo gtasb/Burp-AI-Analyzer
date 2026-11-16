@@ -40,6 +40,8 @@ public class ActiveAnalysisPanel extends JPanel {
     private volatile HttpRequestResponse pendingDirectRequest;
     private JTextArea promptArea;
     private JTextArea activeModePromptArea;
+    /** 被动模式输入框（用户在被动视图里输入提示词的地方） */
+    private JTextArea passivePromptArea;
 
     private final ChatTimeline timeline = new ChatTimeline();
     private ChatTimeline.AssistantBlock currentAssistant;
@@ -103,7 +105,14 @@ public class ActiveAnalysisPanel extends JPanel {
 
     public void setActiveMode(boolean active, JTextArea prompt) {
         this.activeModeSelected = active;
-        if (prompt != null) this.promptArea = prompt;
+        // 主动模式固定绑回自己的输入区；否则从 passive 切回来后 promptArea 还指着
+        // 被动输入框，performAnalysis 读到空文本、把用户输入换成默认提示词
+        if (prompt != null && !active) {
+            this.passivePromptArea = prompt;
+            this.promptArea = prompt;
+        } else if (active) {
+            this.promptArea = activeModePromptArea;
+        }
     }
 
     public JTextArea getPromptArea() {
@@ -355,7 +364,7 @@ public class ActiveAnalysisPanel extends JPanel {
         HttpRequestResponse direct = pendingDirectRequest;
         pendingDirectRequest = null;
         if (direct != null) {
-            String prompt = (promptArea != null ? promptArea.getText().trim() : "");
+            String prompt = promptSourceText();
             String httpContent = HttpFormatter.formatHttpRequestResponse(direct);
             String method = direct.request() != null ? direct.request().method() : "";
             String url = "";
@@ -379,7 +388,7 @@ public class ActiveAnalysisPanel extends JPanel {
         RequestData requestData = selection instanceof RequestData rd ? rd : null;
         ScanResult scanResult = selection instanceof ScanResult sr ? sr : null;
 
-        String userPrompt = (promptArea != null ? promptArea.getText().trim() : "");
+        String userPrompt = promptSourceText();
         if (userPrompt.isEmpty()) {
             userPrompt = (requestData != null || scanResult != null)
                     ? "请分析这个请求中可能存在的安全漏洞，并给出渗透测试建议" : "";
@@ -532,6 +541,16 @@ public class ActiveAnalysisPanel extends JPanel {
 
     private static boolean isEmpty(String s) {
         return s == null || s.isBlank();
+    }
+
+    /**
+     * 读取用户实际输入的提示词：主动流程（activeModeSelected）读主动输入框，
+     * 被动流程（从被动视图点「开始分析」）读被动输入框。两个字段都可能为 null（测试环境）。
+     */
+    private String promptSourceText() {
+        JTextArea src = activeModeSelected ? activeModePromptArea : passivePromptArea;
+        if (src == null) src = promptArea;
+        return src == null ? "" : src.getText().trim();
     }
 
     public void analyzeDirectRequest(HttpRequestResponse requestResponse) {
