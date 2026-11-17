@@ -315,6 +315,8 @@ public class ChatTimeline extends JPanel {
                 UIStyles.setFont(argsArea, 11f, Font.PLAIN);
                 argsArea.setForeground(UIStyles.hintColor());
                 argsArea.setBorder(new EmptyBorder(0, 2, 0, 0));
+                // 压掉 JTextArea 默认 margin(3,3,3,3)：工具名行与参数行只换行不空行
+                argsArea.setMargin(new Insets(0, 0, 0, 0));
 
                 // 完整参数放进滚动视口：内容完整保留（不截断），超高时行内滚动
                 // 而不是把整条时间线撑爆
@@ -323,6 +325,8 @@ public class ChatTimeline extends JPanel {
                 argsScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
                 argsScroll.setOpaque(false);
                 argsScroll.getViewport().setOpaque(false);
+                // 视口边距也压为零：标题→参数首行紧贴换行
+                argsScroll.getViewport().setBorder(null);
                 argsScroll.setBorder(null);
                 argsScroll.setAlignmentX(Component.LEFT_ALIGNMENT);
                 argsScroll.setVisible(false);
@@ -345,8 +349,8 @@ public class ChatTimeline extends JPanel {
             public Dimension getPreferredSize() {
                 Dimension d = super.getPreferredSize();
                 if (argsScroll.isVisible()) {
-                    int argHeight = Math.min(argsArea.getPreferredSize().height + 4, MAX_ARGS_HEIGHT);
-                    d = new Dimension(d.width, headRow.getPreferredSize().height + argHeight + 12);
+                    int argHeight = Math.min(argsArea.getPreferredSize().height, MAX_ARGS_HEIGHT);
+                    d = new Dimension(d.width, headRow.getPreferredSize().height + argHeight + 2);
                 }
                 return d;
             }
