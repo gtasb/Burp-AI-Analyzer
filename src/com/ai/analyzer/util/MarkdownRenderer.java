@@ -353,9 +353,9 @@ public class MarkdownRenderer {
             default: headerStyle = header3; break;
         }
         
-        // 标题前空一行（除非是文档开始）
+        // 标题前换行（除非是文档开始；用户反馈空行太多，回退单换行）
         if (doc.getLength() > 0) {
-            doc.insertString(doc.getLength(), "\n\n", regular);
+            doc.insertString(doc.getLength(), "\n", regular);
         }
 
         // 渲染标题内容
@@ -372,10 +372,7 @@ public class MarkdownRenderer {
             Style regular, Style bold, Style italic, Style code, Style link) throws BadLocationException {
 
         renderInlineContent(doc, paragraph, regular, bold, italic, code, link);
-        // 段落间空一行（CC 风格）；文档首段前不加，避免顶部留白
-        if (doc.getLength() > 0) {
-            doc.insertString(doc.getLength(), "\n", regular);
-        }
+        // 段落后换行（用户反馈空行太多，回退单换行）
         doc.insertString(doc.getLength(), "\n", regular);
     }
     
@@ -404,8 +401,6 @@ public class MarkdownRenderer {
             }
             item = item.getNext();
         }
-        // 列表结束后空一行，与后续内容分隔
-        doc.insertString(doc.getLength(), "\n", regular);
     }
 
     /**
@@ -425,8 +420,6 @@ public class MarkdownRenderer {
             }
             item = item.getNext();
         }
-        // 列表结束后空一行，与后续内容分隔
-        doc.insertString(doc.getLength(), "\n", regular);
     }
 
     /**

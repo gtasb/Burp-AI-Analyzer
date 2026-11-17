@@ -224,9 +224,10 @@ pair → new call gets a new row. `finish()` renders **each section independentl
 (failures fall back to plain text and are logged to AppLogBuffer — previously swallowed
 silently, which is why "Markdown 完全没渲染" was invisible). `text()` still returns the
 concatenated full buffer for session persistence. Covered by `ChatTimelineInterleaveTest`.
-MarkdownRenderer paragraph/list spacing: blank line between paragraphs and after lists,
-blank line before headings (was single 
- — the "分析都没有换行" complaint).
+MarkdownRenderer spacing: single 
+ between paragraphs/before headings, no extra 
+ after
+lists (blank-line spacing was tried and reverted on user feedback — too much whitespace).
 
 ## Active-mode rendering contract
 
