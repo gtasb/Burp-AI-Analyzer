@@ -296,8 +296,8 @@ public class ChatTimeline extends JPanel {
             ToolRow(String toolName) {
                 this.toolName = toolName;
                 setOpaque(false);
-                // 上下留 4px：工具行与前后文本段拉开呼吸感（CC 风格）
-                setBorder(new EmptyBorder(4, 6, 4, 2));
+                // 单换行的紧凑感：上下仅 1px（此前 4px + 空文本段 margin 叠出大空行）
+                setBorder(new EmptyBorder(1, 6, 1, 2));
                 setAlignmentX(Component.LEFT_ALIGNMENT);
 
                 JPanel head = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
@@ -379,6 +379,9 @@ public class ChatTimeline extends JPanel {
                 setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
                 setAlignmentX(Component.LEFT_ALIGNMENT);
                 setBorder(new EmptyBorder(0, 2, 0, 2));
+                // 压掉 JTextPane 默认 margin(3,3,3,3)——空段不再占 6px、
+                // 有内容的段与工具行的间隙也只有 1 行
+                setMargin(new Insets(0, 0, 0, 0));
             }
 
             void appendDelta(String delta) {
@@ -391,6 +394,15 @@ public class ChatTimeline extends JPanel {
 
             int streamedChars() {
                 return streamedChars;
+            }
+
+            /** 空段高度归零：工具行之间不留大空行（用户要求单换行的紧凑度）。 */
+            @Override
+            public Dimension getPreferredSize() {
+                if (getDocument().getLength() == 0) {
+                    return new Dimension(0, 0);
+                }
+                return super.getPreferredSize();
             }
 
             /** 收尾：整段按 Markdown 重渲染（表格/代码块此时才成型）。异常记录而不是吞掉。 */
