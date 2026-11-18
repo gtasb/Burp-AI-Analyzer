@@ -512,11 +512,11 @@ public class PassiveScanApiClient {
             asToolkit.registerTool(new com.ai.analyzer.tools.RestrictedReadTool(workplaceDirectoryPath));
             logInfo("AgentScope RestrictedReadTool（受限 read_file）已注册");
 
-            // 资产知识图谱（SQLite）：节点/边/证据 + 人类与 Agent 的笔记、节点评估
+            // 资产图谱（SQLite）：节点/边/证据 + 人类与 Agent 的笔记、节点评估
             asToolkit.registerTool(new com.ai.analyzer.graph.GraphTool(
                     com.ai.analyzer.graph.GraphStore.getInstance(), "passive-agent"));
             ensureNoteBroadcastSubscribed();
-            logInfo("AgentScope GraphTool（资产知识图谱 + 笔记）已注册");
+            logInfo("AgentScope GraphTool（资产图谱 + 笔记）已注册");
 
             // 注册 Burp 扩展工具（Intruder 发送 + 批量爆破）
             if (api != null) {
@@ -1072,7 +1072,7 @@ public class PassiveScanApiClient {
         String root = origin == null || origin.isEmpty() ? d : origin;
         StringBuilder prompt = new StringBuilder();
         prompt.append("目标域名: ").append(d).append("（Origin: ").append(root).append("）\n\n");
-        prompt.append("**协作要求（知识图谱）**：\n");
+        prompt.append("**协作要求（资产图谱）**：\n");
         prompt.append("- 分析前先调用 graph_overview(root_id=\"").append(root)
                 .append("\") 和 graph_get_notes(root_id=\"").append(root)
                 .append("\", since_version=0)，读取已知发现与人类留下的牵引\n");
@@ -1129,7 +1129,7 @@ public class PassiveScanApiClient {
         String d = domain == null || domain.isEmpty() ? "unknown" : domain;
         String root = origin == null || origin.isEmpty() ? d : origin;
         prompt.append("目标域名: ").append(d).append("（Origin: ").append(root).append("）\n");
-        prompt.append("**协作要求（知识图谱）**：分析前先 graph_overview 与 graph_get_notes(root_id=\"")
+        prompt.append("**协作要求（资产图谱）**：分析前先 graph_overview 与 graph_get_notes(root_id=\"")
                 .append(root).append("\", since_version=0)；发现的新接口/特征/结论写入图谱；")
                 .append("人类写入的 instruction 类笔记是明确指令，优先执行。\n\n");
         prompt.append("请分析以下**连续用户操作流量序列**（同一会话内按时间先后排列）中的安全风险。\n\n");

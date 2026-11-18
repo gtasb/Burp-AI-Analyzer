@@ -510,7 +510,7 @@ public class PassiveScanManager {
      * 将请求放入扫描队列（生产者调用）
      */
     private void enqueueRequest(HttpRequestResponse requestResponse) {
-        // 资产知识图谱观测必须先于 L0 静态过滤：JS/CSS/source map 不送 LLM 扫描，
+        // 资产图谱观测必须先于 L0 静态过滤：JS/CSS/source map 不送 LLM 扫描，
         // 但必须作为 RESOURCE 入图，用于前端指纹与接口推导。
         // 图片/字体/音视频/压缩包等静态二进制不产生有价值的图谱信息，直接跳过，
         // 避免爬虫/爆破时每个资源都写多条 SQLite 事务把图谱线程拖垮。

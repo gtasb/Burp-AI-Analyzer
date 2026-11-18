@@ -126,7 +126,7 @@ public class AgentApiClient {
     private volatile String pendingRunMethod;
     private volatile String pendingRunUrl;
     private volatile boolean pendingRunHasRequest;
-    /** 下一轮是否为自动继续轮（organizer 驱动）：自动轮不重复注入侧栏摘要 */
+    /** 下一轮是否为 Loop 模式轮（organizer 驱动）：自动轮不重复注入侧栏摘要 */
     private volatile boolean nextRunIsAutoRound;
     // ========== 系统提示词缓存 ==========
     private volatile String cachedSystemPrompt;
@@ -212,7 +212,7 @@ public class AgentApiClient {
         this.nextRunIsAutoRound = false;
     }
 
-    /** 标记下一轮为自动继续轮（整理 agent 驱动）。 */
+    /** 标记下一轮为 Loop 模式轮（整理 agent 驱动）。 */
     public void setNextRunIsAutoRound() {
         this.nextRunIsAutoRound = true;
     }
@@ -795,12 +795,12 @@ public class AgentApiClient {
             // 注册浏览器渲染工具
             asToolkit.registerTool(new com.ai.analyzer.tools.BrowserRenderTool());
 
-            // 知识图谱：主动 agent 也可写（用户 2026-11-17 决定：主动模式要能边测边入图，
+            // 资产图谱：主动 agent 也可写（用户 2026-11-17 决定：主动模式要能边测边入图，
             // 整理 agent 仍在轮末做归并去重，两者按 canonical key 幂等共存）
             asToolkit.registerTool(new com.ai.analyzer.graph.GraphTool(
                     com.ai.analyzer.graph.GraphStore.getInstance(), getAgentName()));
             ensureNoteBroadcastSubscribed();
-            logInfo("AgentScope GraphTool（资产知识图谱 + 笔记，含主动 agent 写入）已注册");
+            logInfo("AgentScope GraphTool（资产图谱 + 笔记，含主动 agent 写入）已注册");
             if (role == AgentRole.ORGANIZER) {
                 java.nio.file.Path pocsBase = configuredWorkspacePath();
                 if (pocsBase == null) {
@@ -1243,7 +1243,7 @@ public class AgentApiClient {
 
         String userContent = buildAnalysisContent(httpRequest, userPrompt, sourceInfo);
         // 单向上下文共享：主动 agent 读取侧栏 agent 的结论摘要（不含工具轨迹）。
-        // 只在用户发起的轮注入：自动继续轮共享同一 sessionId，重复注入会让同一段
+        // 只在用户发起的轮注入：Loop 模式轮共享同一 sessionId，重复注入会让同一段
         // 摘要在会话历史里累积 N 份（每份最多 6k 字符）。
         if (role == AgentRole.ACTIVE && !nextRunIsAutoRound) {
             String digest = AgentDigestStore.getInstance().renderForPrompt(6_000);
@@ -1542,7 +1542,7 @@ public class AgentApiClient {
         return """
                 # 角色：证据整理与攻击向量指引 Agent
                 你不与人类对话，也不直接做漏洞发现。你的输入是「主动扫描 Agent 本轮的交接信息」
-                （目标、提示词、产出文本）以及知识图谱中其他 agent 的新贡献。每轮必须：
+                （目标、提示词、产出文本）以及资产图谱中其他 agent 的新贡献。每轮必须：
                 1. 用 `graph_overview(root_id)` 与 `graph_get_notes(root_id, 0)` 读取当前证据与人类牵引。
                 2. 把主动 Agent 的产出整理入图：确认/疑似发现、已有证据、技术指纹、能力特征、后端推测、
                    参数与接口覆盖。写入用 `graph_upsert_observation` / `graph_upsert_fingerprint` /
@@ -1569,7 +1569,7 @@ public class AgentApiClient {
 
                 # 纪律（必须遵守）
                 - **你不做侦察**。scope/proxy_history/sitemap/scanner/findings 一类的全站枚举
-                  是主动 Agent 的事；你的信息源只有交接文本、知识图谱和图谱笔记。
+                  是主动 Agent 的事；你的信息源只有交接文本、资产图谱和图谱笔记。
                   图谱已经记录的接口/指纹不要通过 Burp 重复枚举。
                 - 工具调用总数控制在必要范围（通常 5~8 次以内）；整理一轮的目标是
                   「入图 + 决策」，不是重新测一遍目标。

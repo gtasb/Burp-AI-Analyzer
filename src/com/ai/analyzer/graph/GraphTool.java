@@ -9,7 +9,7 @@ import java.util.Set;
 import com.ai.analyzer.graph.GraphTypes.EdgeType;
 
 /**
- * 知识图谱 Agent 工具（TODO2 §13）。
+ * 资产图谱 Agent 工具（TODO2 §13）。
  *
  * <p>Agent 通过这 8 个只读/受控写接口访问图谱；锁、SQLite、去重、
  * 事实等级推进全部由 {@link GraphStore}/{@link GraphDatabase} 封装，
@@ -26,7 +26,7 @@ public class GraphTool {
                 ? "agent" : defaultSourceAgent;
     }
 
-    @Tool(name = "graph_get_root", description = "查询目标站点根节点（Origin），确认该目标是否已在知识图谱中建档。返回 Origin 信息。")
+    @Tool(name = "graph_get_root", description = "查询目标站点根节点（Origin），确认该目标是否已在资产图谱中建档。返回 Origin 信息。")
     public String getRoot(
             @ToolParam(name = "origin", description = "目标 Origin，如 https://target.com 或 http://target.com:8080") String origin) {
         try {

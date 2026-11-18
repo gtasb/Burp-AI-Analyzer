@@ -34,7 +34,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * <ul>
  *   <li>无共享可变状态，天然隔离 —— 一个请求的工具调用/取消不会污染另一个请求；</li>
  *   <li>可被 {@code Semaphore} 安全地限定并发，实现「有界的模型并发预算」；</li>
- *   <li>无 workspace / session 持久化，跨请求的长期记忆交给共享知识图谱（笔记节点）承载。</li>
+ *   <li>无 workspace / session 持久化，跨请求的长期记忆交给共享资产图谱（笔记节点）承载。</li>
  * </ul>
  *
  * <p>只在 {@code Model} 与 {@code Toolkit} 两处共享（两者被设计为可跨 agent 复用），

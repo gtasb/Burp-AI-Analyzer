@@ -4,7 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * URL-Centric 资产知识图谱的类型定义（TODO2 §4/§5/§6）。
+ * URL-Centric 资产图谱的类型定义（TODO2 §4/§5/§6）。
  *
  * <p>核心约定：程序事实与 Agent 推测严格区分（status + confidence），
  * canonical key 一律由程序生成，LLM 只提供 name/relation/置信度。

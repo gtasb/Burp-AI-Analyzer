@@ -15,7 +15,7 @@ import java.util.function.BooleanSupplier;
 /**
  * 主动分析轮末的整理循环：
  * 主动 agent 完成一轮 → organizer 整理入图并判断是否继续 → 继续则把指令交回主动 agent，
- * 否则保存/展示报告。循环轮次可配置（0 = 不限），也可以关闭自动继续。
+ * 否则保存/展示报告。循环轮次可配置（0 = 不限），也可以关闭 Loop 模式。
  */
 public final class OrganizerCoordinator {
 
@@ -68,14 +68,15 @@ public final class OrganizerCoordinator {
         return stopped.get();
     }
 
-    /** 新一轮主动分析开始/结束时重置循环计数。 */
+    /** 新一轮主动分析开始/结束时重置循环计数。
+     *  不再向 phaseSink 投「第 1 轮」——它会覆盖面板刚设置的「第 N 轮」
+     *  （resetLoop 在 startAnalysisWorker 之前被调用），阶段文案由面板自己管。 */
     public void resetLoop() {
         continuationCount = 0;
         stopped.set(false);
         lastInstruction = "";
         // 不清 lastGaps 会让新会话第 1 轮就被“未覆盖点与上一轮相同”误杀
         lastGaps = "";
-        phaseSink.accept("主动分析中（第 1 轮）");
     }
 
     public void stop() {
@@ -249,7 +250,7 @@ public final class OrganizerCoordinator {
             }
             if (decision.continueAnalysis() && !instruction.isBlank()) {
                 sb.append(repeated ? "整理 agent 的指令与上一轮重复，判定为无进展；" : "")
-                        .append("整理 agent 建议继续，但自动继续已关闭或达到轮次上限：\n")
+                        .append("整理 agent 建议继续，但 Loop 模式已关闭或达到轮次上限：\n")
                         .append(instruction).append('\n');
             }
             report = sb.toString();
@@ -281,7 +282,7 @@ public final class OrganizerCoordinator {
         sb.append("""
 
                 【你的任务】
-                先读取知识图谱与笔记，把本轮产出和自上次以来其他 agent 的新贡献整理入图，
+                先读取资产图谱与笔记，把本轮产出和自上次以来其他 agent 的新贡献整理入图，
                 然后检查是否还有主动 agent 未覆盖的地方或新的攻击向量。
                 最后调用 organizer_finish（恰好一次）：
                 - 需要继续：continue_analysis=true，并给主动 agent 具体的下一步指令；

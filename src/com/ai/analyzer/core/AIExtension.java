@@ -38,7 +38,7 @@ public class AIExtension implements BurpExtension {
         api.userInterface().registerHttpRequestEditorProvider(sidePanelProvider);
         api.userInterface().registerHttpResponseEditorProvider(sidePanelProvider);
 
-        // 注册卸载清理：释放 SQLite 连接（知识图谱）与 WAL 文件句柄
+        // 注册卸载清理：释放 SQLite 连接（资产图谱）与 WAL 文件句柄
         api.extension().registerUnloadingHandler(() -> {
             try {
                 analyzerTab.disposeForUnload();

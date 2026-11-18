@@ -157,7 +157,7 @@ public class SystemPromptBuilder {
         // 资产图谱（含笔记/评估）：指纹、特征、推断、结论与人工牵引都在同一张图里
         p.append("""
                 \n# Knowledge Graph (graph_* tools，含笔记与人工牵引)
-                你与主动分析 Agent、人类共享同一个 SQLite 资产知识图谱（节点/边/证据/笔记）：
+                你与主动分析 Agent、人类共享同一个 SQLite 资产图谱（节点/边/证据/笔记）：
                 - 分析某站点前先 `graph_overview(root_id)`，并 `graph_get_notes(root_id, since_version=0)`
                   读取已有发现；人类写的 `instruction` 类笔记是明确指令，优先执行。
                 - 发现新接口/参数/指纹/特征时落图：`graph_upsert_observation` / `graph_upsert_fingerprint` / `graph_add_feature`。

@@ -26,7 +26,9 @@ public final class TokenUsageTracker {
     private long modelCalls;
     private long budgetTokens;
     private boolean overBudget;
-    private Consumer<UsageSnapshot> listener;
+    /** 多播监听：主动面板与被动状态栏各自注册，互不覆盖（setListener 曾是单消费者替换语义，
+     *  后注册的把先注册的顶掉，另一处 UI 就永远停在 0） */
+    private final java.util.List<Consumer<UsageSnapshot>> listeners = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     /** 静态共享实例（主动 / 被动 / 侧栏共用同一份统计） */
     private static volatile TokenUsageTracker sharedInstance = new TokenUsageTracker();
@@ -111,11 +113,27 @@ public final class TokenUsageTracker {
     }
 
     /**
-     * 注册状态变化监听（累计 / 重置 / 预算变更时触发）。
+     * 注册状态变化监听（累计 / 重置 / 预算变更时触发）。支持多个监听者；
+     * 同一实例重复注册会去重。
      */
     public void setListener(Consumer<UsageSnapshot> listener) {
+        addListener(listener);
+    }
+
+    /** 追加监听者（不覆盖已有）。 */
+    public void addListener(Consumer<UsageSnapshot> listener) {
+        if (listener == null) return;
         synchronized (lock) {
-            this.listener = listener;
+            if (!listeners.contains(listener)) {
+                listeners.add(listener);
+            }
+        }
+    }
+
+    /** 移除监听者。 */
+    public void removeListener(Consumer<UsageSnapshot> listener) {
+        synchronized (lock) {
+            listeners.remove(listener);
         }
     }
 
@@ -137,12 +155,16 @@ public final class TokenUsageTracker {
     }
 
     private void notifyListener(UsageSnapshot snapshot) {
-        Consumer<UsageSnapshot> l;
+        java.util.List<Consumer<UsageSnapshot>> toNotify;
         synchronized (lock) {
-            l = listener;
+            toNotify = new java.util.ArrayList<>(listeners);
         }
-        if (l != null) {
-            l.accept(snapshot);
+        for (Consumer<UsageSnapshot> l : toNotify) {
+            try {
+                l.accept(snapshot);
+            } catch (Exception ignored) {
+                // 单个 UI 监听者抛异常不影响其他监听者
+            }
         }
     }
 

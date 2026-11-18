@@ -26,7 +26,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 知识图谱的 SQLite 存储层（TODO2 §9/§10）。
+ * 资产图谱的 SQLite 存储层（TODO2 §9/§10）。
  *
  * <p>四张表：graph_roots / graph_nodes / graph_edges / graph_evidence。
  * 去重由 canonical key 的唯一约束保证：节点 (root_id,type,canonical_key)，

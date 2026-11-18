@@ -216,8 +216,8 @@ public class AIAnalyzerTab extends JPanel {
         settingsPanel.setActiveAnalysisPanel(activeAnalysisPanel);
         settingsPanel.addTabsTo(mainTabbedPane);
 
-        // 知识图谱可视化：按 Origin 查看当前 SQLite 资产图谱
-        mainTabbedPane.addTab("知识图谱", new GraphViewerPanel());
+        // 资产图谱可视化：按 Origin 查看当前 SQLite 资产图谱
+        mainTabbedPane.addTab("资产图谱", new GraphViewerPanel());
 
         JPanel mcpTrafficPanel = createMcpTrafficTabPanel();
         mainTabbedPane.addTab("Logger", mcpTrafficPanel);
@@ -553,7 +553,7 @@ public class AIAnalyzerTab extends JPanel {
                         api.logging().logToOutput("[Organizer] 用户已停止，放弃排队的下一轮");
                         return;
                     }
-                    // 自动继续必须回到主动模式，否则结果会渲染到被动面板
+                    // Loop 模式必须回到主动模式，否则结果会渲染到被动面板
                     if (analysisModeComboBox != null
                             && !MODE_ACTIVE.equals(analysisModeComboBox.getSelectedItem())) {
                         analysisModeComboBox.setSelectedItem(MODE_ACTIVE);
@@ -563,7 +563,7 @@ public class AIAnalyzerTab extends JPanel {
                             organizerCoordinator.stop();
                         }
                         activeAnalysisPanel.setOrganizerPhase("已停止：主动分析未启动");
-                        api.logging().logToOutput("[Organizer] 无法自动继续，建议: " + instruction);
+                        api.logging().logToOutput("[Organizer] 无法Loop 模式，建议: " + instruction);
                     }
                 }),
                 report -> activeAnalysisPanel.showOrganizerReport(report.markdown(), report.file()),

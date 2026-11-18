@@ -152,7 +152,7 @@ public class SettingsPanel {
         AGENT_MEMORY("Agent 会话与记忆", "agent 的 MEMORY.md、memory/ 与会话状态（等同新会话）"),
         ANALYSIS_RUNS("主动分析历史", "工作区 analysis-runs/ 下的 run 历史（清空后历史下拉框为空）"),
         ORGANIZER_ARTIFACTS("渗透报告与POC", "工作区 reports/ 与 pocs/（整理 agent 产出的报告与复测脚本）"),
-        GRAPH("知识图谱数据", "knowledge-graph.db 及 WAL 文件（不可恢复，等同重置图谱与笔记）"),
+        GRAPH("资产图谱数据", "knowledge-graph.db 及 WAL 文件（不可恢复，等同重置图谱与笔记）"),
         PYTHON_WORKDIR("Python 工作目录", "agent 生成并复用的 python-workdir/ 脚本"),
         CHAT_HISTORY("聊天历史", "~/.burp_ai_chat_history.dat（侧栏对话记录，删除不可恢复）"),
         RUNTIME_LOGS("运行时日志与统计", "Logger/Debug 内存日志与 Token 统计（仅内存）");
@@ -175,7 +175,7 @@ public class SettingsPanel {
 
         JLabel pathLabel = new JLabel();
         pathLabel.setFont(pathLabel.getFont().deriveFont(Font.PLAIN, 12f));
-        JLabel noteLabel = new JLabel("清理不可恢复；清理知识图谱建议先停止扫描。收藏列表不在本页清理。");
+        JLabel noteLabel = new JLabel("清理不可恢复；清理资产图谱建议先停止扫描。收藏列表不在本页清理。");
         noteLabel.setForeground(Color.GRAY);
         noteLabel.setFont(noteLabel.getFont().deriveFont(Font.PLAIN, 11f));
 
@@ -1377,19 +1377,19 @@ public class SettingsPanel {
         panel.add(enablePreScanCheckbox, gbc);
 
         // Python
-        // 证据整理 / 自动继续
+        // 证据整理 / Loop 模式
         row++;
         gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weighty = 0;
-        organizerAutoContinueCheckBox = new JCheckBox("启用证据整理与自动继续（完全自动化循环）", true);
+        organizerAutoContinueCheckBox = new JCheckBox("启用证据整理与 Loop 模式（完全自动化循环）", true);
         organizerAutoContinueCheckBox.setToolTipText(
-                "主动分析每轮结束后，由独立的整理 agent 入图并判断是否继续；关闭后只整理/出报告，不自动继续。");
+                "主动分析每轮结束后，由独立的整理 agent 入图并判断是否继续；关闭后只整理/出报告，不Loop 模式。");
         panel.add(organizerAutoContinueCheckBox, gbc);
 
         row++;
         gbc.gridy = row;
         JPanel organizerRoundsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        organizerRoundsPanel.add(new JLabel("最大自动继续轮次（0 = 不限）:"));
+        organizerRoundsPanel.add(new JLabel("Loop 模式最大轮次（0 = 不限）:"));
         organizerRoundsSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 999, 1));
         organizerRoundsSpinner.setPreferredSize(new Dimension(70, 25));
         organizerRoundsPanel.add(organizerRoundsSpinner);
@@ -2273,7 +2273,7 @@ public class SettingsPanel {
             // Burp MCP 发包工具开关（false = 屏蔽 http_send_request 系列）
             settings.setEnableBurpMcpSendTools(isBurpMcpSendToolsEnabled());
 
-            // 证据整理 / 自动继续
+            // 证据整理 / Loop 模式
             settings.setOrganizerAutoContinue(isOrganizerAutoContinue());
             settings.setOrganizerMaxRounds(getOrganizerMaxRounds());
 

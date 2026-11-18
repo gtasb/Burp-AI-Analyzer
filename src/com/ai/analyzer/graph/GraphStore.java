@@ -30,7 +30,7 @@ import com.ai.analyzer.graph.GraphTypes.Node;
 import com.ai.analyzer.graph.GraphTypes.NodeType;
 
 /**
- * 知识图谱门面（单例）：Burp 数据接入 + Agent 推测/确认 + 子图检索与紧凑渲染。
+ * 资产图谱门面（单例）：Burp 数据接入 + Agent 推测/确认 + 子图检索与紧凑渲染。
  *
  * <p>Agent 不直接操作数据库，只通过 {@link GraphTool} 暴露的 graph_* 工具访问本类。
  * 所有写入都带来源与事实等级（OBSERVED/DERIVED/INFERRED/CONFIRMED/REJECTED）。
@@ -137,7 +137,7 @@ public final class GraphStore {
         try {
             db = new GraphDatabase(base.resolve("knowledge-graph.db").toString());
         } catch (Exception e) {
-            throw new IllegalStateException("知识图谱数据库初始化失败: " + e.getMessage(), e);
+            throw new IllegalStateException("资产图谱数据库初始化失败: " + e.getMessage(), e);
         }
         maybeImportLegacyNotebooks(base);
         return db;

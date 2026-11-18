@@ -200,6 +200,15 @@ fan out via snapshot.
   requests — NOT curl_send_request (no prompt guidance steers there; CLI is the preferred path).
 - No interject button anymore (user 2026-11-17): Enter while analyzing = interject; the
   composer tooltip says so.
+- `TokenUsageTracker.setListener` is now MULTI-listener (CopyOnWriteArrayList; `addListener`/
+  `removeListener`; setListener delegates to addListener). It was single-consumer replace
+  semantics — the active panel's listener silently evicted AIAnalyzerTab's (or vice versa),
+  so one of the two token labels stayed 0 forever. Both register now.
+- `OrganizerCoordinator.resetLoop` no longer pushes the "第 1 轮" phase (it fired BEFORE
+  startAnalysisWorker and overwrote the panel's real round count in the phase line).
+- Renames (user 2026-11-18, user-facing strings only; class/file/method names unchanged):
+  「自动继续」→「Loop 模式」,「知识图谱」→「资产图谱」(tab title, settings, tooltips,
+  system prompts, tool descriptions).
 
 ## Session switcher (会话下拉)
 
@@ -224,10 +233,9 @@ pair → new call gets a new row. `finish()` renders **each section independentl
 (failures fall back to plain text and are logged to AppLogBuffer — previously swallowed
 silently, which is why "Markdown 完全没渲染" was invisible). `text()` still returns the
 concatenated full buffer for session persistence. Covered by `ChatTimelineInterleaveTest`.
-MarkdownRenderer spacing: single 
- between paragraphs/before headings, no extra 
- after
-lists (blank-line spacing was tried and reverted on user feedback — too much whitespace).
+MarkdownRenderer paragraph/list spacing: blank line between paragraphs and after lists,
+blank line before headings (was single 
+ — the "分析都没有换行" complaint).
 
 ## Active-mode rendering contract
 

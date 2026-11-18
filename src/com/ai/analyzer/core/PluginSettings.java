@@ -105,9 +105,9 @@ public class PluginSettings implements Serializable {
     /** 被动扫描流量来源：Burp ToolType 名称的逗号分隔列表，默认仅 Proxy */
     private String passiveScanToolSources = "PROXY";
 
-    // 证据整理 / 自动继续
+    // 证据整理 / Loop 模式
     private boolean organizerAutoContinue = true;
-    /** 自动继续最大轮次；0 表示不限 */
+    /** Loop 模式最大轮次；0 表示不限 */
     private int organizerMaxRounds = 0;
 
     // 自定义 MCP 服务器配置（JSON 字符串，简版数组格式）
@@ -117,7 +117,7 @@ public class PluginSettings implements Serializable {
     private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
         in.defaultReadObject();
         // 新字段在旧 Java 序列化流中不存在，反序列化默认值是 false/0；
-        // 按产品默认（自动继续开启、轮次不限）补齐，JSON 路径由字段初始化器负责。
+        // 按产品默认（Loop 模式开启、轮次不限）补齐，JSON 路径由字段初始化器负责。
         organizerAutoContinue = true;
         organizerMaxRounds = 0;
         normalize();

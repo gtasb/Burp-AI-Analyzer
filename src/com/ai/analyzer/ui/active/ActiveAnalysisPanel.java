@@ -20,7 +20,7 @@ import java.awt.*;
  *
  * <p>信息结构参考 Claude Code / Codex：
  * <ul>
- *   <li>顶部状态栏：目标、阶段、轮次、自动继续、模式、历史</li>
+ *   <li>顶部状态栏：目标、阶段、轮次、Loop 模式、模式、历史</li>
  *   <li>中部会话流：用户消息 / 主动分析 / 整理 agent / 工具调用 / 报告，按消息块排列</li>
  *   <li>底部输入区：Enter 发送，Shift+Enter 换行</li>
  * </ul>
@@ -74,14 +74,14 @@ public class ActiveAnalysisPanel extends JPanel {
     private volatile java.util.function.Consumer<AgentApiClient.CompletedRun> onRunCompleted;
     private volatile Runnable onRunStarted;
 
-    /** 上一轮上下文，供自动继续复用同一请求 */
+    /** 上一轮上下文，供 Loop 模式复用同一请求 */
     private volatile String lastHttpContent = "";
     private volatile String lastTargetDesc = "";
     private volatile String lastDetail = "";
     private volatile String lastMethod = null;
     private volatile String lastUrl = null;
     private volatile boolean lastHasRequest = false;
-    /** 本轮是否由整理 agent 自动继续触发（true 时不重复注入侧栏摘要） */
+    /** 本轮是否由整理 agent 的 Loop 模式触发（true 时不重复注入侧栏摘要） */
     private boolean nextRunAuto;
 
     /** 主动分析的思考增量（节流后显示在消息块里） */
@@ -176,7 +176,7 @@ public class ActiveAnalysisPanel extends JPanel {
         setBorder(new EmptyBorder(0, 0, 0, 0));
 
         // 头部：始终可见一行状态摘要（折叠钮+目标+阶段+轮次+token），
-        // 其下是可折叠的控件行（详情/自动继续/模式/历史/清空）。
+        // 其下是可折叠的控件行（详情/Loop 模式/模式/历史/清空）。
         // 点击折叠钮收起控件行，纵向空间全部让给对话时间线（CC 风格）。
         add(buildCollapsibleHeader(), BorderLayout.NORTH);
 
@@ -212,7 +212,7 @@ public class ActiveAnalysisPanel extends JPanel {
             boolean collapsed = collapseButton.isSelected();
             collapseButton.setText(collapsed ? "▸" : "▾");
             collapseButton.setToolTipText(collapsed
-                    ? "展开工具区（目标详情/自动继续/模式/历史）"
+                    ? "展开工具区（目标详情/Loop 模式/模式/历史）"
                     : "折叠工具区（把整个面板高度让给对话）");
             headerExpandedPanel.setVisible(!collapsed);
             revalidate();
@@ -238,11 +238,17 @@ public class ActiveAnalysisPanel extends JPanel {
         UIStyles.setFont(tokenLabel, 10f, Font.PLAIN);
         tokenLabel.setForeground(UIStyles.hintColor());
         info.add(tokenLabel);
+        // USAGE 事件到达时即时刷新（此前只在 setOrganizerPhase/buildUi 时读一次快照，
+        // 分析运行中永远显示 0；被动状态栏有自己的 listener，这里给主动面板接同一份）
+        TokenUsageTracker.instance().setListener(snapshot ->
+                SwingUtilities.invokeLater(() -> {
+                    if (tokenLabel != null) tokenLabel.setText(snapshot.summary());
+                }));
         bar.add(info, BorderLayout.CENTER);
         return bar;
     }
 
-    /** 可折叠的控件行：目标详情 / 自动继续 / 计划模式 / 会话切换 / 新会话。 */
+    /** 可折叠的控件行：目标详情 / Loop 模式 / 计划模式 / 会话切换 / 新会话。 */
     private JPanel buildExpandedPanel() {
         JPanel row = new JPanel();
         row.setLayout(new BoxLayout(row, BoxLayout.X_AXIS));
@@ -256,7 +262,7 @@ public class ActiveAnalysisPanel extends JPanel {
         row.add(targetDetailLabel);
         row.add(Box.createHorizontalStrut(10));
 
-        autoContinueCheckBox = new JCheckBox("自动继续", true);
+        autoContinueCheckBox = new JCheckBox("Loop 模式", true);
         autoContinueCheckBox.setToolTipText("每轮结束后由整理 agent 判断是否继续；关闭后只整理入图并出报告");
         autoContinueCheckBox.setFocusable(false);
         autoContinueCheckBox.setAlignmentY(Component.CENTER_ALIGNMENT);
@@ -553,10 +559,10 @@ public class ActiveAnalysisPanel extends JPanel {
                             if (completedRun != null) {
                                 SwingUtilities.invokeLater(() -> cb.accept(completedRun));
                             } else if (nextRunAuto) {
-                                // 自动继续轮必然 hasRequest；拿不到交接说明本轮被取消/出错，
+                                // Loop 模式轮必然 hasRequest；拿不到交接说明本轮被取消/出错，
                                 // 明确收掉整理循环，避免挂着「整理中」假状态
                                 SwingUtilities.invokeLater(() -> timeline.addSystem(
-                                        "本轮未产生交接信息，自动继续已终止"));
+                                        "本轮未产生交接信息，Loop 模式已终止"));
                             }
                         }
                     }
@@ -687,7 +693,7 @@ public class ActiveAnalysisPanel extends JPanel {
 
     private void updateLoopPolicyLabel() {
         if (loopPolicyLabel != null) {
-            loopPolicyLabel.setText("自动继续：" + (autoContinueCheckBox != null && autoContinueCheckBox.isSelected() ? "开" : "关"));
+            loopPolicyLabel.setText("Loop 模式：" + (autoContinueCheckBox != null && autoContinueCheckBox.isSelected() ? "开" : "关"));
         }
     }
 

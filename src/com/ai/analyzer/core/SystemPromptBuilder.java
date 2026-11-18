@@ -180,11 +180,11 @@ public class SystemPromptBuilder {
         // Note: Skills are auto-injected by HarnessAgent as <available_skills> block
         // from workspace/skills/ — no manual injection needed here.
 
-        // 知识图谱：所有交互 agent（主动/侧栏/整理）都可读写；
+        // 资产图谱：所有交互 agent（主动/侧栏/整理）都可读写；
         // 主动 agent 边测边入图，整理 agent 轮末归并去重（canonical key 幂等）
         p.append("""
                 \n# Knowledge Graph (graph_* tools，含笔记与人工牵引)
-                你与被动扫描 Agent 共享同一个 SQLite 资产知识图谱：节点、边、证据、笔记都在里面。
+                你与被动扫描 Agent 共享同一个 SQLite 资产图谱：节点、边、证据、笔记都在里面。
                 - 开始分析一个站点前先 `graph_overview(root_id)`，它包含接口/参数/指纹/特征与最近的站点笔记。
                 - `graph_get_notes(root_id, since_version)` 读取人类和其他 Agent 的笔记（0 = 全部，之后可用上次版本号取增量）。
                   人类写的 `instruction` 类笔记是明确指令，必须优先执行。

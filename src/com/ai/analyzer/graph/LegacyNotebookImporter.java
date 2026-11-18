@@ -11,7 +11,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 一次性把旧的 {@code <workspace>/notebooks/<domain>.md} 导入知识图谱的 NOTE 节点，
+ * 一次性把旧的 {@code <workspace>/notebooks/<domain>.md} 导入资产图谱的 NOTE 节点，
  * 导入成功后删除原文件。Notebook 子系统已合并进图谱，这里只负责历史数据迁移。
  */
 public final class LegacyNotebookImporter {
