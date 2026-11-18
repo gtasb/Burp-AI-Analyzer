@@ -494,6 +494,27 @@ public class ChatTimeline extends JPanel {
                 return streamedChars;
             }
 
+            /**
+             * 流式期间的节流 Markdown 预渲染：整段重渲染（不做增量样式计算——
+             * Markdown 的重排会让增量样式错位）。渲染后 streamedChars 归零，
+             * 后续 render() 的纯文本追加会重头追加——所以流式增量渲染只服务
+             * 「预览」，finish() 的 renderFinalMarkdown 才是最终态。
+             * 注意：重渲染后 document 内容已含全部已流式文本，追加逻辑
+             * （AssistantBlock.render）以 streamedChars 为准——这里重置为
+             * 当前文档长度，保证不重复追加。
+             */
+            void renderMarkdownPreview() {
+                String text = getText();
+                if (text.isBlank()) return;
+                try {
+                    setText("");
+                    MarkdownRenderer.renderMarkdown(this, text);
+                    streamedChars = getDocument().getLength();
+                } catch (Exception ignored) {
+                    // 预览失败保持现状（纯文本），finish() 兜底并记录日志
+                }
+            }
+
             /** 空段高度归零：工具行之间不留大空行（用户要求单换行的紧凑度）。 */
             @Override
             public Dimension getPreferredSize() {
@@ -533,6 +554,9 @@ public class ChatTimeline extends JPanel {
         private final javax.swing.Timer renderTimer;
         private volatile boolean dirty;
         private boolean finished;
+        /** 上一次 Markdown 预渲染时间：流式期间也节流渲染，不再让用户看纯文本源码 */
+        private long lastMarkdownRenderAt;
+        private static final long MARKDOWN_RENDER_INTERVAL_MS = 600;
 
         AssistantBlock(Card card) {
             this.card = card;
@@ -560,6 +584,16 @@ public class ChatTimeline extends JPanel {
                 if (dirty) {
                     dirty = false;
                     render();
+                    // 流式期间每 ~600ms 对当前段做一次 Markdown 重渲染：
+                    // 此前流式态显示纯 Markdown 源码，用户以为是渲染坏了
+                    // （切换会话走回放路径一次性渲染「又好了」加剧困惑）。
+                    // 渲染失败静默跳过（下一 tick 再试），finish() 兜底并记录。
+                    long now = System.currentTimeMillis();
+                    if (now - lastMarkdownRenderAt >= MARKDOWN_RENDER_INTERVAL_MS
+                            && currentText != null && currentText.getDocument().getLength() > 0) {
+                        lastMarkdownRenderAt = now;
+                        currentText.renderMarkdownPreview();
+                    }
                 }
             });
             renderTimer.setRepeats(true);
