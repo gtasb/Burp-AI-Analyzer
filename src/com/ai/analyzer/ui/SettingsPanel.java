@@ -1005,7 +1005,7 @@ public class SettingsPanel {
         gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
         panel.add(new JLabel("API 提供者:"), gbc);
         gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
-        String[] providers = {"DashScope", "OpenAI兼容", "Anthropic兼容"};
+        String[] providers = {"DashScope", "OpenAI兼容", "Anthropic兼容", "OpenCode Go"};
         apiProviderComboBox = new JComboBox<>(providers);
         apiProviderComboBox.setSelectedIndex(0);
         apiProviderComboBox.addActionListener(e -> {
@@ -1013,17 +1013,20 @@ public class SettingsPanel {
             apiClient.setApiProvider(sel);
             boolean isToolSearch = searchModeComboBox != null && searchModeComboBox.getSelectedIndex() >= 1;
             if ("DashScope".equals(sel)) {
-                if (apiUrlField.getText().contains("openai.com") || apiUrlField.getText().contains("anthropic.com") || apiUrlField.getText().isEmpty())
+                if (apiUrlField.getText().contains("openai.com") || apiUrlField.getText().contains("anthropic.com") || apiUrlField.getText().contains("opencode.ai") || apiUrlField.getText().isEmpty())
                     apiUrlField.setText("https://dashscope.aliyuncs.com/api/v1");
             } else if ("Anthropic兼容".equals(sel)) {
-                if (apiUrlField.getText().contains("dashscope") || apiUrlField.getText().contains("openai.com") || apiUrlField.getText().isEmpty())
+                if (apiUrlField.getText().contains("dashscope") || apiUrlField.getText().contains("openai.com") || apiUrlField.getText().contains("opencode.ai") || apiUrlField.getText().isEmpty())
                     apiUrlField.setText("https://api.anthropic.com");
+            } else if ("OpenCode Go".equals(sel)) {
+                if (apiUrlField.getText().contains("dashscope") || apiUrlField.getText().contains("openai.com") || apiUrlField.getText().contains("anthropic.com") || apiUrlField.getText().isEmpty())
+                    apiUrlField.setText("https://opencode.ai/zen/go/v1");
             } else {
-                if (apiUrlField.getText().contains("dashscope") || apiUrlField.getText().contains("anthropic.com") || apiUrlField.getText().isEmpty())
+                if (apiUrlField.getText().contains("dashscope") || apiUrlField.getText().contains("anthropic.com") || apiUrlField.getText().contains("opencode.ai") || apiUrlField.getText().isEmpty())
                     apiUrlField.setText("https://api.openai.com/v1");
             }
         });
-        apiProviderComboBox.setToolTipText("选择 API 提供者：DashScope（通义千问）、OpenAI 兼容格式、Anthropic 兼容（Claude）");
+        apiProviderComboBox.setToolTipText("选择 API 提供者：DashScope（通义千问）、OpenAI 兼容格式、Anthropic 兼容（Claude）、OpenCode Go（opencode.ai 套餐，自动注入网关校验头 x-opencode-session）");
         panel.add(apiProviderComboBox, gbc);
 
         // API URL

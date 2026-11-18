@@ -69,13 +69,24 @@ public class AgentScopeModelFactory {
             throw new IllegalArgumentException("API Key 不能为空");
         }
 
-        if (provider == ApiProvider.OPENAI_COMPATIBLE) {
+        if (provider == ApiProvider.OPENAI_COMPATIBLE || provider == ApiProvider.OPENCODE_GO) {
             return createOpenAIModel(apiKey, apiUrl, model, customParameters);
         }
         if (provider == ApiProvider.ANTHROPIC) {
             return createAnthropicModel(apiKey, apiUrl, model, customParameters);
         }
         return createDashScopeModel(apiKey, apiUrl, model, enableSearch, customParameters);
+    }
+
+    // ========== OpenCode Go ==========
+
+    /**
+     * OpenCode Go 套餐模型：OpenAI chat 协议，默认端点 {@code https://opencode.ai/zen/go/v1}。
+     * 网关校验由 {@link OpenCodeHeaderTransport} 注入（x-opencode-session + User-Agent）。
+     */
+    static Model createOpenCodeGoModel(String apiKey, String apiUrl, String model, String customParameters) {
+        String baseUrl = isBlank(apiUrl) ? "https://opencode.ai/zen/go/v1" : normalizeUrl(apiUrl, "https://opencode.ai/zen/go/v1");
+        return createOpenAIModel(apiKey, baseUrl, model, customParameters);
     }
 
     // ========== DashScope ==========
@@ -120,7 +131,13 @@ public class AgentScopeModelFactory {
                 .modelName(modelName)
                 .stream(true)
                 .generateOptions(defaultOptions);
-        if (isDeepSeekEndpoint(baseUrl, modelName)) {
+        // OpenCode Go 网关（opencode.ai）校验 x-opencode-session + User-Agent（缺 session
+        // 直接 400 MissingSessionID，实测 2026-11）。仅该上游换用注入头装饰 transport，
+        // 其他 provider 保持 AgentScope 默认 transport 解析（含重试/代理配置）不变。
+        if (OpenCodeHeaderTransport.isOpenCodeUpstream(baseUrl)) {
+            builder.httpTransport(OpenCodeHeaderTransport.wrapIfOpenCode(baseUrl,
+                    io.agentscope.core.model.transport.OkHttpTransport.builder().build()));
+        } else if (isDeepSeekEndpoint(baseUrl, modelName)) {
             // DeepSeek thinking 模式：所有带 tool_calls 的 assistant（含历史轮次）都必须回传
             // reasoning_content。不要用 compat.deepseek.DeepSeekFormatter——它会剥离旧轮次的
             // reasoning，长会话必然 400。这里用保留 reasoning 的 OpenAI 默认转换 + 关闭 strict。

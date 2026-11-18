@@ -68,18 +68,21 @@ public class AgentConfig {
     public enum ApiProvider {
         DASHSCOPE("DashScope"),
         OPENAI_COMPATIBLE("OpenAI兼容"),
-        ANTHROPIC("Anthropic兼容");
-        
+        ANTHROPIC("Anthropic兼容"),
+        /** OpenCode Go 套餐（opencode.ai/zen/go）：OpenAI chat 协议 + 网关校验头
+         *  （x-opencode-session 每会话稳定 ID + User-Agent；缺 session 直接 400 MissingSessionID） */
+        OPENCODE_GO("OpenCode Go");
+
         private final String displayName;
-        
+
         ApiProvider(String displayName) {
             this.displayName = displayName;
         }
-        
+
         public String getDisplayName() {
             return displayName;
         }
-        
+
         public static ApiProvider fromDisplayName(String displayName) {
             for (ApiProvider provider : values()) {
                 if (provider.displayName.equals(displayName)) {
@@ -87,6 +90,16 @@ public class AgentConfig {
                 }
             }
             return DASHSCOPE; // 默认
+        }
+
+        /** 保存的旧值兼容：URL 指向 opencode.ai 时视为 OpenCode Go。 */
+        public static ApiProvider normalize(ApiProvider provider, String apiUrl) {
+            if (provider == OPENCODE_GO) return OPENCODE_GO;
+            if (provider == OPENAI_COMPATIBLE
+                    && apiUrl != null && apiUrl.toLowerCase(java.util.Locale.ROOT).contains("opencode.ai")) {
+                return OPENCODE_GO;
+            }
+            return provider;
         }
     }
     

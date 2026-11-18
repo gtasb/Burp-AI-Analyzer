@@ -247,6 +247,18 @@ timeline (`showHistoryMode`/`restoreLive`) instead of destroying it. AssistantBl
 plain-text deltas per tick (O(1)) and renders full Markdown once at finish — the old
 every-tick full re-parse was O(n²).
 
+## OpenCode Go provider (opencode.ai)
+
+`ApiProvider.OPENCODE_GO`（显示名「OpenCode Go」）走 OpenAI chat 协议，默认 URL
+`https://opencode.ai/zen/go/v1`。网关（Cloudflare 后面）有两个硬校验（实测 2026-11）：
+`/v1/chat/completions` 缺 `x-opencode-session` → 400 MissingSessionID；无 User-Agent 被 CF 拒。
+`core/OpenCodeHeaderTransport` wraps the OkHttp transport (OpenAIChatModel.Builder.httpTransport)
+injecting a per-model-instance stable session id + UA — only when the URL host is opencode.ai;
+client-supplied x-opencode-session passes through. `/v1/models` does NOT need the session header
+(Bearer + UA suffice; ModelListFetcher adds the UA). `ApiProvider.normalize(provider, apiUrl)`
+migrates old「OpenAI兼容 + opencode.ai URL」configs to OPENCODE_GO at both factory call sites.
+Covered by `OpenCodeHeaderTransportTest`.
+
 ## Known bugs & quirks
 
 - **Every checkbox action listener MUST call `apiClient.setXxx()`** — not just toggle UI state. `enableCustomMcpCheckBox` was missing this (fixed), check new additions

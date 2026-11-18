@@ -476,7 +476,8 @@ public class PassiveScanApiClient {
         try {
             // 1. 创建 AgentScope Model
             io.agentscope.core.model.Model asModel = AgentScopeModelFactory.create(
-                    apiProvider,
+                    // 旧配置兼容：OpenAI兼容 + opencode.ai URL 归一化为 OpenCode Go（注入网关头）
+                    ApiProvider.normalize(apiProvider, apiUrl),
                     apiKey,
                     apiUrl,
                     model,

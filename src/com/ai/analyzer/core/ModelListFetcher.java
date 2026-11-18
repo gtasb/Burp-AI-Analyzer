@@ -51,7 +51,8 @@ public final class ModelListFetcher {
         return base + "/v1/models";
     }
 
-    /** 请求头：Anthropic 官方域名只发 x-api-key；兼容网关额外保留 Authorization。 */
+    /** 请求头：Anthropic 官方域名只发 x-api-key；兼容网关额外保留 Authorization。
+     *  OpenCode Go（opencode.ai）在 Cloudflare 后面，无 UA 会被拒——显式补。 */
     static Map<String, String> headers(String provider, String apiUrl, String apiKey) {
         Map<String, String> headers = new LinkedHashMap<>();
         headers.put("Accept", "application/json");
@@ -64,7 +65,21 @@ public final class ModelListFetcher {
         } else {
             headers.put("Authorization", "Bearer " + apiKey);
         }
+        if ("OpenCode Go".equals(provider) || isOpenCodeUrl(apiUrl)) {
+            headers.put("User-Agent", "burp-ai-analyzer/1.4");
+        }
         return headers;
+    }
+
+    /** URL host 是否指向 OpenCode 网关（opencode.ai）。 */
+    static boolean isOpenCodeUrl(String apiUrl) {
+        try {
+            if (apiUrl == null || apiUrl.isBlank()) return false;
+            String host = URI.create(trimTrailingSlashes(apiUrl.trim())).getHost();
+            return host != null && (host.equalsIgnoreCase("opencode.ai") || host.toLowerCase().endsWith(".opencode.ai"));
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private static boolean isNativeAnthropic(String apiUrl) {

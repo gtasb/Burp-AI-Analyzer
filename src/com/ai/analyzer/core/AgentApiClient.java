@@ -762,7 +762,8 @@ public class AgentApiClient {
         try {
             // 1. 创建 AgentScope Model
             io.agentscope.core.model.Model asModel = AgentScopeModelFactory.create(
-                    config.getApiProvider(),
+                    // 旧配置兼容：OpenAI兼容 + opencode.ai URL 归一化为 OpenCode Go（注入网关头）
+                    ApiProvider.normalize(config.getApiProvider(), config.getApiUrl()),
                     config.getApiKey(),
                     config.getApiUrl(),
                     config.getModel(),
