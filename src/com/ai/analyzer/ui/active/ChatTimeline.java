@@ -494,13 +494,44 @@ public class ChatTimeline extends JPanel {
                 return streamedChars;
             }
 
-            /** 空段高度归零：工具行之间不留大空行（用户要求单换行的紧凑度）。 */
+            /**
+             * 高度自算（不依赖 super.getPreferredSize()）：
+             * FlatTextPaneUI 的 pref 依赖组件当前 size——BoxLayout 首次布局时
+             * size=0 → pref=0 → 分配 0 高 → 永远 0（线上实锤：textLen=171 但
+             * pref height=0，setSize 后立刻变 179）。这里按父容器宽度 + 字体
+             * 度量独立估算换行行数，空段归零。
+             */
             @Override
             public Dimension getPreferredSize() {
-                if (getDocument().getLength() == 0) {
+                int docLen = getDocument().getLength();
+                if (docLen == 0) {
                     return new Dimension(0, 0);
                 }
-                return super.getPreferredSize();
+                // 宽度：优先用父容器实际宽度（布局已分配），否则用一个合理默认
+                int width = getWidth();
+                if (width <= 0 && getParent() != null) {
+                    width = getParent().getWidth();
+                }
+                if (width <= 0) width = 600;
+                width = Math.max(width - 8, 100); // 减去 border/margin
+
+                // 行数估算：显式换行 + 按字符宽度的软换行
+                String text = getText();
+                FontMetrics fm = getFontMetrics(getFont());
+                int charW = Math.max(fm.charWidth('中'), 6); // 中文全角
+                int charsPerLine = Math.max(width / charW, 10);
+                int lines = 0;
+                for (String para : text.split("\n", -1)) {
+                    // 中英混排按平均字宽估算（偏保守，宁多勿少）
+                    int est = 0;
+                    for (int i = 0; i < para.length(); i++) {
+                        est += fm.charWidth(para.charAt(i));
+                    }
+                    lines += Math.max(1, (est + width - 1) / width);
+                }
+                int lineH = fm.getHeight();
+                int height = lines * lineH + 4;
+                return new Dimension(width + 8, height);
             }
 
             /** 收尾：整段按 Markdown 重渲染（表格/代码块此时才成型）。异常记录而不是吞掉。 */
