@@ -335,11 +335,19 @@ public class ActiveAnalysisPanel extends JPanel {
         return row;
     }
 
+    /** 输入框自适应行数范围 */
+    private static final int COMPOSER_MIN_ROWS = 2;
+    private static final int COMPOSER_MAX_ROWS = 18;
+    /** 用户手动拖高后的固定行数（-1 = 未手动设置，自适应模式） */
+    private int composerManualRows = -1;
+    private JScrollPane promptScroll;
+    private JTextArea promptGripTarget;
+
     private JPanel buildComposer() {
         JPanel panel = new JPanel(new BorderLayout(4, 2));
         panel.setBorder(UIStyles.scrollBorder());
 
-        activeModePromptArea = new JTextArea(2, 60);
+        activeModePromptArea = new JTextArea(COMPOSER_MIN_ROWS, 60);
         activeModePromptArea.setLineWrap(true);
         activeModePromptArea.setWrapStyleWord(true);
         UIStyles.setFont(activeModePromptArea, 13f, Font.PLAIN);
@@ -353,16 +361,93 @@ public class ActiveAnalysisPanel extends JPanel {
                 }
             }
         });
+        // 内容变化时自适应行数（用户未手动拖高时）：
+        // 行数随实际内容行数增长，回满 2 行；封顶 18 行后内滚动
+        activeModePromptArea.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            @Override public void insertUpdate(javax.swing.event.DocumentEvent e) { adaptComposerRows(); }
+            @Override public void removeUpdate(javax.swing.event.DocumentEvent e) { adaptComposerRows(); }
+            @Override public void changedUpdate(javax.swing.event.DocumentEvent e) { adaptComposerRows(); }
+        });
         promptArea = activeModePromptArea;
-        JScrollPane promptScroll = new JScrollPane(activeModePromptArea);
+        promptGripTarget = activeModePromptArea;
+        promptScroll = new JScrollPane(activeModePromptArea);
         promptScroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
         promptScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         panel.add(promptScroll, BorderLayout.CENTER);
 
+        // 顶部拖拽条：上下拖调节输入框行数（拖过即进入手动模式，不再自适应；
+        // 拖回 ≤2 行恢复自适应）。光标给北向缩放提示。
+        JPanel grip = new JPanel() {
+            @Override
+            protected void paintComponent(java.awt.Graphics g) {
+                super.paintComponent(g);
+                java.awt.Graphics2D g2 = (java.awt.Graphics2D) g.create();
+                try {
+                    g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
+                            java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+                    int w = getWidth();
+                    g2.setColor(new Color(0x9a, 0xa3, 0xb0));
+                    g2.fillRoundRect(w / 2 - 24, 4, 48, 4, 3, 3);
+                } finally {
+                    g2.dispose();
+                }
+            }
+        };
+        grip.setPreferredSize(new Dimension(8, 10));
+        grip.setCursor(Cursor.getPredefinedCursor(Cursor.N_RESIZE_CURSOR));
+        grip.setToolTipText("拖动调节输入框高度（拖回最小恢复自适应）");
+        grip.addMouseListener(new java.awt.event.MouseAdapter() {
+            int dragYStart = 0;
+            int rowsStart = 0;
+
+            @Override
+            public void mousePressed(java.awt.event.MouseEvent e) {
+                dragYStart = e.getYOnScreen();
+                rowsStart = activeModePromptArea.getRows();
+            }
+
+            @Override
+            public void mouseDragged(java.awt.event.MouseEvent e) {
+                int dy = e.getYOnScreen() - dragYStart;
+                // 一行约 20px（13f YaHei）
+                int newRows = rowsStart - dy / 20;
+                newRows = Math.max(COMPOSER_MIN_ROWS, Math.min(COMPOSER_MAX_ROWS, newRows));
+                if (newRows != activeModePromptArea.getRows()) {
+                    activeModePromptArea.setRows(newRows);
+                    // 拖过 = 手动模式（除非拖回最小值）
+                    composerManualRows = newRows > COMPOSER_MIN_ROWS ? newRows : -1;
+                    panel.revalidate();
+                    panel.repaint();
+                }
+            }
+        });
+        panel.add(grip, BorderLayout.NORTH);
+
         // 无独立「插话」按钮（用户决定）：运行中 Enter 即插话（见 sendFromComposer），
         // 提示语放进输入框 tooltip
-        activeModePromptArea.setToolTipText("Enter 发送 / 运行中 Enter 插话（不打断当前分析）· Shift+Enter 换行");
+        activeModePromptArea.setToolTipText("Enter 发送 / 运行中 Enter 插话（不打断当前分析）· Shift+Enter 换行 · 顶部拖条可调高度");
         return panel;
+    }
+
+    /** 自适应行数：跟随实际内容行数（手动拖高后禁用，直到拖回最小）。 */
+    private void adaptComposerRows() {
+        if (composerManualRows > 0 || activeModePromptArea == null) return;
+        JTextArea area = activeModePromptArea;
+        int contentRows = area.getLineCount();
+        // 换行后的软行也按字符量估算（长段落一行 >60 字符时）：
+        // 用文档长度 / 每行字符数上界，取与显式行数的较大者
+        int est = Math.max(contentRows, area.getDocument().getLength() / 58 + 1);
+        int target = Math.max(COMPOSER_MIN_ROWS, Math.min(COMPOSER_MAX_ROWS, est));
+        if (target != area.getRows()) {
+            final int t = target;
+            SwingUtilities.invokeLater(() -> {
+                area.setRows(t);
+                if (promptScroll != null) {
+                    promptScroll.revalidate();
+                    promptScroll.repaint();
+                }
+            });
+        }
     }
 
     /**
@@ -375,12 +460,22 @@ public class ActiveAnalysisPanel extends JPanel {
             if (apiClient != null && apiClient.interject(text)) {
                 timeline.addUser(text, "运行中插话");
                 activeModePromptArea.setText("");
+                resetComposerHeight();
             } else {
                 timeline.addSystem("插话失败：当前没有可插入的运行实例");
             }
             return;
         }
         performAnalysis();
+    }
+
+    /** 发送后收缩回最小行数（自适应模式下；手动模式保持用户设置）。 */
+    private void resetComposerHeight() {
+        if (composerManualRows > 0 || activeModePromptArea == null) return;
+        activeModePromptArea.setRows(COMPOSER_MIN_ROWS);
+        if (promptScroll != null) {
+            promptScroll.revalidate();
+        }
     }
 
     private void applyEditorTheme(JTextComponent component) {
@@ -511,6 +606,7 @@ public class ActiveAnalysisPanel extends JPanel {
         }
         if (activeModePromptArea != null) {
             activeModePromptArea.setText("");
+            resetComposerHeight();
         }
 
         timeline.addUser(userPrompt == null ? "" : userPrompt, targetDesc);
