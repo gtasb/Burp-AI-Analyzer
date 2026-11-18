@@ -129,7 +129,7 @@ public class ChatTimeline extends JPanel {
         holder.setOpaque(false);
         holder.setAlignmentX(Component.LEFT_ALIGNMENT);
         holder.add(area, BorderLayout.CENTER);
-        JButton toggle = new JButton(open ? "收起" : "展开 " + countLines(content) + " 行");
+        JButton toggle = new JButton(open ? "▾ 收起" : "▸ 展开 " + countLines(content) + " 行");
         toggle.setFont(toggle.getFont().deriveFont(10f));
         toggle.setMargin(new Insets(0, 4, 0, 4));
         toggle.setFocusable(false);
@@ -454,11 +454,11 @@ public class ChatTimeline extends JPanel {
                 if (expanded) {
                     argsArea.setText(fullArgs);
                     argsScroll.setVisible(true);
-                    expandLink.setText("收起");
+                    expandLink.setText("▾");
                 } else {
                     argsArea.setText(collapseToOneLine(fullArgs));
                     argsScroll.setVisible(true);
-                    expandLink.setText("展开");
+                    expandLink.setText("▸");
                 }
                 revalidate();
                 repaint();
@@ -504,7 +504,7 @@ public class ChatTimeline extends JPanel {
                         // 超一行：默认折叠
                         expanded = false;
                         argsArea.setText(collapseToOneLine(fullArgs));
-                        expandLink.setText("展开");
+                        expandLink.setText("▸");
                         expandLink.setVisible(true);
                     } else {
                         // 一行内：直接显示，无展开链接
