@@ -83,6 +83,8 @@ public class ActiveAnalysisPanel extends JPanel {
     private volatile boolean lastHasRequest = false;
     /** 本轮是否由整理 agent 的 Loop 模式触发（true 时不重复注入侧栏摘要） */
     private boolean nextRunAuto;
+    /** clear/新会话递增：挂起的 organizer 异步回调据此丢弃过期追加 */
+    private volatile int clearGeneration;
 
     /** 主动分析的思考增量（节流后显示在消息块里） */
     private final StringBuilder currentThinking = new StringBuilder();
@@ -647,16 +649,14 @@ public class ActiveAnalysisPanel extends JPanel {
                         String result = block.text();
                         recordRunAsync(method, url, userPrompt, result);
                         java.util.function.Consumer<AgentApiClient.CompletedRun> cb = onRunCompleted;
-                        // 整理 agent 只处理真实渗透测试轮（有绑定请求）；自由对话/
-                        // 提问轮交给它只会触发与用户意图无关的全站侦察，纯属浪费 token。
-                        // hasRequest == false 的轮不交接，整理循环直接跳过。
-                        if (cb != null && apiClient != null && hasRequest) {
+                        // Loop 模式勾选时，任何分析完成都触发 organizer（含自由对话轮）。
+                        // organizer 的系统提示词已约束它不做无关侦察，只整理本轮产出。
+                        boolean loopEnabled = autoContinueCheckBox != null && autoContinueCheckBox.isSelected();
+                        if (cb != null && apiClient != null && loopEnabled) {
                             AgentApiClient.CompletedRun completedRun = apiClient.getLastCompletedRun();
                             if (completedRun != null) {
                                 SwingUtilities.invokeLater(() -> cb.accept(completedRun));
                             } else if (nextRunAuto) {
-                                // Loop 模式轮必然 hasRequest；拿不到交接说明本轮被取消/出错，
-                                // 明确收掉整理循环，避免挂着「整理中」假状态
                                 SwingUtilities.invokeLater(() -> timeline.addSystem(
                                         "本轮未产生交接信息，Loop 模式已终止"));
                             }
@@ -747,6 +747,7 @@ public class ActiveAnalysisPanel extends JPanel {
     }
 
     public void clearResults() {
+        clearGeneration++;
         if (currentWorker != null && !currentWorker.isDone()) {
             if (apiClient != null) {
                 apiClient.cancelStreaming();
@@ -808,7 +809,9 @@ public class ActiveAnalysisPanel extends JPanel {
 
     public void appendOrganizerEvent(String text) {
         if (text == null || text.isBlank()) return;
+        final int gen = clearGeneration;
         SwingUtilities.invokeLater(() -> {
+            if (gen != clearGeneration) return; // clear 后丢弃过期事件
             String timestamp = java.time.LocalDateTime.now().format(
                     java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
             timeline.addOrganizerEvent("[" + timestamp + "] " + text.replaceAll("\\s+", " ").trim());
@@ -817,7 +820,9 @@ public class ActiveAnalysisPanel extends JPanel {
 
     public void showOrganizerReport(String markdown, java.nio.file.Path file) {
         if (markdown == null || markdown.isBlank()) return;
+        final int gen = clearGeneration;
         SwingUtilities.invokeLater(() -> {
+            if (gen != clearGeneration) return; // clear 后丢弃过期报告
             timeline.finishOrganizer();
             timeline.addReport(markdown, file);
             if (tokenLabel != null) tokenLabel.setText(TokenUsageTracker.instance().snapshot().summary());
@@ -880,6 +885,7 @@ public class ActiveAnalysisPanel extends JPanel {
 
     /** 新会话：不再销毁旧会话（保留在下拉里可切回），只换 sessionId + 清空时间线。 */
     public void startNewSession() {
+        clearGeneration++;
         if (isAnalyzing) {
             timeline.addSystem("分析进行中，先停止再新开会话");
             return;
