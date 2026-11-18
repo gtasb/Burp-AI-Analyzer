@@ -373,9 +373,8 @@ public class ChatTimeline extends JPanel {
     public static final class AssistantBlock {
 
         /**
-         * 单次工具调用的行：状态 + 工具名 + 参数摘要 + 结束时间。
-         * 全部纯文本（无 ✓/▸ 等符号字形——部分字体缺字渲染成方框），
-         * 参数长文换行显示。
+         * 单次工具调用的行：状态 + 工具名 + 参数（超一行自动折叠）+ 结束时间。
+         * 参数超过一行时折叠为单行摘要 + 「展开」链接，点击展开/收起。
          */
         private static final class ToolRow extends JPanel {
             final String toolName;
@@ -385,12 +384,16 @@ public class ChatTimeline extends JPanel {
             private final JScrollPane argsScroll;
             private final JLabel time = new JLabel();
             private final JPanel headRow = new JPanel(new BorderLayout(4, 0));
+            private final JButton expandLink = new JButton();
             private static final int MAX_ARGS_HEIGHT = 260;
+            /** 一行的近似字符数（11f 字体，中文约 11px/字） */
+            private static final int ONE_LINE_CHARS = 80;
+            private boolean expanded = false;
+            private String fullArgs = "";
 
             ToolRow(String toolName) {
                 this.toolName = toolName;
                 setOpaque(false);
-                // 单换行的紧凑感：上下仅 1px（此前 4px + 空文本段 margin 叠出大空行）
                 setBorder(new EmptyBorder(1, 6, 1, 2));
                 setAlignmentX(Component.LEFT_ALIGNMENT);
 
@@ -402,6 +405,18 @@ public class ChatTimeline extends JPanel {
                 head.add(status);
                 head.add(name);
 
+                // 展开/收起链接
+                expandLink.setFont(expandLink.getFont().deriveFont(10f));
+                expandLink.setForeground(new Color(0x2a7de1));
+                expandLink.setBorderPainted(false);
+                expandLink.setContentAreaFilled(false);
+                expandLink.setMargin(new Insets(0, 2, 0, 2));
+                expandLink.setFocusable(false);
+                expandLink.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                expandLink.setVisible(false);
+                expandLink.addActionListener(e -> toggleExpand());
+                head.add(expandLink);
+
                 argsArea.setEditable(false);
                 argsArea.setLineWrap(true);
                 argsArea.setWrapStyleWord(true);
@@ -409,17 +424,13 @@ public class ChatTimeline extends JPanel {
                 UIStyles.setFont(argsArea, 11f, Font.PLAIN);
                 argsArea.setForeground(UIStyles.hintColor());
                 argsArea.setBorder(new EmptyBorder(0, 2, 0, 0));
-                // 压掉 JTextArea 默认 margin(3,3,3,3)：工具名行与参数行只换行不空行
                 argsArea.setMargin(new Insets(0, 0, 0, 0));
 
-                // 完整参数放进滚动视口：内容完整保留（不截断），超高时行内滚动
-                // 而不是把整条时间线撑爆
                 argsScroll = new JScrollPane(argsArea);
                 argsScroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
                 argsScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
                 argsScroll.setOpaque(false);
                 argsScroll.getViewport().setOpaque(false);
-                // 视口边距也压为零：标题→参数首行紧贴换行
                 argsScroll.getViewport().setBorder(null);
                 argsScroll.setBorder(null);
                 argsScroll.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -438,12 +449,46 @@ public class ChatTimeline extends JPanel {
                 add(argsScroll);
             }
 
-            /** 参数区高度：短内容按内容自适应，长内容封顶 260px（完整保留、行内滚动）。 */
+            private void toggleExpand() {
+                expanded = !expanded;
+                if (expanded) {
+                    argsArea.setText(fullArgs);
+                    argsScroll.setVisible(true);
+                    expandLink.setText("收起");
+                } else {
+                    argsArea.setText(collapseToOneLine(fullArgs));
+                    argsScroll.setVisible(true);
+                    expandLink.setText("展开");
+                }
+                revalidate();
+                repaint();
+            }
+
+            /** 折叠为单行：截断到约 ONE_LINE_CHARS 字符 + … */
+            private static String collapseToOneLine(String args) {
+                String oneLine = args.replaceAll("\\s+", " ").trim();
+                if (oneLine.length() <= ONE_LINE_CHARS) return oneLine;
+                return oneLine.substring(0, ONE_LINE_CHARS) + "…";
+            }
+
+            /** 判断参数是否超过一行 */
+            private static boolean isMultiLine(String args) {
+                if (args.contains("\n")) return true;
+                String oneLine = args.replaceAll("\\s+", " ").trim();
+                return oneLine.length() > ONE_LINE_CHARS;
+            }
+
             @Override
             public Dimension getPreferredSize() {
                 Dimension d = super.getPreferredSize();
                 if (argsScroll.isVisible()) {
-                    int argHeight = Math.min(argsArea.getPreferredSize().height, MAX_ARGS_HEIGHT);
+                    int argHeight;
+                    if (expanded) {
+                        argHeight = Math.min(argsArea.getPreferredSize().height, MAX_ARGS_HEIGHT);
+                    } else {
+                        // 折叠态：固定一行高
+                        argHeight = argsArea.getFontMetrics(argsArea.getFont()).getHeight() + 2;
+                    }
                     d = new Dimension(d.width, headRow.getPreferredSize().height + argHeight + 2);
                 }
                 return d;
@@ -454,8 +499,19 @@ public class ChatTimeline extends JPanel {
                 status.setForeground(failed ? UIStyles.DANGER : running ? UIStyles.hintColor() : UIStyles.textColor());
                 name.setForeground(failed ? UIStyles.DANGER : UIStyles.textColor());
                 if (args != null && !args.isBlank()) {
-                    // 完整显示参数（不截断不加省略号）：滚动视口内完整保留
-                    argsArea.setText(args.trim());
+                    fullArgs = args.trim();
+                    if (isMultiLine(fullArgs)) {
+                        // 超一行：默认折叠
+                        expanded = false;
+                        argsArea.setText(collapseToOneLine(fullArgs));
+                        expandLink.setText("展开");
+                        expandLink.setVisible(true);
+                    } else {
+                        // 一行内：直接显示，无展开链接
+                        expanded = true;
+                        argsArea.setText(fullArgs);
+                        expandLink.setVisible(false);
+                    }
                     argsScroll.setVisible(true);
                 }
                 if (!running) {

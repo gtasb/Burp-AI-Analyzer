@@ -1,5 +1,21 @@
 # AGENTS.md
 
+## P0 测试规则（永久生效，不可跳过）
+
+**任何 UI 相关改动，开发 agent 必须实际操作 Burp UI 进行端到端测试，不可仅靠单元测试交付。**
+
+- 测试基础设施：`%LOCALAPPDATA%/Temp/burp-ui-test/` 下的 attach agent
+  （UITestAgent）+ Python drive.py。通过 `jcmd <pid> JVMTI.agent_load` 注入 Burp JVM，
+  在 EDT 上驱动 Swing 组件（find/click/type/dump/eval/screenshot/tabs/combo/checkbox）。
+- 测试流程：编译打包 → 等自动重载（或 one-shot agent 调 MontoyaApi 重载）→
+  drive.py 发命令操作 UI → dump 组件树断言 → 截屏留证。
+- 一次性反射操作（clearResults/analyzeDirectRequest 等）用 OneShot*.java agent，
+  通过 MontoyaApi **接口**（非实现类，实现类被混淆）调用。
+- 每次 UI 改动后至少跑：流式输出可见性、工具行显示、新会话/停止/清空、
+  Loop→organizer 链路、端到端带工具调用的分析。
+- 单元测试（mvn test）是必要但不充分条件；UI 实测是充分条件。
+- 探针日志：`~/ai-analyzer-logs/plugin-YYYYMMDD.log`（磁盘镜像，可直接读）。
+
 ## Build & test
 
 ```powershell
