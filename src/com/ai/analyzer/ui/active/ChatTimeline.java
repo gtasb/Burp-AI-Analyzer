@@ -88,14 +88,77 @@ public class ChatTimeline extends JPanel {
         return content.getComponentCount() == 0;
     }
 
+    /** 测试/调试通道：时间线内容容器。 */
+    JPanel content() {
+        return content;
+    }
+
     /** 左侧强调条配色：用户=蓝（主题前景），agent=中性，报告=品牌蓝 */
     private static final Color ACCENT_USER = new Color(0x2a7de1);
     private static final Color ACCENT_AGENT = new Color(0x8a, 0x93, 0xa2);
     private static final Color ACCENT_ORGANIZER = new Color(0x7a, 0x9e, 0x7a);
     private static final Color ACCENT_REPORT = new Color(0x2a7de1);
 
+    /** 用户消息折叠阈值：超过该行数显示「展开」按钮（CC 风格，长输入不霸屏） */
+    private static final int USER_MSG_COLLAPSE_LINES = 6;
+    /** 折叠态每行约多少字符（按 12f 字号经验值） */
+    private static final int USER_MSG_CHARS_PER_LINE = 46;
+
     public void addUser(String text, String target) {
         Card card = new Card("你", target, ACCENT_USER);
+        String content = text == null ? "" : text;
+        card.setBody(buildUserBody(content, null));
+        append(card);
+    }
+
+    /**
+     * 用户消息正文：短文本直接显示；长文本（>6 行）折叠到 6 行 + 「展开 N 行」按钮，
+     * 点击展开全文并变「收起」。双向切换都重建正文。
+     */
+    private JComponent buildUserBody(String content, Boolean expanded) {
+        boolean isLong = content.length() > USER_MSG_COLLAPSE_LINES * USER_MSG_CHARS_PER_LINE;
+        if (!isLong) {
+            return userTextArea(content);
+        }
+        boolean open = Boolean.TRUE.equals(expanded);
+        JTextArea area = userTextArea(open ? content : clipToLines(content, USER_MSG_COLLAPSE_LINES));
+        if (!open) {
+            area.setText(area.getText() + "\n…"); // 折叠尾标记
+        }
+        JPanel holder = new JPanel(new BorderLayout(0, 2));
+        holder.setOpaque(false);
+        holder.setAlignmentX(Component.LEFT_ALIGNMENT);
+        holder.add(area, BorderLayout.CENTER);
+        JButton toggle = new JButton(open ? "收起" : "展开 " + countLines(content) + " 行");
+        toggle.setFont(toggle.getFont().deriveFont(10f));
+        toggle.setMargin(new Insets(0, 4, 0, 4));
+        toggle.setFocusable(false);
+        toggle.setBorderPainted(false);
+        toggle.setContentAreaFilled(false);
+        toggle.setForeground(new Color(0x2a7de1));
+        toggle.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        final boolean nextOpen = !open;
+        toggle.addActionListener(e -> {
+            java.awt.Container gp = holder.getParent();
+            if (gp == null) return;
+            JComponent replacement = buildUserBody(content, nextOpen);
+            gp.removeAll();
+            gp.add(replacement, BorderLayout.CENTER);
+            gp.revalidate();
+            gp.repaint();
+            // 展开/收起后把视口滚回本卡片（避免停在远处看不到变化）
+            SwingUtilities.invokeLater(() -> {
+                JScrollBar bar = scroll.getVerticalScrollBar();
+                if (bar != null) {
+                    bar.setValue(Math.max(0, bar.getMaximum() - bar.getVisibleAmount()));
+                }
+            });
+        });
+        holder.add(toggle, BorderLayout.SOUTH);
+        return holder;
+    }
+
+    private static JTextArea userTextArea(String text) {
         JTextArea body = new JTextArea(text == null ? "" : text);
         body.setEditable(false);
         body.setLineWrap(true);
@@ -103,8 +166,39 @@ public class ChatTimeline extends JPanel {
         body.setOpaque(false);
         UIStyles.setFont(body, 12f, Font.PLAIN);
         body.setForeground(UIStyles.textColor());
-        card.setBody(body);
-        append(card);
+        body.setMargin(new Insets(0, 0, 0, 0));
+        body.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return body;
+    }
+
+    /** 估算换行后的行数（按每行约 46 字符 + 显式换行）。 */
+    private static int countLines(String text) {
+        if (text == null || text.isEmpty()) return 0;
+        int lines = 0;
+        for (String para : text.split("\n", -1)) {
+            lines += Math.max(1, (para.length() + USER_MSG_CHARS_PER_LINE - 1) / USER_MSG_CHARS_PER_LINE);
+        }
+        return lines;
+    }
+
+    /** 折叠态裁剪：保留估算的前 maxLines 行内容。 */
+    private static String clipToLines(String text, int maxLines) {
+        if (text == null) return "";
+        StringBuilder sb = new StringBuilder();
+        int lines = 0;
+        int i = 0;
+        while (i < text.length() && lines < maxLines) {
+            char c = text.charAt(i);
+            sb.append(c);
+            i++;
+            if (c == '\n') {
+                lines++;
+            } else if (sb.length() % USER_MSG_CHARS_PER_LINE == 0) {
+                // 估算的软换行（JTextArea 实际自动换行，这里只限制保留的字符量）
+                lines++;
+            }
+        }
+        return sb.toString();
     }
 
     public void addSystem(String text) {
