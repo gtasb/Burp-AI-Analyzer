@@ -748,12 +748,14 @@ public class ActiveAnalysisPanel extends JPanel {
 
     public void clearResults() {
         clearGeneration++;
+        // 无论 worker 是否已 done，都递增 runId：done() 回调可能还在 EDT 队列里，
+        // 不递增的话它仍会执行 block.finish() + recordRunAsync + organizer 追加。
+        analysisRunId++;
         if (currentWorker != null && !currentWorker.isDone()) {
             if (apiClient != null) {
                 apiClient.cancelStreaming();
                 apiClient.removeModelBehaviorConsumer(modelBehaviorConsumer);
             }
-            analysisRunId++;
             currentWorker.cancel(true);
             isAnalyzing = false;
             notifyStateChanged();
