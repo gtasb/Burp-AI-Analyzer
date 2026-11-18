@@ -30,6 +30,14 @@ public final class GraphNormalizers {
     public static ParsedRequest parse(String method, String url, String body) {
         String m = method == null ? "GET" : method.toUpperCase().trim();
         String s = url == null ? "" : url.trim();
+        // 剥掉 URL 前缀的 HTTP method（agent 常传 "GET https://..." 或 "POST /path"）：
+        // 不剥的话 scheme 会解析成 "GET https"，origin 变成 "get https://host:80"
+        if (s.length() > 4 && s.indexOf(' ') > 0 && s.indexOf(' ') < 8) {
+            String prefix = s.substring(0, s.indexOf(' '));
+            if (isHttpMethodPrefix(prefix)) {
+                s = s.substring(s.indexOf(' ') + 1).trim();
+            }
+        }
         String scheme = "http";
         int protoEnd = s.indexOf("://");
         if (protoEnd > 0) {
@@ -194,5 +202,12 @@ public final class GraphNormalizers {
             return "";
         }
         return s.length() <= max ? s : s.substring(0, max) + "…";
+    }
+
+    private static boolean isHttpMethodPrefix(String s) {
+        return switch (s.toUpperCase(java.util.Locale.ROOT)) {
+            case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT" -> true;
+            default -> false;
+        };
     }
 }
