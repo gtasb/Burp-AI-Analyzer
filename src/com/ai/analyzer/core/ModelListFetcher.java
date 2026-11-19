@@ -52,11 +52,15 @@ public final class ModelListFetcher {
     }
 
     /** 请求头：Anthropic 官方域名只发 x-api-key；兼容网关额外保留 Authorization。
-     *  OpenCode Go（opencode.ai）在 Cloudflare 后面，无 UA 会被拒——显式补。 */
+     *  OpenCode Go（opencode.ai）在 Cloudflare 后面，无 UA 会被拒——显式补。
+     *  匿名通道（provider「OpenCode 匿名(免费)」）凭证固定 public。 */
     static Map<String, String> headers(String provider, String apiUrl, String apiKey) {
         Map<String, String> headers = new LinkedHashMap<>();
         headers.put("Accept", "application/json");
-        if ("Anthropic兼容".equals(provider)) {
+        if ("OpenCode 匿名(免费)".equals(provider)) {
+            headers.put("Authorization", "Bearer "
+                    + ((apiKey == null || apiKey.isBlank()) ? "public" : apiKey));
+        } else if ("Anthropic兼容".equals(provider)) {
             headers.put("anthropic-version", "2023-06-01");
             headers.put("x-api-key", apiKey);
             if (!isNativeAnthropic(apiUrl)) {
@@ -97,9 +101,14 @@ public final class ModelListFetcher {
      */
     public static List<String> fetch(String provider, String apiUrl, String apiKey)
             throws IOException, InterruptedException {
-        if (apiKey == null || apiKey.isBlank()) {
+        // OpenCode 匿名通道无需 key（凭证固定 public；/models 仅需 Bearer + UA）
+        boolean anon = "OpenCode 匿名(免费)".equals(provider);
+        if (!anon && (apiKey == null || apiKey.isBlank())) {
             throw new IllegalArgumentException("API Key 不能为空");
         }
+        String effectiveKey = (apiKey == null || apiKey.isBlank())
+                ? (anon ? "public" : apiKey)
+                : apiKey;
         String endpoint = endpoint(provider, apiUrl);
         HttpClient client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
@@ -109,7 +118,7 @@ public final class ModelListFetcher {
                 .uri(URI.create(endpoint))
                 .timeout(Duration.ofSeconds(15))
                 .GET();
-        headers(provider, apiUrl, apiKey).forEach(rb::header);
+        headers(provider, apiUrl, effectiveKey).forEach(rb::header);
 
         HttpResponse<String> resp = client.send(rb.build(), HttpResponse.BodyHandlers.ofString());
         if (resp.statusCode() != 200) {

@@ -522,9 +522,17 @@ public class ChatTimeline extends JPanel {
             }
         }
 
-        /** 一个文本段：流式期间纯文本追加，finish() 时整段 Markdown 重渲染。 */
+        /** 一个文本段：流式期间纯文本追加，finish() 时整段 Markdown 重渲染。
+         *  完成后超过一行（TEXT_SECTION_COLLAPSE_LINES 行）的段自动折叠为
+         *  首行摘要 + ▸（点击展开全文/▾ 收起）——CC 风格，分析长文不霸屏。
+         *  折叠实现用 JTextPane 的内嵌组件（JToggleButton 置于段首），
+         *  不改变 TextSection 自身的类层次（交错/配对逻辑依赖它）。 */
         private static final class TextSection extends JTextPane {
             private int streamedChars;
+            /** 折叠态阈值：渲染后的段超过该行数才可折叠 */
+            private static final int COLLAPSE_LINES = 2;
+            private String renderedFull;
+            private boolean collapsed;
 
             TextSection() {
                 setEditable(false);
@@ -769,23 +777,59 @@ public class ChatTimeline extends JPanel {
         }
     }
 
-    /** 整理 agent 消息：事件行 + 可选报告。 */
+    /** 整理 agent 消息：默认折叠（用户不该盯着整理过程看）。
+     *  折叠态只显示状态 + 最新一行摘要 + ▸ 展开；展开后是完整事件列表（限高滚动）。
+     *  背景：旧行为把每条事件都平铺出来，几十条事件把主 agent 的结论顶出视口，
+     *  且注意力被吸走（用户反馈：整理行为应默认隐藏）。 */
     private static final class OrganizerBlock {
         private final Card card;
         private final JPanel lines = new JPanel();
+        private final JScrollPane scroll;
+        private final JLabel latest = new JLabel();
+        private final JButton expand = new JButton("▸ 展开整理过程");
+        private final JPanel collapsedPane = new JPanel(new BorderLayout());
+        private final JPanel expandedPane = new JPanel(new BorderLayout());
         private int count;
+        private boolean expanded;
 
         OrganizerBlock(Card card) {
             this.card = card;
             lines.setLayout(new BoxLayout(lines, BoxLayout.Y_AXIS));
             lines.setOpaque(false);
-            card.setBody(lines);
+
+            scroll = new JScrollPane(lines);
+            scroll.setBorder(null);
+            scroll.getVerticalScrollBar().setUnitIncrement(16);
+            scroll.setPreferredSize(new Dimension(10, 220)); // 展开态限高，不霸屏
+
+            latest.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
+            latest.setForeground(UIStyles.hintColor());
+            latest.setBorder(new EmptyBorder(1, 2, 1, 2));
+
+            expand.setFont(expand.getFont().deriveFont(10f));
+            expand.setMargin(new Insets(0, 4, 0, 4));
+            expand.setFocusable(false);
+            expand.setBorderPainted(false);
+            expand.setContentAreaFilled(false);
+            expand.setForeground(new Color(0x2a7de1));
+            expand.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            expand.addActionListener(e -> setExpanded(!expanded));
+
+            JPanel latestRow = new JPanel(new BorderLayout(8, 0));
+            latestRow.setOpaque(false);
+            latestRow.add(latest, BorderLayout.CENTER);
+            latestRow.add(expand, BorderLayout.EAST);
+
+            collapsedPane.setOpaque(false);
+            collapsedPane.add(latestRow, BorderLayout.CENTER);
+            card.setBody(collapsedPane); // 默认折叠
             card.setStatus("整理中…");
         }
 
         void addEvent(String text) {
             String timestamp = LocalTime.now().format(TIME);
-            JLabel row = new JLabel("[" + timestamp + "] " + (text == null ? "" : text));
+            String line = "[" + timestamp + "] " + (text == null ? "" : text);
+            JLabel row = new JLabel(line);
             UIStyles.setFont(row, 11f, Font.PLAIN);
             row.setForeground(UIStyles.textColor());
             row.setBorder(new EmptyBorder(1, 2, 1, 2));
@@ -795,8 +839,25 @@ public class ChatTimeline extends JPanel {
                 lines.remove(0);
                 count--;
             }
+            // 折叠态只更新单行摘要（截断防溢出）
+            latest.setText(line.length() > 120 ? line.substring(0, 119) + "…" : line);
             lines.revalidate();
             card.setStatus("整理中…");
+            if (expanded) {
+                scroll.getVerticalScrollBar().setValue(scroll.getVerticalScrollBar().getMaximum());
+            }
+        }
+
+        private void setExpanded(boolean e) {
+            expanded = e;
+            expand.setText(e ? "▾ 收起整理过程" : "▸ 展开整理过程");
+            card.setBody(e ? expandedPane : collapsedPane);
+            if (e) {
+                expandedPane.setOpaque(false);
+                expandedPane.add(scroll, BorderLayout.CENTER);
+            }
+            card.revalidate();
+            card.repaint();
         }
     }
 

@@ -746,7 +746,9 @@ public class AgentApiClient {
      */
     public void warmup() {
         String key = config.getApiKey();
-        if (key == null || key.isBlank() || isAnalysisInFlight()) {
+        boolean anonProvider = ApiProvider.normalize(config.getApiProvider(), config.getApiUrl())
+                == ApiProvider.OPENCODE_ANON;
+        if (!anonProvider && (key == null || key.isBlank()) || isAnalysisInFlight()) {
             return;
         }
         ensureAgentScopeInitialized();

@@ -65,12 +65,18 @@ public class AgentScopeModelFactory {
             boolean enableSearch,
             String customParameters) {
 
-        if (apiKey == null || apiKey.trim().isEmpty()) {
+        // OpenCode 匿名通道无需 key（凭证固定 public）；其他 provider 必填
+        if (provider != ApiProvider.OPENCODE_ANON
+                && (apiKey == null || apiKey.trim().isEmpty())) {
             throw new IllegalArgumentException("API Key 不能为空");
         }
 
         if (provider == ApiProvider.OPENAI_COMPATIBLE || provider == ApiProvider.OPENCODE_GO) {
             return createOpenAIModel(apiKey, apiUrl, model, customParameters);
+        }
+        if (provider == ApiProvider.OPENCODE_ANON) {
+            // 匿名通道允许空 key（官方 free tier，凭证 Bearer public）
+            return createOpenCodeAnonModel(apiUrl, model, customParameters);
         }
         if (provider == ApiProvider.ANTHROPIC) {
             return createAnthropicModel(apiKey, apiUrl, model, customParameters);
@@ -79,6 +85,27 @@ public class AgentScopeModelFactory {
     }
 
     // ========== OpenCode Go ==========
+
+    /** OpenCode 匿名免费通道的固定凭证（官方 free tier，2026-11 实测有效；keyless 请求被 401 拒）。 */
+    public static final String OPENCODE_ANON_CREDENTIAL = "public";
+
+    /** OpenCode 匿名通道默认端点（v2 /inference 网关，与 Go 的 /zen/go 不同源路径）。 */
+    public static final String OPENCODE_ANON_DEFAULT_URL = "https://opencode.ai/inference/v1";
+
+    /**
+     * OpenCode 匿名通道（「无 key 快速试用」）：官方 free tier，仅 free 模型可用，
+     * 免费额度按出口 IP 限制（建议挂代理使用）。凭证固定为 Bearer public；
+     * API Key 填了也没关系——匿名端点忽略用户 key，统一用 public。
+     * 网关校验头由 {@link OpenCodeHeaderTransport} 注入（与 Go 通道同一套）。
+     */
+    static Model createOpenCodeAnonModel(String apiUrl, String model, String customParameters) {
+        String baseUrl = isBlank(apiUrl)
+                ? OPENCODE_ANON_DEFAULT_URL
+                : normalizeUrl(apiUrl, OPENCODE_ANON_DEFAULT_URL);
+        com.ai.analyzer.util.AppLogBuffer.info("AgentScopeModelFactory",
+                "OpenCode 匿名通道: " + baseUrl + " (Bearer public, free 模型按 IP 限额)");
+        return createOpenAIModel(OPENCODE_ANON_CREDENTIAL, baseUrl, model, customParameters);
+    }
 
     /**
      * OpenCode Go 套餐模型：OpenAI chat 协议，默认端点 {@code https://opencode.ai/zen/go/v1}。

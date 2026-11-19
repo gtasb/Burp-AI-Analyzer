@@ -1005,7 +1005,7 @@ public class SettingsPanel {
         gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
         panel.add(new JLabel("API 提供者:"), gbc);
         gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
-        String[] providers = {"DashScope", "OpenAI兼容", "Anthropic兼容", "OpenCode Go"};
+        String[] providers = {"DashScope", "OpenAI兼容", "Anthropic兼容", "OpenCode Go", "OpenCode 匿名(免费)"};
         apiProviderComboBox = new JComboBox<>(providers);
         apiProviderComboBox.setSelectedIndex(0);
         apiProviderComboBox.addActionListener(e -> {
@@ -1019,14 +1019,18 @@ public class SettingsPanel {
                 if (apiUrlField.getText().contains("dashscope") || apiUrlField.getText().contains("openai.com") || apiUrlField.getText().contains("opencode.ai") || apiUrlField.getText().isEmpty())
                     apiUrlField.setText("https://api.anthropic.com");
             } else if ("OpenCode Go".equals(sel)) {
-                if (apiUrlField.getText().contains("dashscope") || apiUrlField.getText().contains("openai.com") || apiUrlField.getText().contains("anthropic.com") || apiUrlField.getText().isEmpty())
+                if (apiUrlField.getText().contains("dashscope") || apiUrlField.getText().contains("openai.com") || apiUrlField.getText().contains("anthropic.com") || apiUrlField.getText().contains("/inference") || apiUrlField.getText().isEmpty())
                     apiUrlField.setText("https://opencode.ai/zen/go/v1");
+            } else if ("OpenCode 匿名(免费)".equals(sel)) {
+                // 匿名通道：官方 free tier，无需 key（凭证固定 public），免费额度按出口 IP 限制
+                if (apiUrlField.getText().contains("dashscope") || apiUrlField.getText().contains("openai.com") || apiUrlField.getText().contains("anthropic.com") || apiUrlField.getText().contains("/zen/go") || apiUrlField.getText().isEmpty())
+                    apiUrlField.setText("https://opencode.ai/inference/v1");
             } else {
                 if (apiUrlField.getText().contains("dashscope") || apiUrlField.getText().contains("anthropic.com") || apiUrlField.getText().contains("opencode.ai") || apiUrlField.getText().isEmpty())
                     apiUrlField.setText("https://api.openai.com/v1");
             }
         });
-        apiProviderComboBox.setToolTipText("选择 API 提供者：DashScope（通义千问）、OpenAI 兼容格式、Anthropic 兼容（Claude）、OpenCode Go（opencode.ai 套餐，自动注入网关校验头 x-opencode-session）");
+        apiProviderComboBox.setToolTipText("选择 API 提供者：DashScope（通义千问）、OpenAI 兼容格式、Anthropic 兼容（Claude）、OpenCode Go（opencode.ai 套餐）、OpenCode 匿名(免费)（无需 Key，官方 free tier，仅 free 模型，免费额度按 IP 限制，建议挂代理使用）");
         panel.add(apiProviderComboBox, gbc);
 
         // API URL

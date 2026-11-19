@@ -71,7 +71,10 @@ public class AgentConfig {
         ANTHROPIC("Anthropic兼容"),
         /** OpenCode Go 套餐（opencode.ai/zen/go）：OpenAI chat 协议 + 网关校验头
          *  （x-opencode-session 每会话稳定 ID + User-Agent；缺 session 直接 400 MissingSessionID） */
-        OPENCODE_GO("OpenCode Go");
+        OPENCODE_GO("OpenCode Go"),
+        /** OpenCode 匿名免费通道（官方 free tier）：无需 API Key，凭证固定 Bearer public，
+         *  端点 /inference/v1；仅 free 模型可用，免费额度按出口 IP 限制（建议挂代理）。 */
+        OPENCODE_ANON("OpenCode 匿名(免费)");
 
         private final String displayName;
 
@@ -95,9 +98,12 @@ public class AgentConfig {
         /** 保存的旧值兼容：URL 指向 opencode.ai 时视为 OpenCode Go。 */
         public static ApiProvider normalize(ApiProvider provider, String apiUrl) {
             if (provider == OPENCODE_GO) return OPENCODE_GO;
+            if (provider == OPENCODE_ANON) return OPENCODE_ANON;
             if (provider == OPENAI_COMPATIBLE
                     && apiUrl != null && apiUrl.toLowerCase(java.util.Locale.ROOT).contains("opencode.ai")) {
-                return OPENCODE_GO;
+                // /inference 路径属于匿名通道，/zen/go 属于 Go 套餐
+                String u = apiUrl.toLowerCase(java.util.Locale.ROOT);
+                return u.contains("/inference") ? OPENCODE_ANON : OPENCODE_GO;
             }
             return provider;
         }
@@ -109,9 +115,10 @@ public class AgentConfig {
     public AgentConfig() {
     }
     /**
-     * 检查配置是否有效（至少需要 API Key）
+     * 检查配置是否有效（至少需要 API Key；OpenCode 匿名通道例外——凭证固定 public）
      */
     public boolean isValid() {
+        if (apiProvider == ApiProvider.OPENCODE_ANON) return true;
         return apiKey != null && !apiKey.trim().isEmpty();
     }
     

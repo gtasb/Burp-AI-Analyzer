@@ -147,9 +147,18 @@ public class ActiveAnalysisPanel extends JPanel {
         if (isAnalyzing || apiClient == null) return false;
         String prompt = instruction == null ? "" : instruction.trim();
         if (prompt.isEmpty()) return false;
-        if (lastHttpContent.isEmpty() && "自由对话模式".equals(lastTargetDesc)) {
-            if (activeModePromptArea != null) activeModePromptArea.setText(prompt);
-            return false;
+        // Loop 模式自由对话轮（无绑定请求）：直接以指令作为下一轮的用户输入继续。
+        // 旧行为是「填回输入框后停止」，会让 Loop 链在自由对话轮上断掉
+        // （organizer 明明给了继续指令，面板却显示"已停止：主动分析未启动"）。
+        if (lastHttpContent.isEmpty()) {
+            nextRunAuto = true;
+            try {
+                startAnalysisWorker("", prompt, "自由对话模式", "Loop 模式继续（整理 agent 指令）",
+                        null, null, false);
+            } finally {
+                nextRunAuto = false;
+            }
+            return true;
         }
         nextRunAuto = true;
         try {

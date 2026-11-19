@@ -332,12 +332,27 @@ public class GraphSidebarPanel extends JPanel {
             return;
         }
 
-        sb.append(GraphViewerPanel.typeLabel(n.type())).append(" · ").append(n.name()).append('\n');
+        Object snippet = n.prop("snippet");
+        String full = snippet == null ? "" : String.valueOf(snippet);
+        if (!full.isBlank()) {
+            // name 是建节点时截断到 60 字符的摘要（"证据: <前缀>…"），snippet 是全文：
+            // 有全文时第一行只打类型标签，不再重复截断版；name 即全文时才回显
+            if (full.equals(n.name())) {
+                sb.append(GraphViewerPanel.typeLabel(n.type())).append(" · ").append(n.name()).append('\n');
+            } else {
+                sb.append(GraphViewerPanel.typeLabel(n.type())).append('\n')
+                  .append(full).append('\n');
+            }
+        } else {
+            sb.append(GraphViewerPanel.typeLabel(n.type())).append(" · ").append(n.name()).append('\n');
+        }
         sb.append('#').append(n.id()).append(" · ").append(n.status());
         if (n.status() != FactStatus.OBSERVED) {
             sb.append(String.format(java.util.Locale.ROOT, " · 置信 %.2f", n.confidence()));
         }
         sb.append(" · 来源 ").append(n.sourceType()).append('\n');
+
+        // （全文已在上方显示：证据类节点 name 截断、snippet 是全文，不重复输出）
 
         String assess = GraphViewerPanel.assessmentText(n);
         sb.append('\n');
