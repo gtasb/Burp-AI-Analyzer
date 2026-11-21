@@ -107,6 +107,9 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
     private final java.util.concurrent.ConcurrentHashMap<String, StringBuilder> toolCallArgBuffers = new java.util.concurrent.ConcurrentHashMap<>();
     /** 已完成的工具参数摘要（key=toolCallId），供 TOOL_END 补参数上下文 */
     private final java.util.concurrent.ConcurrentHashMap<String, String> pendingToolArgs = new java.util.concurrent.ConcurrentHashMap<>();
+    /** 工具输出累积（key=toolCallId）：ToolResultTextDeltaEvent 流式拼接到 ToolResultEndEvent，
+     *  让 UI 的工具行能折叠展示完整输出（用户要求：输出跟参数一样可点开看）。 */
+    private final java.util.concurrent.ConcurrentHashMap<String, StringBuilder> toolResultBuffers = new java.util.concurrent.ConcurrentHashMap<>();
     /** 最近一次 interject 是否已被本轮消费（AgentResultEvent INTERRUPTED 收尾） */
     private volatile boolean interjectConsumed;
     /** 当前运行轮的 sessionId（chat 入口设置，interject 需要 slotKey(userId, sessionId) 定位会话槽） */
@@ -585,11 +588,19 @@ public class AgentScopeAgentRuntime implements AgentRuntime {
             // ToolCallEndEvent 会带完整参数再投一次（UI 端按工具名更新同一行）
             listener.onEvent(RuntimeEvent.toolStart(e.getToolCallName(), ""));
             DebugContext.log("AgentScopeAgentRuntime", "tool_start", Map.of("tool", e.getToolCallName()));
+        } else if (event instanceof io.agentscope.core.event.ToolResultTextDeltaEvent e) {
+            // 工具输出流式累积（text 通道）；data 通道（二进制/结构化）不进 UI
+            if (e.getToolCallId() != null && e.getDelta() != null && !e.getDelta().isEmpty()) {
+                toolResultBuffers.computeIfAbsent(e.getToolCallId(), k -> new StringBuilder())
+                        .append(e.getDelta());
+            }
         } else if (event instanceof ToolResultEndEvent e) {
             boolean failed = e.getState() != ToolResultState.SUCCESS;
             AppLogBuffer.tool("AgentScopeAgentRuntime",
                     e.getToolCallName() + " → " + (failed ? "失败" : "成功") + " (" + e.getState() + ")");
-            listener.onEvent(RuntimeEvent.toolEnd(e.getToolCallName(), null, failed, -1));
+            StringBuilder outBuf = e.getToolCallId() != null ? toolResultBuffers.remove(e.getToolCallId()) : null;
+            String output = outBuf != null ? outBuf.toString() : "";
+            listener.onEvent(RuntimeEvent.toolEnd(e.getToolCallName(), output, failed, -1));
             DebugContext.log("AgentScopeAgentRuntime", "tool_end", Map.of("tool", e.getToolCallName(), "state", String.valueOf(e.getState())));
         } else if (event instanceof io.agentscope.core.event.ModelCallEndEvent e) {
             io.agentscope.core.model.ChatUsage usage = e.getUsage();

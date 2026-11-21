@@ -19,16 +19,53 @@ public class GraphTool {
 
     private final GraphStore store;
     private final String defaultSourceAgent;
+    /** root 白名单（null = 不限制）。整理 agent 用它硬隔离到当前 session 的目标，
+     *  防止图谱里有多个资产时跑偏去写别的 root（用户 2026-11-21 反馈）。
+     *  volatile：整理 agent 每轮通过 {@link #setScopeRoots} 换绑，无需重建工具实例。 */
+    private volatile java.util.Set<String> allowedRoots;
 
     public GraphTool(GraphStore store, String defaultSourceAgent) {
+        this(store, defaultSourceAgent, (java.util.Collection<String>) null);
+    }
+
+    /** scoped 构造：allowedRoots 非空时所有带 root_id/root 参数的调用都限制在该集合内
+     *  （写越界返回错误提示，读越界返回拒绝，避免 agent 顺着旧资产跑偏）。 */
+    public GraphTool(GraphStore store, String defaultSourceAgent, java.util.Collection<String> allowedRoots) {
         this.store = store != null ? store : GraphStore.getInstance();
         this.defaultSourceAgent = defaultSourceAgent == null || defaultSourceAgent.isBlank()
                 ? "agent" : defaultSourceAgent;
+        setScopeRoots(allowedRoots);
+    }
+
+    /** 换绑当前允许的 root 集合（null/空 = 不限制）。整理 agent 每轮调用。 */
+    public void setScopeRoots(java.util.Collection<String> roots) {
+        this.allowedRoots = roots == null || roots.isEmpty() ? null
+                : java.util.Collections.unmodifiableSet(new java.util.LinkedHashSet<>(roots));
+    }
+
+    /** root 是否在本工具的作用域内（无 scope 时恒 true）。传入 null/blank 允许放行，
+     *  由各方法自行决定是否强制。 */
+    private boolean inScope(String rootId) {
+        if (allowedRoots == null || rootId == null || rootId.isBlank()) return true;
+        if (allowedRoots.contains(rootId)) return true;
+        // root 形态可能是 origin（带端口）或 URL；都归一化到 origin 再比一次
+        try {
+            String origin = com.ai.analyzer.graph.GraphNormalizers.parse("GET", rootId, null).origin();
+            return allowedRoots.contains(origin);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private String scopeDenyMessage(String rootId) {
+        return "拒绝：目标 root「" + rootId + "」不在本次会话的范围内（" + allowedRoots
+                + "）。本会话只能整理当前 session 的资产，请勿操作其他站点。";
     }
 
     @Tool(name = "graph_get_root", description = "查询目标站点根节点（Origin），确认该目标是否已在资产图谱中建档。返回 Origin 信息。")
     public String getRoot(
             @ToolParam(name = "origin", description = "目标 Origin，如 https://target.com 或 http://target.com:8080") String origin) {
+        if (!inScope(origin)) return scopeDenyMessage(origin);
         try {
             return store.getRootText(origin);
         } catch (Exception e) {
@@ -39,6 +76,7 @@ public class GraphTool {
     @Tool(name = "graph_overview", description = "查看目标站点图谱概览：已积累的接口/参数/技术指纹/模块清单。开始分析一个站点前先调用它了解已知知识。")
     public String overview(
             @ToolParam(name = "root_id", description = "目标 Origin（root id），如 https://target.com:443") String rootId) {
+        if (!inScope(rootId)) return scopeDenyMessage(rootId);
         try {
             return store.overview(rootId);
         } catch (Exception e) {
@@ -68,6 +106,7 @@ public class GraphTool {
             @ToolParam(name = "keyword", description = "关键词（匹配路径/名称），可选", required = false) String keyword,
             @ToolParam(name = "module", description = "模块名过滤（如 order/user/admin），可选", required = false) String module,
             @ToolParam(name = "entity", description = "业务实体过滤（如 Order/User），可选", required = false) String entity) {
+        if (!inScope(rootId)) return scopeDenyMessage(rootId);
         try {
             return store.findInterfaces(rootId, keyword, module, entity);
         } catch (Exception e) {
@@ -93,6 +132,7 @@ public class GraphTool {
             @ToolParam(name = "name", description = "节点名；INTERFACE 用完整 URL（如 https://target.com/api/x）或 \"POST /api/x\"") String name,
             @ToolParam(name = "root", description = "目标 Origin（root id，如 https://target.com:443）；INTERFACE 也可直接传完整 URL") String root,
             @ToolParam(name = "source", description = "来源标识，可留空（默认当前 Agent）", required = false) String source) {
+        if (!inScope(root)) return scopeDenyMessage(root);
         try {
             String src = source == null || source.isBlank() ? defaultSourceAgent : source;
             return store.upsertAgentObservation(type, name, root, src, null);
@@ -152,6 +192,7 @@ public class GraphTool {
             @ToolParam(name = "version", description = "版本号，可选", required = false) String version,
             @ToolParam(name = "evidence", description = "指纹证据（命中的 header/Cookie/HTML/JS 片段），强烈建议填写", required = false) String evidence,
             @ToolParam(name = "confidence", description = "置信度 0~1，默认 0.8", required = false) Double confidence) {
+        if (!inScope(root)) return scopeDenyMessage(root);
         try {
             return store.upsertFingerprint(interfaceId == null ? 0 : interfaceId, root, technology,
                     category, version, evidence, confidence == null ? 0.8 : confidence);
@@ -170,6 +211,7 @@ public class GraphTool {
             @ToolParam(name = "vuln_class", description = "候选漏洞类别，如 未授权访问 / 信息泄露 / 文件上传 / IDOR，可选", required = false) String vulnClass,
             @ToolParam(name = "evidence", description = "特征证据（命中的路径/页面片段）", required = false) String evidence,
             @ToolParam(name = "confidence", description = "置信度 0~1，默认 0.7", required = false) Double confidence) {
+        if (!inScope(root)) return scopeDenyMessage(root);
         try {
             return store.addFeature(interfaceId == null ? 0 : interfaceId, root, feature, vulnClass,
                     evidence, confidence == null ? 0.7 : confidence);
@@ -187,6 +229,7 @@ public class GraphTool {
             @ToolParam(name = "interface_id", description = "关联接口节点 id，可选", required = false) Long interfaceId,
             @ToolParam(name = "evidence", description = "推断依据（路径/错误串/Cookie/JS 片段）", required = false) String evidence,
             @ToolParam(name = "confidence", description = "置信度 0~1，默认 0.6", required = false) Double confidence) {
+        if (!inScope(root)) return scopeDenyMessage(root);
         try {
             return store.addBackendHypothesis(interfaceId == null ? 0 : interfaceId, root, hypothesis,
                     evidence, confidence == null ? 0.6 : confidence);
@@ -204,6 +247,7 @@ public class GraphTool {
             @ToolParam(name = "root", description = "目标 Origin（root id，如 https://target.com:443）；提供 node_id 时可留空", required = false) String root,
             @ToolParam(name = "node_id", description = "可选：挂到该节点的数字 id", required = false) Long nodeId,
             @ToolParam(name = "kind", description = "note / finding / instruction / hint，默认 note", required = false) String kind) {
+        if (!inScope(root)) return scopeDenyMessage(root);
         try {
             GraphStore.NoteResult r = store.addNote(root, nodeId, content, kind, defaultSourceAgent, "agent");
             if (r.duplicate()) {
@@ -221,6 +265,7 @@ public class GraphTool {
     public String getNotes(
             @ToolParam(name = "root_id", description = "目标 Origin（root id）") String root,
             @ToolParam(name = "since_version", description = "只返回版本号大于此值的笔记；0 表示全部", required = false) Integer sinceVersion) {
+        if (!inScope(root)) return scopeDenyMessage(root);
         try {
             int since = sinceVersion == null ? 0 : sinceVersion;
             java.util.List<com.ai.analyzer.graph.GraphTypes.Node> notes = store.listNotes(root, since);
@@ -265,6 +310,7 @@ public class GraphTool {
             @ToolParam(name = "method", description = "HTTP 方法，如 GET/POST") String method,
             @ToolParam(name = "url", description = "完整 URL（接口必须已存在于图谱）") String url,
             @ToolParam(name = "summary", description = "本次分析结论摘要", required = false) String summary) {
+        if (!inScope(url)) return scopeDenyMessage(url);
         try {
             // 每次调用生成唯一 sid：fact 节点的去重键是 rootId|fact:<sid>，
             // 用固定的 agent 名会让同一接口的所有分析共用一个节点，后续 summary 被静默丢弃

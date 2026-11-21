@@ -1391,6 +1391,14 @@ public class SettingsPanel {
         organizerAutoContinueCheckBox = new JCheckBox("启用证据整理与 Loop 模式（完全自动化循环）", true);
         organizerAutoContinueCheckBox.setToolTipText(
                 "主动分析每轮结束后，由独立的整理 agent 入图并判断是否继续；关闭后只整理/出报告，不Loop 模式。");
+        // 双向同步：这里改了要立即刷主动面板的「Loop 模式」框——否则面板框停在旧状态，
+        // 看着开实际关（用户 2026-11-21 反馈的勾选框 bug 根源之一）。
+        organizerAutoContinueCheckBox.addActionListener(e -> {
+            ActiveAnalysisPanel active = host != null ? host.getActiveAnalysisPanel() : null;
+            if (active != null) {
+                active.syncLoopCheckbox(organizerAutoContinueCheckBox.isSelected());
+            }
+        });
         panel.add(organizerAutoContinueCheckBox, gbc);
 
         row++;
@@ -2695,6 +2703,11 @@ public class SettingsPanel {
 
         if (organizerAutoContinueCheckBox != null) {
             organizerAutoContinueCheckBox.setSelected(settings.isOrganizerAutoContinue());
+            // 同步主动面板的「Loop 模式」框（applySettings 不触发 ActionEvent，要手动推）
+            ActiveAnalysisPanel active = host != null ? host.getActiveAnalysisPanel() : null;
+            if (active != null) {
+                active.syncLoopCheckbox(settings.isOrganizerAutoContinue());
+            }
         }
         if (organizerRoundsSpinner != null) {
             organizerRoundsSpinner.setValue(settings.getOrganizerMaxRounds());

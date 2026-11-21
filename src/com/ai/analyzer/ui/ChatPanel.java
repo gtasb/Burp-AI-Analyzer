@@ -366,6 +366,9 @@ public class ChatPanel extends JPanel {
                 boolean failed = parts.length > 3 && Boolean.parseBoolean(parts[3]);
                 debugLog(timestamp, (failed ? "工具失败: " : "工具完成: ") + detail);
             }
+            case "TOOL_OUTPUT" -> {
+                // 输出全文只进主动面板的工具行折叠区；侧栏日志不刷（会淹掉正常事件）
+            }
             default -> {
                 flushThinking();
                 debugLog(timestamp, detail);

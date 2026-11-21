@@ -60,6 +60,8 @@ public class AgentApiClient {
     private volatile Toolkit asToolkit;
     /** 整理 agent 的专用工具（仅 ORGANIZER 角色非空） */
     private volatile com.ai.analyzer.agent.organizer.OrganizerTool organizerTool;
+    /** ORGANIZER 专用：当前注册的 GraphTool（用于每轮换绑 root 白名单，跑偏隔离）。 */
+    private volatile com.ai.analyzer.graph.GraphTool organizerGraphTool;
     /** 图谱笔记广播是否已订阅（避免运行时重建导致重复订阅） */
     private volatile boolean noteBroadcastSubscribed;
     private volatile Consumer<String> systemNoticeConsumer;
@@ -221,6 +223,11 @@ public class AgentApiClient {
         return organizerTool;
     }
 
+    /** ORGANIZER 专用：当前注册的 GraphTool 实例（可能为 null——runtime 尚未初始化）。 */
+    public com.ai.analyzer.graph.GraphTool getOrganizerGraphTool() {
+        return organizerGraphTool;
+    }
+
     /**
      * 让整理 agent 执行一轮（无 UI 需求，返回完整文本）。
      * 复用 analyzeRequestStream 的运行时/流式基础设施，但角色不是 ACTIVE，
@@ -316,6 +323,7 @@ public class AgentApiClient {
      *   <li>{@code THINKING|增量文本}</li>
      *   <li>{@code TOOL_START|工具名|参数摘要}（参数可为空）</li>
      *   <li>{@code TOOL_END|工具名|failed|ok}（成功）或 {@code TOOL_END|工具名|failed|failed}（失败）</li>
+     *   <li>{@code TOOL_OUTPUT|工具名|输出全文}（紧随 TOOL_END，可折叠展示）</li>
      * </ul>
      * 字段内不含 {@code |}：工具名与参数在投递前已剥掉该字符（参数为 JSON 摘要，
      * 替换为 {\@literal /}）。与 {@link #setSystemNoticeConsumer} 一样由 UI 在流式
@@ -800,8 +808,12 @@ public class AgentApiClient {
 
             // 资产图谱：主动 agent 也可写（用户 2026-11-17 决定：主动模式要能边测边入图，
             // 整理 agent 仍在轮末做归并去重，两者按 canonical key 幂等共存）
-            asToolkit.registerTool(new com.ai.analyzer.graph.GraphTool(
-                    com.ai.analyzer.graph.GraphStore.getInstance(), getAgentName()));
+            com.ai.analyzer.graph.GraphTool graphTool = new com.ai.analyzer.graph.GraphTool(
+                    com.ai.analyzer.graph.GraphStore.getInstance(), getAgentName());
+            if (role == AgentRole.ORGANIZER) {
+                this.organizerGraphTool = graphTool;
+            }
+            asToolkit.registerTool(graphTool);
             ensureNoteBroadcastSubscribed();
             logInfo("AgentScope GraphTool（资产图谱 + 笔记，含主动 agent 写入）已注册");
             if (role == AgentRole.ORGANIZER) {
@@ -1326,6 +1338,12 @@ public class AgentApiClient {
                                 }
                                 emitModelBehavior("TOOL_END", toolName != null ? toolName : "unknown",
                                         "failed", String.valueOf(toolFailed));
+                                // 工具输出随 TOOL_END 一起送 UI（折叠展示，与参数同级）
+                                String toolOutput = event.toolResult();
+                                if (toolOutput != null && !toolOutput.isEmpty()) {
+                                    emitModelBehavior("TOOL_OUTPUT", toolName != null ? toolName : "unknown",
+                                            toolOutput);
+                                }
                                 DebugContext.log("AgentApiClient", "tool_end",
                                         java.util.Map.of("tool", toolName != null ? toolName : "null", "failed", String.valueOf(toolFailed)));
                             }

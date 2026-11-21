@@ -128,6 +128,19 @@ public final class OrganizerCoordinator {
         // 决策可能落在重建后的新实例上：结束时重新读取，而不是沿用轮前的旧引用
         OrganizerTool toolAtEnd = tool;
 
+        // ===== 跑偏隔离（用户 2026-11-21 反馈：图谱里有多个资产时整理 agent 会去打别的站）：
+        // 每轮把本 session 的目标 root 绑进整理 agent 的 GraphTool 白名单，越界读写直接拒绝；
+        // 与 Cairn 的 project 隔离同思路——执行器只能看到自己项目的图。自由对话轮没有明确
+        // 目标 URL 时退化为「允许本轮 prompt 里出现过的 host」，完全提取不出才放开（不限）。
+        String scopeRoot = deriveScopeRoot(run);
+        var graphToolAtStart = organizer.getOrganizerGraphTool();
+        if (graphToolAtStart != null && scopeRoot != null) {
+            graphToolAtStart.setScopeRoots(java.util.List.of(scopeRoot));
+        }
+        if (scopeRoot != null) {
+            eventSink.accept("本轮整理范围: " + scopeRoot);
+        }
+
         // 预算保护：无限循环下必须先看全局 token 预算，避免把配额跑空
         if (com.ai.analyzer.util.TokenUsageTracker.sharedOverBudget()) {
             onReport.accept(new Report("Token 预算已用尽，自动分析循环已停止。请重置统计或提高预算后继续。", null));
@@ -179,6 +192,12 @@ public final class OrganizerCoordinator {
                 }
             });
         } catch (Exception e) {
+            if (stopped.get()) {
+                // 用户主动停止触发的取消（InterruptedException/CancellationException）
+                // 不是失败：安静收尾，不要弹「调用失败」报告卡误导用户
+                phaseSink.accept("已停止");
+                return;
+            }
             onReport.accept(new Report("整理 agent 调用失败: " + e.getMessage(), null));
             phaseSink.accept("整理失败");
             return;
@@ -266,19 +285,51 @@ public final class OrganizerCoordinator {
         return s == null ? "" : s.replaceAll("\\s+", " ").trim();
     }
 
+    /** 本轮的目标 root（origin 形态）。优先取交接 URL；没有则从用户原始提示词里
+     *  提取第一个 http(s) 目标。都取不到返回 null（不限制，兼容纯问答轮）。 */
+    private String deriveScopeRoot(AgentApiClient.CompletedRun run) {
+        String url = run.url();
+        if (url != null && !url.isBlank() && url.contains("://")) {
+            try {
+                return com.ai.analyzer.graph.GraphNormalizers.parse("GET", url, null).origin();
+            } catch (Exception ignored) {
+            }
+        }
+        String prompt = run.userPrompt();
+        if (prompt != null && !prompt.isBlank()) {
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("https?://[a-zA-Z0-9._\\-]+(:\\d+)?").matcher(prompt);
+            if (m.find()) {
+                try {
+                    return com.ai.analyzer.graph.GraphNormalizers.parse("GET", m.group(), null).origin();
+                } catch (Exception ignored) {
+                }
+            }
+        }
+        return null;
+    }
+
     private String buildPrompt(AgentApiClient.CompletedRun run) {
         StringBuilder sb = new StringBuilder();
         sb.append("【主动扫描 Agent 本轮交接】\n");
         sb.append("- 时间: ").append(LocalDateTime.now()).append('\n');
         sb.append("- 自动循环轮次: ").append(continuationCount + 1)
                 .append("（0 表示不限）\n");
+        String scopeRoot = deriveScopeRoot(run);
         if (run.hasRequest()) {
             sb.append("- 请求: ").append(run.method()).append(' ').append(run.url()).append('\n');
         } else {
             sb.append("- 本轮没有绑定请求（自由对话/批量上下文），如无可入图接口可跳过图谱写入。\n");
         }
-        sb.append("- 分析提示词: ").append(truncate(run.userPrompt(), 2_000)).append('\n');
+        sb.append("- 分析提示词（用户本轮的原始输入，目标以它为准）: ")
+                .append(truncate(run.userPrompt(), 2_000)).append('\n');
         sb.append("\n【主动 Agent 产出】\n").append(truncate(run.response(), MAX_HANDOFF_CHARS)).append('\n');
+        if (scopeRoot != null) {
+            sb.append("\n【本会话目标边界】\n- 唯一允许的目标 root: ").append(scopeRoot)
+                    .append("\n- 资产图谱里可能存在其他站点的旧数据；那不是本会话的目标，")
+                    .append("禁止读取/写入/评估其他 root 的节点（图谱工具已强制隔离，越界调用会被拒绝）。\n")
+                    .append("- 继续指令也必须只围绕该目标；把别的资产拉进本会话视为跑偏。\n");
+        }
         sb.append("""
 
                 【你的任务】

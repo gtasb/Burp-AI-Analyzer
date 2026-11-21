@@ -65,6 +65,9 @@ public class ActiveAnalysisPanel extends JPanel {
 
     private java.util.function.BooleanSupplier autoContinueGetter;
     private java.util.function.Consumer<Boolean> autoContinueSetter;
+    /** 整理/主动全链路停止：由 AIAnalyzerTab 注入（级联 organizerCoordinator.stop +
+     *  organizerClient.cancelStreaming + 本面板 stopAnalysis）。主动模式的停止入口。 */
+    private volatile Runnable stopLoopAction;
 
     // ========== 分析状态 ==========
     private boolean isAnalyzing = false;
@@ -256,6 +259,25 @@ public class ActiveAnalysisPanel extends JPanel {
                     if (tokenLabel != null) tokenLabel.setText(snapshot.summary());
                 }));
         bar.add(info, BorderLayout.CENTER);
+
+        // 停止按钮：分析中/整理中始终可见可点，级联停掉主动 agent + 整理 agent + 排队的下一轮。
+        // 之前主动模式没有停止入口（被动面板的「停止」按钮只在主动 worker 运行时启用），
+        // 整理 agent 一跑就是几分钟且无法打断（用户反馈）。
+        stopLoopButton = new JButton("⏸ 停止");
+        stopLoopButton.setToolTipText("停止当前主动分析 / 整理 agent / Loop 循环");
+        UIStyles.styleSecondary(stopLoopButton);
+        stopLoopButton.setMargin(new Insets(1, 8, 1, 8));
+        stopLoopButton.setFocusable(false);
+        stopLoopButton.setVisible(false);
+        stopLoopButton.addActionListener(e -> {
+            Runnable action = stopLoopAction;
+            if (action != null) {
+                action.run();
+            } else {
+                stopAnalysis();
+            }
+        });
+        bar.add(stopLoopButton, BorderLayout.EAST);
         return bar;
     }
 
@@ -469,7 +491,7 @@ public class ActiveAnalysisPanel extends JPanel {
         if (isAnalyzing) {
             if (text.isEmpty()) return;
             if (apiClient != null && apiClient.interject(text)) {
-                timeline.addUser(text, "运行中插话");
+                timeline.addInterjection(text, "运行中插话");
                 activeModePromptArea.setText("");
                 resetComposerHeight();
             } else {
@@ -660,7 +682,21 @@ public class ActiveAnalysisPanel extends JPanel {
                         java.util.function.Consumer<AgentApiClient.CompletedRun> cb = onRunCompleted;
                         // Loop 模式勾选时，任何分析完成都触发 organizer（含自由对话轮）。
                         // organizer 的系统提示词已约束它不做无关侦察，只整理本轮产出。
-                        boolean loopEnabled = autoContinueCheckBox != null && autoContinueCheckBox.isSelected();
+                        // 真相源是 autoContinueGetter（设置页框），不要只看本面板框——
+                        // 保存设置/applySettings 会改设置页框但不通知本面板框，
+                        // 曾经出现「面板看着是开的、实际判定为关」（用户 2026-11-21）。
+                        boolean loopEnabled = autoContinueGetter != null
+                                ? autoContinueGetter.getAsBoolean()
+                                : autoContinueCheckBox != null && autoContinueCheckBox.isSelected();
+                        // 面板框与真相源不一致时刷成一致（用户下次看到的就是真实状态）
+                        if (autoContinueCheckBox != null
+                                && autoContinueCheckBox.isSelected() != loopEnabled) {
+                            final boolean le = loopEnabled;
+                            SwingUtilities.invokeLater(() -> {
+                                autoContinueCheckBox.setSelected(le);
+                                updateLoopPolicyLabel();
+                            });
+                        }
                         if (cb != null && apiClient != null && loopEnabled) {
                             AgentApiClient.CompletedRun completedRun = apiClient.getLastCompletedRun();
                             if (completedRun != null) {
@@ -752,6 +788,10 @@ public class ActiveAnalysisPanel extends JPanel {
             timeline.addSystem("[输出已中断]");
             notifyStateChanged();
             api.logging().logToOutput("用户中断了AI分析");
+        } else {
+            // worker 已结束但整理 agent 还在跑：单独停整理链
+            organizerRunning = false;
+            updateStopButtonState();
         }
     }
 
@@ -799,6 +839,22 @@ public class ActiveAnalysisPanel extends JPanel {
         updateLoopPolicyLabel();
     }
 
+    /** 注入全链路停止动作（主动分析 + 整理 agent 一起停）。 */
+    public void bindStopLoop(Runnable stopAction) {
+        this.stopLoopAction = stopAction;
+    }
+
+    /** 外部（设置页/applySettings）把 Loop 模式真值同步到本面板勾选框。
+     *  setSelected 不触发 ActionEvent，不会反向写回设置页，无循环风险。 */
+    public void syncLoopCheckbox(boolean enabled) {
+        SwingUtilities.invokeLater(() -> {
+            if (autoContinueCheckBox != null) {
+                autoContinueCheckBox.setSelected(enabled);
+            }
+            updateLoopPolicyLabel();
+        });
+    }
+
     private void updateLoopPolicyLabel() {
         if (loopPolicyLabel != null) {
             loopPolicyLabel.setText("Loop 模式：" + (autoContinueCheckBox != null && autoContinueCheckBox.isSelected() ? "开" : "关"));
@@ -806,10 +862,23 @@ public class ActiveAnalysisPanel extends JPanel {
     }
 
     public void setOrganizerPhase(String phase) {
+        boolean running = phase != null && (phase.startsWith("整理中") || phase.startsWith("继续分析"));
         SwingUtilities.invokeLater(() -> {
             if (phaseLabel != null && phase != null) phaseLabel.setText("阶段：" + phase);
+            organizerRunning = running;
+            updateStopButtonState();
             if (tokenLabel != null) tokenLabel.setText(TokenUsageTracker.instance().snapshot().summary());
         });
+    }
+
+    /** 整理 agent 是否正在跑（决定停止按钮是否可用）。 */
+    private volatile boolean organizerRunning;
+    private JButton stopLoopButton;
+
+    private void updateStopButtonState() {
+        if (stopLoopButton != null) {
+            stopLoopButton.setVisible(isAnalyzing || organizerRunning);
+        }
     }
 
     public void setLoopRound(int round) {
@@ -1045,11 +1114,20 @@ public class ActiveAnalysisPanel extends JPanel {
                 boolean failed = parts.length > 3 && Boolean.parseBoolean(parts[3]);
                 currentAssistant.addTool(tool, "", false, failed);
             }
+            case "TOOL_OUTPUT" -> {
+                // TOOL_OUTPUT|工具名|输出全文：挂到最近一次同名工具行，默认折叠
+                String tool = parts.length > 1 ? parts[1] : "";
+                String output = parts.length > 2 ? parts[2] : "";
+                if (!output.isEmpty()) {
+                    currentAssistant.addToolOutput(tool, output);
+                }
+            }
             default -> { }
         }
     }
 
     private void notifyStateChanged() {
+        updateStopButtonState();
         if (stateListener != null) {
             stateListener.onAnalysisStateChanged(isAnalyzing);
         }

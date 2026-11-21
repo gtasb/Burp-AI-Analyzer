@@ -218,6 +218,38 @@ public class ChatTimeline extends JPanel {
         return block;
     }
 
+    /**
+     * 运行中插话：插到当前运行块之前（时间线顺序 = 用户说 → agent 听）。
+     * 旧行为 addUser 追加到最底部，插话内容沉在滚动区外还被输入框挡住，
+     * 用户看不到自己刚插的话。插话后同时把视口滚到插话卡，确保可见。
+     */
+    public void addInterjection(String text, String target) {
+        Card card = new Card("你", target, ACCENT_USER);
+        card.setBody(buildUserBody(text == null ? "" : text, null));
+        card.setAlignmentX(Component.LEFT_ALIGNMENT);
+        int insertAt = content.getComponentCount();
+        if (currentAssistant != null) {
+            for (int i = 0; i < content.getComponentCount(); i++) {
+                if (content.getComponent(i) == currentAssistant.card) {
+                    insertAt = i;
+                    break;
+                }
+            }
+        }
+        if (insertAt > 0) {
+            content.add(Box.createVerticalStrut(6), insertAt);
+            insertAt++;
+        }
+        content.add(card, insertAt);
+        content.revalidate();
+        content.repaint();
+        // 滚到插话卡可见（卡片在运行块之上，不追底部）
+        SwingUtilities.invokeLater(() -> {
+            Rectangle r = card.getBounds();
+            if (r != null) content.scrollRectToVisible(r);
+        });
+    }
+
     public void finishAssistant() {
         currentAssistant = null;
     }
@@ -390,6 +422,13 @@ public class ChatTimeline extends JPanel {
             private static final int ONE_LINE_CHARS = 80;
             private boolean expanded = false;
             private String fullArgs = "";
+            // ===== 工具输出（TOOL_OUTPUT）：独立折叠区 =====
+            private final JTextArea outputArea = new JTextArea();
+            private final JScrollPane outputScroll;
+            private final JButton outputLink = new JButton();
+            private String fullOutput = "";
+            private boolean outputExpanded = false;
+            private static final int MAX_OUTPUT_HEIGHT = 260;
 
             ToolRow(String toolName) {
                 this.toolName = toolName;
@@ -447,6 +486,63 @@ public class ChatTimeline extends JPanel {
                 headRow.setAlignmentX(Component.LEFT_ALIGNMENT);
                 add(headRow);
                 add(argsScroll);
+
+                // 输出折叠链接（与参数链接并排；无输出时不可见）
+                outputLink.setFont(outputLink.getFont().deriveFont(10f));
+                outputLink.setForeground(new Color(0x2a7de1));
+                outputLink.setBorderPainted(false);
+                outputLink.setContentAreaFilled(false);
+                outputLink.setMargin(new Insets(0, 2, 0, 2));
+                outputLink.setFocusable(false);
+                outputLink.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                outputLink.setVisible(false);
+                outputLink.addActionListener(e -> toggleOutputExpand());
+                head.add(outputLink);
+
+                outputArea.setEditable(false);
+                outputArea.setLineWrap(true);
+                outputArea.setWrapStyleWord(true);
+                outputArea.setOpaque(false);
+                UIStyles.setFont(outputArea, 11f, Font.PLAIN);
+                outputArea.setForeground(UIStyles.hintColor());
+                outputArea.setBorder(new EmptyBorder(0, 2, 0, 0));
+                outputArea.setMargin(new Insets(0, 0, 0, 0));
+                outputScroll = new JScrollPane(outputArea);
+                outputScroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+                outputScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+                outputScroll.setOpaque(false);
+                outputScroll.getViewport().setOpaque(false);
+                outputScroll.getViewport().setBorder(null);
+                outputScroll.setBorder(null);
+                outputScroll.setAlignmentX(Component.LEFT_ALIGNMENT);
+                outputScroll.setVisible(false);
+                add(outputScroll);
+            }
+
+            /** TOOL_OUTPUT 到达：默认折叠为单行摘要，点击展开/收起。 */
+            void setOutput(String output) {
+                fullOutput = output == null ? "" : output.trim();
+                if (fullOutput.isEmpty()) return;
+                outputExpanded = false;
+                outputArea.setText(collapseToOneLine(fullOutput));
+                outputLink.setText("▸ 输出");
+                outputLink.setVisible(true);
+                outputScroll.setVisible(true);
+                revalidate();
+                repaint();
+            }
+
+            private void toggleOutputExpand() {
+                outputExpanded = !outputExpanded;
+                if (outputExpanded) {
+                    outputArea.setText(fullOutput);
+                    outputLink.setText("▾ 输出");
+                } else {
+                    outputArea.setText(collapseToOneLine(fullOutput));
+                    outputLink.setText("▸ 输出");
+                }
+                revalidate();
+                repaint();
             }
 
             private void toggleExpand() {
@@ -481,15 +577,25 @@ public class ChatTimeline extends JPanel {
             @Override
             public Dimension getPreferredSize() {
                 Dimension d = super.getPreferredSize();
-                if (argsScroll.isVisible()) {
+                if (argsScroll.isVisible() || outputScroll.isVisible()) {
                     int argHeight;
-                    if (expanded) {
-                        argHeight = Math.min(argsArea.getPreferredSize().height, MAX_ARGS_HEIGHT);
+                    if (argsScroll.isVisible()) {
+                        if (expanded) {
+                            argHeight = Math.min(argsArea.getPreferredSize().height, MAX_ARGS_HEIGHT);
+                        } else {
+                            // 折叠态：固定一行高
+                            argHeight = argsArea.getFontMetrics(argsArea.getFont()).getHeight() + 2;
+                        }
                     } else {
-                        // 折叠态：固定一行高
-                        argHeight = argsArea.getFontMetrics(argsArea.getFont()).getHeight() + 2;
+                        argHeight = 0;
                     }
-                    d = new Dimension(d.width, headRow.getPreferredSize().height + argHeight + 2);
+                    int outHeight = 0;
+                    if (outputScroll.isVisible()) {
+                        outHeight = outputExpanded
+                                ? Math.min(outputArea.getPreferredSize().height, MAX_OUTPUT_HEIGHT)
+                                : outputArea.getFontMetrics(outputArea.getFont()).getHeight() + 2;
+                    }
+                    d = new Dimension(d.width, headRow.getPreferredSize().height + argHeight + outHeight + 2);
                 }
                 return d;
             }
@@ -742,6 +848,26 @@ public class ChatTimeline extends JPanel {
             row.update(args, running, failed);
             flow.revalidate();
             flow.repaint();
+        }
+
+        /** TOOL_OUTPUT：按 addTool 同样的配对规则找最近同名工具行，把输出挂上去（默认折叠）。 */
+        public void addToolOutput(String name, String output) {
+            if (output == null || output.isBlank()) return;
+            dirty = false;
+            render();
+            String tool = name == null || name.isBlank() ? "tool" : name;
+            for (int i = flow.getComponentCount() - 1; i >= 0; i--) {
+                java.awt.Component c = flow.getComponent(i);
+                if (c instanceof TextSection ts && ts.getText().isBlank()) {
+                    continue; // 空段不阻断配对
+                }
+                if (c instanceof ToolRow tr && tr.toolName.equals(tool)) {
+                    tr.setOutput(output);
+                    flow.revalidate();
+                    flow.repaint();
+                }
+                break; // 遇到非空文本段或不同工具行：配对终止（输出找不到主则丢弃，避免错挂）
+            }
         }
 
         public void finish() {

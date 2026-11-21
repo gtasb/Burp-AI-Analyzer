@@ -34,12 +34,13 @@ class ChatTimelineUserCollapseTest {
             assertThat(area.getText().length()).isLessThan(longText.length());
             JButton toggle = findButton(card);
             assertThat(toggle).isNotNull();
-            assertThat(toggle.getText()).startsWith("展开");
+            // 82d6add 起展开/收起用箭头符号（▸ 向右=折叠态，▾ 向下=展开态）
+            assertThat(toggle.getText()).startsWith("▸ 展开");
 
             // 点击展开：内容变全文，按钮变收起
             toggle.doClick();
             JButton collapseBtn = findButton(card);
-            assertThat(collapseBtn.getText()).isEqualTo("收起");
+            assertThat(collapseBtn.getText()).isEqualTo("▾ 收起");
             JTextArea fullArea = findTextArea(card);
             assertThat(fullArea.getText()).contains("这是第 39 行");
         });

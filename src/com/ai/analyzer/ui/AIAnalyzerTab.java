@@ -575,6 +575,9 @@ public class AIAnalyzerTab extends JPanel {
         activeAnalysisPanel.setOnRunStarted(organizerCoordinator::resetLoop);
         activeAnalysisPanel.bindAutoContinue(settingsPanel::isOrganizerAutoContinue,
                 settingsPanel::setOrganizerAutoContinue);
+        // 主动面板的「⏸ 停止」：级联停整理 agent（含排队的下一轮）+ 主动 agent。
+        // 与本类 stopAnalysis() 同一条链，保证整理轮也能被打断。
+        activeAnalysisPanel.bindStopLoop(this::stopAnalysis);
 
         centerModeCardLayout = new CardLayout();
         centerModeCardPanel = new JPanel(centerModeCardLayout);
